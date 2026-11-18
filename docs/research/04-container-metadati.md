@@ -138,3 +138,9 @@ Test di sanita': `ffprobe -show_streams`, `mp4dump` (Bento4), `MP4Box -info`, ex
 8. Memoria: file da 1-2 GB su iPhone con `fastStart:false` + OPFS (picco RAM, jetsam); `createWritable()` disponibile?
 9. Post-processing moov: round-trip su un file di prova, validare con ffprobe/MP4Box e aprire in QuickTime Player/Foto.
 10. (Opzionale) prova di passthrough `apac` via parser/muxer custom su file breve per misurare costo/rischio.
+
+## Diagnosi audio "doppio" nei file del comando rapido (2026-11-18) ✅ misurato
+- IMG_7440 (output del comando rapido iOS "Codifica contenuto multimediale" 1080p): unica traccia AAC-LC stereo **44.1 kHz** (l'originale iPhone è 48 kHz → ricampionato).
+- Autocorrelazione per finestre da 1 s (8 finestre, L, R e L−R): picco **costante a 41.7–41.8 ms, r ≈ 0.3–0.4** in tutte le finestre → **eco digitale**: il segnale contiene una copia di sé stesso ritardata di ~41.75 ms (≈1841 campioni @44.1 kHz). Un contenuto naturale non darebbe un picco identico in ogni finestra.
+- Interpretazione: in fase di export il comando rapido ha sommato due sorgenti audio (verosimilmente il render della traccia spaziale `apac` + la traccia AAC stereo) sfasate di ~42 ms. Il danno è "cotto" nell'AAC: non è un problema di tracce/metadati.
+- Possibile riparazione: filtro a pettine inverso IIR y[n] − a·x[n−d] (stima di a e d per file dall'autocorrelazione), richiede decodifica+ricodifica AAC (WebCodecs AudioDecoder/AudioEncoder). Da valutare a orecchio.
