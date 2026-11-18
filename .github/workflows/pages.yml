@@ -1,0 +1,45 @@
+name: Deploy app to GitHub Pages
+
+# Publishes only from main (user decision 2026-11-18). Manual run also available.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check (ES modules)
+        run: for f in app/lib/*.js; do node --input-type=module --check < "$f" || { echo "::error file=$f::syntax error"; exit 1; }; done
+      - name: Unit tests (no video files needed)
+        run: node app/lib/hevc-vui.test.mjs
+      - name: Stage site (app only)
+        run: |
+          mkdir -p _site/lib
+          # app/index.html is authored as an artifact body: add the document skeleton for Pages
+          { printf '<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>\n'; cat app/index.html; printf '\n</body></html>\n'; } > _site/index.html
+          cp app/lib/frames.js app/lib/encode.js app/lib/hevc-vui.js app/lib/dovi.js app/lib/mp4-post.js _site/lib/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
