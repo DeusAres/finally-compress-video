@@ -58,6 +58,9 @@ $('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!
    try{const en=new VideoEncoder({output:(ch,meta)=>{r.bytes=(r.bytes||0)+ch.byteLength;r.type=ch.type;if(meta?.decoderConfig){const d=meta.decoderConfig.description;r.cfg={codec:meta.decoderConfig.codec,descLen:d?.byteLength};if(d&&codec.startsWith('hvc')){const b=new Uint8Array(d.buffer?d.buffer.slice(d.byteOffset||0,(d.byteOffset||0)+d.byteLength):d);r.hvcC={profileIdc:b[1]&31,levelIdc:b[12],chroma:b[16]&3,bitDepthLuma:(b[17]&7)+8,bitDepthChroma:(b[18]&7)+8,hex:[...b.slice(0,40)].map(x=>x.toString(16).padStart(2,'0')).join('')}}}},error:e=>r.err=e.message});
     en.configure({codec,width:f.codedWidth,height:f.codedHeight,bitrate:8e6,framerate:60,latencyMode:'quality'});
     for(let i=0;i<30;i++){const c2=new VideoFrame(f,{timestamp:i*16667});en.encode(c2,{keyFrame:i===0});c2.close()}await en.flush();en.close();r.fps30=Math.round(30/((performance.now()-t0)/1000))}catch(err){r.err=err.message}R.t4[codec]=r}
+  // T6a: full hvcC hex of native Main10 encode (parsed offline for VUI)
+  {const r={};try{let d;const en=new VideoEncoder({output:(ch,m)=>{if(m?.decoderConfig?.description)d=m.decoderConfig.description},error:e=>r.err=e.message});en.configure({codec:'hvc1.2.4.L123.B0',width:f.codedWidth,height:f.codedHeight,bitrate:8e6,latencyMode:'quality'});const c6=new VideoFrame(f,{timestamp:0});en.encode(c6,{keyFrame:true});c6.close();await en.flush();en.close();
+   const b=new Uint8Array(d.buffer?d.buffer.slice(d.byteOffset||0,(d.byteOffset||0)+d.byteLength):d);r.hvcCfull=[...b].map(x=>x.toString(16).padStart(2,'0')).join('')}catch(err){r.err=err.message}R.t6_hvcC=r}
   // T5a: re-decode native HEVC output -> colorSpace from VUI
   {const r={};try{const chunks=[];let dcfg;const en=new VideoEncoder({output:(ch,m)=>{chunks.push(ch);if(m?.decoderConfig)dcfg=m.decoderConfig},error:e=>r.err=e.message});
    en.configure({codec:'hvc1.2.4.L123.B0',width:f.codedWidth,height:f.codedHeight,bitrate:8e6,latencyMode:'quality'});const c4=new VideoFrame(f,{timestamp:0});en.encode(c4,{keyFrame:true});c4.close();await en.flush();en.close();
@@ -77,6 +80,9 @@ $('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!
    const en=new VideoEncoder({output:(ch)=>{r.bytes=(r.bytes||0)+ch.byteLength;r.n=(r.n||0)+1},error:e=>r.err=e.message});en.configure({codec:'av01.0.08M.08',width:cv.width,height:cv.height,bitrate:8e6,framerate:60,latencyMode:'quality'});
    for(let i=0;i<30;i++){const c3=new VideoFrame(cv,{timestamp:i*16667});en.encode(c3,{keyFrame:i===0});c3.close()}await en.flush();en.close();r.fps30=Math.round(30/((performance.now()-t0)/1000))}catch(err){r.err=err.message}R.t4['av1_from_canvas']=r}
   f.close()}catch(err){R.t3.frameErr=err.message}
- o.textContent=JSON.stringify(R.t3,null,1);show()};
+ o.textContent=JSON.stringify(R.t3,null,1)+'\nTest frame-exactness <video> in corso (circa 3x durata video)…';show();
+ // T6b: <video> frame delivery at playbackRate 1,2,4
+ R.t6_video={duration:v.duration};for(const rate of [1,2,4]){const r={};try{v.currentTime=0;await new Promise(res=>v.onseeked=res);let n=0;const seen=new Set();const cb=(now,md)=>{n++;seen.add(md.mediaTime);if(!v.ended)v.requestVideoFrameCallback(cb)};v.requestVideoFrameCallback(cb);v.playbackRate=rate;const t0=performance.now();await v.play();await new Promise(res=>v.onended=res);r.callbacks=n;r.uniqueMediaTimes=seen.size;r.wallSec=+((performance.now()-t0)/1000).toFixed(2);const q=v.getVideoPlaybackQuality?v.getVideoPlaybackQuality():null;if(q)r.quality={total:q.totalVideoFrames,dropped:q.droppedVideoFrames}}catch(err){r.err=err.message}R.t6_video['x'+rate]=r}
+ v.playbackRate=1;o.textContent=JSON.stringify(R.t3,null,1)+'\nT6 fatto.';show()};
 $('bc').onclick=()=>{const s=JSON.stringify(R);navigator.clipboard?.writeText(s).then(()=>$('bc').textContent='Copiato',()=>{getSelection().selectAllChildren($('oc'));$('bc').textContent='Seleziona e copia a mano'})};
 </script>
