@@ -91,6 +91,10 @@ $('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!
  {const r={};try{v.pause();const seen=new Set();const t0=performance.now();let t=0;const step=1/120;let misses=0;
   while(t<v.duration){v.currentTime=t;await new Promise(res=>{let done=false;const fin=()=>{if(!done){done=true;res()}};v.requestVideoFrameCallback((n,md)=>{seen.add(md.mediaTime);fin()});setTimeout(()=>{misses++;fin()},300)});t+=step}
   r.uniqueFrames=seen.size;r.seeks=Math.ceil(v.duration/step);r.timeouts=misses;r.wallSec=+((performance.now()-t0)/1000).toFixed(2)}catch(err){r.err=err.message}R.t7.seekStep=r}
- o.textContent=JSON.stringify(R.t3,null,1)+'\nT6+T7 fatti.';show()};
+ // T8: seek via 'seeked' event + VideoFrame(v), timing
+ {const r={lat:[],fmts:new Set(),timeouts:0};try{v.pause();const t0=performance.now();const N=Math.min(120,Math.floor(v.duration*60)-1);
+  for(let i=0;i<N;i++){const s=performance.now();v.currentTime=(i+0.5)/60;const ev=await WT(v,'seeked',2000);if(ev==='timeout')r.timeouts++;const vf=new VideoFrame(v,{timestamp:i});r.fmts.add(String(vf.format)+'|'+vf.colorSpace.transfer);vf.close();r.lat.push(performance.now()-s)}
+  const L=r.lat.sort((a,b)=>a-b);R.t8={frames:N,timeouts:r.timeouts,msMedian:+L[L.length>>1].toFixed(1),msP90:+L[Math.floor(L.length*0.9)].toFixed(1),fpsEquivalent:+(N/((performance.now()-t0)/1000)).toFixed(1),formats:[...r.fmts]}}catch(err){R.t8={err:err.message}}}
+ o.textContent=JSON.stringify(R.t3,null,1)+'\nT6+T7+T8 fatti.';show()};
 $('bc').onclick=()=>{const s=JSON.stringify(R);navigator.clipboard?.writeText(s).then(()=>$('bc').textContent='Copiato',()=>{getSelection().selectAllChildren($('oc'));$('bc').textContent='Seleziona e copia a mano'})};
 </script>
