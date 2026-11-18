@@ -1,4 +1,4 @@
-// Run: node app/lib/dovi.test.mjs   (needs /usr/bin/ffmpeg + ffprobe with libx265; reads IMG_7440.mov / IMG_2147.mov in repo root)
+// Run: node app/lib/dovi.test.mjs   (needs /usr/bin/ffmpeg + ffprobe with libx265; reads samples/IMG_7440.mov / samples/IMG_2147.mov in repo root)
 //
 // Pipeline emulated here (Node rebuilds the whole file for the test):
 //   source .mov -> locateMoov -> dvvC + per-frame RPUs (NAL 62) -> ffmpeg x265 10-bit HLG (moov at the end,
@@ -77,7 +77,7 @@ const topChildren = (moov) => childBoxes(moov, parseBoxes(moov)[0]).map((b) => b
 }
 
 async function pipeline(name, nFramesMax = 120) {
-  const srcPath = join(ROOT, name + '.mov');
+  const srcPath = join(ROOT, 'samples', name + '.mov');
   assert.ok(existsSync(srcPath), srcPath + ' missing');
   // 1. source moov / dvvC / RPUs
   const rd = fileReader(srcPath);

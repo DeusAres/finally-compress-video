@@ -1,6 +1,6 @@
 // Post-processing of the MP4 produced by Mediabunny (fastStart:false => moov AFTER mdat, so growing/shrinking
 // boxes inside moov never moves mdat and chunk offsets (stco/co64) stay valid).
-import { parseBoxes, childrenOffset, findBox, boxBytes, videoTrak } from './dovi.js?v=0.11';
+import { parseBoxes, childrenOffset, findBox, boxBytes, videoTrak } from './dovi.js?v=0.12';
 
 const fourccBytes = (s) => [s.charCodeAt(0), s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)];
 function concat(parts) {
@@ -168,4 +168,31 @@ export async function rewriteMoov(src, fn) {
   if (moov.offset + moov.size !== size) throw new Error('moov is not the last box');
   const newMoov = fn(await read(moov.offset, moov.size));
   return { prefixLength: moov.offset, moov: newMoov };
+}
+
+/**
+ * Set (replace or add) a UTF-8 string value in moov/meta (QuickTime mdta: hdlr, keys, ilst).
+ * Used to tag the output (e.g. com.apple.quicktime.displayname = "IMG_7440 · 8 Mbps").
+ * No-op (returns moov unchanged) if there is no moov/meta with keys+ilst.
+ */
+export function setMetaString(moovBytes, key, value) {
+  const meta = findBox(moovBytes, ['moov', 'meta']);
+  if (!meta) return moovBytes;
+  const te = new TextEncoder(), kb = te.encode(key), vb = te.encode(value);
+  const u32 = (n) => new Uint8Array([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
+  return editAt(moovBytes, ['moov', 'meta'], (metaBytes) => rebuild(metaBytes, (kids) => {
+    const keysK = kids.find((k) => k.type === 'keys'), ilstK = kids.find((k) => k.type === 'ilst');
+    if (!keysK || !ilstK) return kids;
+    // keys: [size type][ver/flags 4][count 4] then entries [size 4]['mdta' 4][key]
+    const kbuf = keysK.bytes; const dv = new DataView(kbuf.buffer, kbuf.byteOffset, kbuf.byteLength);
+    const count = dv.getUint32(12); let off = 16, idx = 0;
+    for (let i = 1; i <= count; i++) { const sz = dv.getUint32(off); const name = new TextDecoder().decode(kbuf.subarray(off + 8, off + sz)); if (name === key) idx = i; off += sz; }
+    const dataBox = makeBox('data', u32(1), u32(0), vb); // type 1 = UTF-8, locale 0
+    let newKeys = keysK.bytes;
+    if (!idx) { idx = count + 1; newKeys = makeBox('keys', kbuf.subarray(8, 12), u32(count + 1), kbuf.subarray(16), u32(8 + kb.length), te.encode('mdta'), kb); }
+    const item = (() => { const b = makeBox('xxxx', dataBox); b.set(u32(idx), 4); return b; })(); // ilst item type = 1-based key index
+    const ilstItems = parseBoxes(ilstK.bytes, 8, ilstK.bytes.length).filter((b) => new DataView(ilstK.bytes.buffer, ilstK.bytes.byteOffset).getUint32(b.start + 4) !== idx).map((b) => ilstK.bytes.subarray(b.start, b.end));
+    const newIlst = makeBox('ilst', ...ilstItems, item);
+    return kids.map((k) => (k.type === 'keys' ? { type: 'keys', bytes: newKeys } : k.type === 'ilst' ? { type: 'ilst', bytes: newIlst } : k));
+  }));
 }

@@ -18,7 +18,7 @@ function decode(file, map, sr = SR) {
 const fmt = (v) => v.toFixed(3);
 
 // 1. rilevamento
-const y = decode('IMG_7440.mov', '0:a:0');
+const y = decode('samples/IMG_7440.mov', '0:a:0');
 const det = detectEcho(y, SR);
 console.log(`7440: found=${det.found} d=${det.delayMs.toFixed(3)} ms (${det.delaySamples.toFixed(2)} smp) rho=${fmt(det.rho)} cons=${fmt(det.consistency)} win=${det.perWindow.length}`);
 assert.ok(det.found);
@@ -101,7 +101,7 @@ assert.ok(dse.found && Math.abs(dse.delaySamples - 1841) < 0.5);
 const gse = estimateGain(synEcho, SR, dse.delaySamples, { rho: dse.rho });
 console.log(`  gain stimato=${gse.gain.toFixed(3)}/${gse.gainHigh.toFixed(3)} (vero 0.45)`);
 
-const y2 = decode('IMG_2147.mov', '0:a:1');
+const y2 = decode('samples/IMG_2147.mov', '0:a:1');
 const d2 = detectEcho(y2, SR);
 console.log(`2147 (${(y2[0].length / SR).toFixed(1)} s): found=${d2.found} d=${d2.delayMs.toFixed(2)} ms rho=${fmt(d2.rho)} cons=${fmt(d2.consistency)} win=${d2.perWindow.length}`);
 console.log('   per finestra:', d2.perWindow.map((p) => `${p.lagMs.toFixed(2)}ms/${fmt(p.rho)}`).join(' '));
