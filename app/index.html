@@ -96,7 +96,7 @@ async function run() {
       const pkt = new MB.EncodedPacket(stripParameterSets(data), chunk.type, ts - frames[0].ts, dur);
       let m;
       if (first) {
-        first = false; firstKeyNal = data.length > 4 ? (data[4] >> 1) & 63 : -1;
+        first = false; { const t = []; for (let o = 0; o + 4 < data.length && t.length < 12;) { const l = (data[o] << 24 | data[o + 1] << 16 | data[o + 2] << 8 | data[o + 3]) >>> 0; t.push((data[o + 4] >> 1) & 63); o += 4 + l; } firstKeyNal = t.join(','); }
         const dc = meta.decoderConfig; const desc = new Uint8Array(dc.description.buffer ? dc.description.buffer.slice(dc.description.byteOffset || 0, (dc.description.byteOffset || 0) + dc.description.byteLength) : dc.description);
         m = { decoderConfig: { codec: dc.codec, codedWidth: W, codedHeight: H,
           description: hlg ? patchHvcC(desc, { primaries: 9, transfer: 18, matrix: 9, fullRange: false }) : desc,
@@ -113,7 +113,7 @@ async function run() {
   }
   await enc.flush(); enc.close(); releaseVideoElement(video); await Promise.all(pending);
   const encSec = (performance.now() - tE) / 1000;
-  log(`codificati ${i} frame → ${nChunks} chunk in ${encSec.toFixed(1)} s (${(i / encSec).toFixed(0)} fps). Primo NAL type ${firstKeyNal} (19/20 = IDR, 21 = CRA)`);
+  log(`codificati ${i} frame → ${nChunks} chunk in ${encSec.toFixed(1)} s (${(i / encSec).toFixed(0)} fps). NAL nel primo frame: ${firstKeyNal} (19/20 = IDR, 21 = CRA, 39 = SEI, 32-34 = parametri)`);
 
   // 5. Audio passthrough
   if (asrc) { let first = true; const cfg = await aac.getDecoderConfig();
