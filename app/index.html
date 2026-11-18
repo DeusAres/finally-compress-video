@@ -1,0 +1,138 @@
+<title>Compressore HDR v0</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: single-column tool — file in, settings, progress log, result card */
+:root{--bg:#f4f6f8;--fg:#14181d;--mut:#5d6773;--card:#fff;--line:#d9dee5;--acc:#0b63ce;--ok:#11743a;--ko:#b3261e;--font:"Inter",system-ui,sans-serif;--mono:ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1115;--fg:#e7ebf0;--mut:#9aa4b1;--card:#161a20;--line:#28303a;--acc:#6aa2ff;--ok:#5ccf8a;--ko:#ff8a80;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0e1115;--fg:#e7ebf0;--mut:#9aa4b1;--card:#161a20;--line:#28303a;--acc:#6aa2ff;--ok:#5ccf8a;--ko:#ff8a80;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px;max-width:720px;margin:0 auto}
+h1{font-size:1.35rem;margin:0 0 4px}p{color:var(--mut);margin:0 0 14px;line-height:1.5}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;display:grid;gap:12px;margin-bottom:14px;min-width:0}
+label{display:grid;gap:4px;font-size:.92rem}select,input{font:inherit;max-width:100%}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button{font:inherit;background:var(--acc);color:var(--bg);border:0;border-radius:8px;padding:11px 16px;cursor:pointer}button:disabled{opacity:.45}
+button:focus-visible{outline:3px solid var(--fg)}
+pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;margin:0;max-height:300px}
+.big{font-size:1.6rem;font-variant-numeric:tabular-nums;font-weight:600}.ok{color:var(--ok)}.ko{color:var(--ko)}
+progress{width:100%}
+</style>
+<h1>Compressore HDR v0</h1>
+<p>Prototipo: ricodifica HEVC 10-bit HLG frame per frame, bitrate fisso. Serve a verificare file, HDR e metadati in Foto.</p>
+
+<div class="card">
+  <label>Video dall'iPhone (.mov)<input type="file" id="file" accept="video/*"></label>
+  <div class="row">
+    <label>Bitrate<select id="br"><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8" selected>8 Mbps</option><option value="10">10 Mbps</option></select></label>
+    <label>Keyframe ogni<select id="gop"><option value="1">1 s</option><option value="4" selected>4 s</option><option value="10">10 s</option></select></label>
+    <label>Indice (moov)<select id="fs"><option value="in-memory" selected>in testa</option><option value="false">in coda</option></select></label>
+  </div>
+  <button id="go" disabled>Comprimi</button>
+  <progress id="prog" max="1" value="0"></progress>
+</div>
+<div class="card" id="res" hidden>
+  <div class="big" id="ratio"></div>
+  <button id="save">Salva il video</button>
+  <p id="saveMsg"></p>
+</div>
+<div class="card"><pre id="log">Scegli un video.</pre></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.cjs"></script>
+<script type="module">
+import { openVideoElement, seekFrames, releaseVideoElement } from './lib/frames.js';
+import { createHevcEncoder } from './lib/encode.js';
+import { patchHvcC, stripParameterSets } from './lib/hevc-vui.js';
+const MB = window.Mediabunny;
+const $ = (id) => document.getElementById(id);
+const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };
+let file = null, outBlob = null, outName = '';
+$('file').onchange = (e) => { file = e.target.files[0] || null; $('go').disabled = !file; logEl.textContent = file ? `${file.name} — ${(file.size / 1048576).toFixed(1)} MB` : 'Scegli un video.'; };
+
+$('go').onclick = async () => {
+  $('go').disabled = true; $('res').hidden = true; logEl.textContent = '';
+  let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch {}
+  try { await run(); } catch (e) { log('ERRORE: ' + (e?.stack || e)); }
+  try { await wake?.release(); } catch {}
+  $('go').disabled = false;
+};
+
+async function run() {
+  const T0 = performance.now();
+  const bitrate = +$('br').value * 1e6, gopSec = +$('gop').value, fastStart = $('fs').value === 'false' ? false : 'in-memory';
+  // 1. Demux
+  const input = new MB.Input({ source: new MB.BlobSource(file), formats: MB.ALL_FORMATS });
+  const vt = await input.getPrimaryVideoTrack(); if (!vt) throw new Error('nessuna traccia video');
+  const srcCs = await vt.getColorSpace(); const tags = await input.getMetadataTags();
+  log(`video ${await vt.getCodec()} ${await vt.getDisplayWidth()}×${await vt.getDisplayHeight()} rot ${await vt.getRotation()} cs ${JSON.stringify(srcCs)}`);
+  const pk = [];
+  for await (const p of new MB.EncodedPacketSink(vt).packets(undefined, undefined, { metadataOnly: true })) pk.push({ ts: p.timestamp, dur: p.duration });
+  pk.sort((a, b) => a.ts - b.ts);
+  const neg = pk.filter((p) => p.ts < 0).length; const frames = pk.filter((p) => p.ts >= 0);
+  log(`pacchetti ${pk.length}, presentabili ${frames.length} (scartati ts<0: ${neg}), primo ts ${frames[0]?.ts.toFixed(4)} s`);
+  const audios = await input.getAudioTracks(); let aac = null;
+  for (const a of audios) { const c = await a.getCodec(); log(`audio: ${c ?? 'sconosciuto (es. apac, scartato)'}`); if (c === 'aac' && !aac) aac = a; }
+
+  // 2. Frame source (native 10-bit via seek)
+  const video = await openVideoElement(file);
+  const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}`);
+
+  // 3. Output
+  const target = new MB.BufferTarget();
+  const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart, metadataFormat: 'mdta' }), target });
+  const vsrc = new MB.EncodedVideoPacketSource('hevc'); output.addVideoTrack(vsrc);
+  let asrc = null; if (aac) { asrc = new MB.EncodedAudioPacketSource('aac'); output.addAudioTrack(asrc); }
+  const raw = {}; for (const k of ['com.apple.quicktime.creationdate', 'com.apple.quicktime.location.ISO6709', 'com.apple.quicktime.make', 'com.apple.quicktime.model', 'com.apple.quicktime.software']) { const v = tags?.raw?.[k]; if (typeof v === 'string') raw[k] = v; }
+  log(`metadati copiati: ${Object.keys(raw).map((k) => k.split('.').pop()).join(', ') || 'nessuno'}`);
+  output.setMetadataTags({ raw, creationTime: tags?.date ?? undefined });
+  await output.start();
+
+  // 4. Encode
+  const hlg = srcCs?.transfer === 'hlg';
+  const durByTs = new Map(frames.map((f) => [Math.round(f.ts * 1e6), f.dur]));
+  let first = true, encErr = null, nChunks = 0, firstKeyNal = null; const pending = [];
+  const enc = createHevcEncoder({ width: W, height: H, bitrate,
+    onError: (e) => { encErr = e; },
+    onChunk: (chunk, meta) => {
+      const data = new Uint8Array(chunk.byteLength); chunk.copyTo(data);
+      const ts = chunk.timestamp / 1e6, dur = durByTs.get(chunk.timestamp) ?? 1 / 60;
+      const pkt = new MB.EncodedPacket(stripParameterSets(data), chunk.type, ts - frames[0].ts, dur);
+      let m;
+      if (first) {
+        first = false; firstKeyNal = data.length > 4 ? (data[4] >> 1) & 63 : -1;
+        const dc = meta.decoderConfig; const desc = new Uint8Array(dc.description.buffer ? dc.description.buffer.slice(dc.description.byteOffset || 0, (dc.description.byteOffset || 0) + dc.description.byteLength) : dc.description);
+        m = { decoderConfig: { codec: dc.codec, codedWidth: W, codedHeight: H,
+          description: hlg ? patchHvcC(desc, { primaries: 9, transfer: 18, matrix: 9, fullRange: false }) : desc,
+          colorSpace: hlg ? { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false } : srcCs } };
+      }
+      nChunks++; pending.push(vsrc.add(pkt, m));
+    } });
+  const keyEvery = Math.max(1, Math.round(gopSec * 60)); let i = 0; const tE = performance.now();
+  for await (const vf of seekFrames(video, frames.map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })))) {
+    if (encErr) { vf.close(); throw encErr; }
+    enc.encode(vf, i % keyEvery === 0); vf.close(); i++;
+    await enc.drain(4);
+    if (i % 15 === 0) { $('prog').value = i / frames.length; await new Promise((r) => setTimeout(r)); }
+  }
+  await enc.flush(); enc.close(); releaseVideoElement(video); await Promise.all(pending);
+  const encSec = (performance.now() - tE) / 1000;
+  log(`codificati ${i} frame → ${nChunks} chunk in ${encSec.toFixed(1)} s (${(i / encSec).toFixed(0)} fps). Primo NAL type ${firstKeyNal} (19/20 = IDR, 21 = CRA)`);
+
+  // 5. Audio passthrough
+  if (asrc) { let first = true; const cfg = await aac.getDecoderConfig();
+    for await (const p of new MB.EncodedPacketSink(aac).packets()) { if (p.timestamp < 0) continue; await asrc.add(p.clone({ timestamp: p.timestamp - frames[0].ts }), first ? { decoderConfig: cfg } : undefined); first = false; }
+    asrc.close(); }
+  vsrc.close(); await output.finalize();
+  outBlob = new Blob([target.buffer], { type: 'video/mp4' });
+  outName = file.name.replace(/\.[^.]+$/, '') + '_hdr.mp4';
+  const pct = (1 - outBlob.size / file.size) * 100;
+  $('ratio').innerHTML = `${(file.size / 1048576).toFixed(1)} MB → ${(outBlob.size / 1048576).toFixed(1)} MB <span class="${pct > 0 ? 'ok' : 'ko'}">(${pct > 0 ? '−' : '+'}${Math.abs(pct).toFixed(0)}%)</span>`;
+  $('res').hidden = false; $('saveMsg').textContent = ''; $('prog').value = 1;
+  log(`fatto in ${((performance.now() - T0) / 1000).toFixed(1)} s. Moov ${fastStart ? 'in testa' : 'in coda'}.`);
+}
+
+$('save').onclick = async () => {
+  const dl = await window.claude?.use?.('downloads');
+  if (!dl) { $('saveMsg').textContent = 'Il salvataggio non è disponibile in questa vista.'; return; }
+  try { const r = await dl.save({ filename: outName, data: outBlob }); $('saveMsg').textContent = r.status === 'saved' ? 'Salvato. Aprilo da File e scegli «Salva video» per metterlo in Foto.' : ''; }
+  catch (e) { $('saveMsg').textContent = `Non salvato (${e.code || e.message}).`; }
+};
+</script>
