@@ -1,3 +1,4 @@
+<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>
 <title>Compressore HDR v0.5</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
@@ -37,11 +38,11 @@ progress{width:100%}
 <div class="card"><pre id="log">Scegli un video.</pre></div>
 
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './lib/frames.js';
-import { createHevcEncoder } from './lib/encode.js';
-import { patchHvcC, stripParameterSets } from './lib/hevc-vui.js';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './lib/dovi.js';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './lib/mp4-post.js';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js';
+import { createHevcEncoder } from './app/lib/encode.js';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './app/lib/mp4-post.js';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };
@@ -162,3 +163,5 @@ async function saveViaArtifact() {
   catch (e) { $('saveMsg').textContent = `Non salvato (${e.code || e.message}).`; }
 }
 </script>
+
+</body></html>

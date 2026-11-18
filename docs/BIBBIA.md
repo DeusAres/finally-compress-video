@@ -227,6 +227,8 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 
 - 2026-11-18 — Contraddizioni aperte da risolvere con test su device: (a) posizione moov — research/09 (kimymt) dice che Foto richiede moov in testa, research/04 raccomanda moov in coda per RAM → **test: salvare in Foto due file (moov testa/coda) e verificare import + metadati**; (b) "WebKit non emette IDR sul primo frame" (kimymt) vs misura nostra keyFrame idx 0 rispettato → verificare che il chunk 0 sia IDR (NAL type 19/20) e non CRA.
 
+- 2026-11-18 — **Un solo posto**: l'app vive su `main`, servita da GitHub Pages "Deploy from branch: main / (root)" → https://deusares.github.io/finally-compress-video/ . `index.html` alla radice (documento completo), moduli in `app/lib/`, `.nojekyll`. Artifact e workflow Actions dismessi. Salvataggio: share sheet con solo il file → «Salva video» (stesso pattern di finally-cool-film).
+
 ## 13. STATO / RIPRESA (leggere per primo)
 
 **Fase attuale: RICERCA (pre-costruzione). Nessun codice app ancora.**
