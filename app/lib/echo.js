@@ -88,44 +88,70 @@ function autocorr(x, maxLag) {
 }
 
 // ---------- rilevamento ----------
+// Criterio (ricalibrato con le coppie di riferimento 2790/2813, y rovinato e x pulito):
+//  - finestre corte (0.2-0.25 s, non sovrapposte, fino a maxSeconds), autocorrelazione normalizzata dopo pre-enfasi;
+//  - profilo = MEDIANA sulle finestre (una periodicita' naturale cambia da finestra a finestra, l'eco no), separatamente
+//    per M = L+R e S = L-R; l'eco compare in entrambi allo stesso lag, la periodicita' naturale quasi mai
+//    (2813 pulito: M 18 ms, S 6 ms)  =>  punteggio J(l) = min(max_{|k-l|<=0.3 ms} M(k), idem S) (mono: solo M);
+//  - trovata se J >= jMin, e la frazione di finestre con picco (min M,S) >= 0.06 vicino al lag e' >= consMin.
+// rho = J (picco relativo/mediano), consistency = frazione di finestre con picco.
+function median64(a) { const s = Float64Array.from(a).sort(); const m = s.length >> 1; return s.length ? (s.length & 1 ? s[m] : 0.5 * (s[m - 1] + s[m])) : NaN; }
 export function detectEcho(channels, sampleRate, opts = {}) {
   const minMs = opts.minMs ?? 5, maxMs = opts.maxMs ?? 120, lobeMs = opts.lobeMs ?? 3;
   const maxSeconds = opts.maxSeconds ?? 30;
   const total = channels[0].length;
-  // window: 1 s, shortened for short clips (min 0.4 s) so that >= 3 windows exist (2.5 s clips were missed)
-  const winSec = opts.windowSec ?? Math.max(0.4, Math.min(1, total / sampleRate / 4));
+  const stereo = channels.length >= 2;
+  const winSec = opts.windowSec ?? Math.max(0.2, Math.min(0.25, total / sampleRate / 6));
   const winLen = Math.round(sampleRate * winSec);
   const lo = Math.max(Math.ceil((Math.max(minMs, lobeMs) * sampleRate) / 1000), 2);
   const hi = Math.floor((maxMs * sampleRate) / 1000);
-  const perWindow = [];
-  for (const start of pickWindows(total, winLen, maxSeconds)) {
-    const x = mono(channels, start, winLen);
+  const tol = Math.max(2, Math.ceil((0.3e-3) * sampleRate));
+  const jMin = opts.jMin ?? (stereo ? 0.115 : 0.15), consMin = opts.consMin ?? 0.8, peakWin = opts.peakWin ?? 0.06;
+  const none = { found: false, delaySamples: NaN, delayMs: NaN, rho: 0, consistency: 0, perWindow: [] };
+  if (!(hi + 2 < winLen)) return none;
+  const wins = [];
+  let eM = 0, eS = 0;
+  for (const start of pickWindows(total, winLen, Math.max(3, Math.ceil(maxSeconds / winSec)))) {
+    const xm = mono(channels, start, winLen);
     let e = 0;
-    for (let i = 0; i < winLen; i++) e += x[i] * x[i];
+    for (let i = 0; i < winLen; i++) e += xm[i] * xm[i];
     if (e / winLen < 1e-9) continue; // finestra (quasi) silenziosa
-    // pre-enfasi leggera: toglie la correlazione di bassa frequenza (lobo largo)
-    const w = new Float64Array(winLen);
-    for (let i = 1; i < winLen; i++) w[i] = x[i] - 0.9 * x[i - 1];
-    const r = autocorr(w, hi + 1);
-    let best = lo, bv = -Infinity;
-    for (let l = lo; l <= hi; l++) if (r[l] > bv) { bv = r[l]; best = l; }
-    // interpolazione parabolica
-    let frac = 0;
-    const a = r[best - 1], b = r[best], c = r[best + 1];
-    const den = a - 2 * b + c;
-    if (den < 0) frac = Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / den));
-    const lag = best + frac;
-    perWindow.push({ start: start / sampleRate, lagSamples: lag, lagMs: (lag * 1000) / sampleRate, rho: bv });
+    const pre = (x) => { const w = new Float64Array(winLen); for (let i = 1; i < winLen; i++) w[i] = x[i] - 0.9 * x[i - 1]; return w; };
+    const rec = { start, m: autocorr(pre(xm), hi + 2), s: null };
+    if (stereo) {
+      const xs = new Float64Array(winLen);
+      for (let i = 0; i < winLen; i++) { xs[i] = (channels[0][start + i] || 0) - (channels[1][start + i] || 0); eS += xs[i] * xs[i]; }
+      eM += e; rec.xs = xs;
+    }
+    wins.push(rec);
   }
-  if (!perWindow.length) return { found: false, delaySamples: NaN, delayMs: NaN, rho: 0, consistency: 0, perWindow };
-  const medLag = median(perWindow.map((p) => p.lagSamples));
-  const tol = (0.15 * sampleRate) / 1000;
-  const inl = perWindow.filter((p) => Math.abs(p.lagSamples - medLag) <= tol);
-  const consistency = inl.length / perWindow.length;
-  const delaySamples = median(inl.map((p) => p.lagSamples));
-  const rho = median(perWindow.map((p) => p.rho));
-  const found = perWindow.length >= 3 && consistency >= 0.75 && rho >= 0.15;
-  return { found, delaySamples, delayMs: (delaySamples * 1000) / sampleRate, rho, consistency, perWindow };
+  if (wins.length < 3) return none;
+  const useSide = stereo && eS > 0.003 * eM; // quasi mono (L ~ R): solo M
+  if (useSide) for (const w of wins) { w.s = autocorr((() => { const o = new Float64Array(winLen); for (let i = 1; i < winLen; i++) o[i] = w.xs[i] - 0.9 * w.xs[i - 1]; return o; })(), hi + 2); }
+  const nw = wins.length, col = new Float64Array(nw);
+  const medOf = (key) => { const m = new Float64Array(hi + 1); for (let l = lo; l <= hi; l++) { for (let w = 0; w < nw; w++) col[w] = wins[w][key][l]; m[l] = median64(col); } return m; };
+  const mM = medOf('m'), mS = useSide ? medOf('s') : null;
+  const maxf = (m, l) => { let b = -Infinity; for (let k = Math.max(lo, l - tol); k <= Math.min(hi, l + tol); k++) if (m[k] > b) b = m[k]; return b; };
+  let best = lo, J = -Infinity;
+  for (let l = lo; l <= hi; l++) { const v = useSide ? Math.min(maxf(mM, l), maxf(mS, l)) : maxf(mM, l); if (v > J) { J = v; best = l; } }
+  // lag per finestra: massimo del profilo M entro +-tol dal picco grezzo, interpolazione parabolica; ritardo = mediana
+  const perWindow = wins.map((w) => {
+    let bl = Math.max(lo, best - tol), bv = -Infinity, mv = -Infinity, sv = -Infinity;
+    for (let l = Math.max(lo, best - tol); l <= Math.min(hi, best + tol); l++) {
+      if (w.m[l] > bv) { bv = w.m[l]; bl = l; }
+      if (w.m[l] > mv) mv = w.m[l];
+      if (useSide && w.s[l] > sv) sv = w.s[l];
+    }
+    let frac = 0;
+    if (bl > lo && bl < hi) { const a = w.m[bl - 1], b = w.m[bl], c = w.m[bl + 1], den = a - 2 * b + c; if (den < 0) frac = Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / den)); }
+    const lag = bl + frac;
+    return { start: w.start / sampleRate, lagSamples: lag, lagMs: (lag * 1000) / sampleRate, rho: useSide ? Math.min(mv, sv) : mv };
+  });
+  const good = perWindow.filter((p) => p.rho >= peakWin);
+  const lag = median64((good.length ? good : perWindow).map((p) => p.lagSamples));
+  const consistency = good.length / nw;
+  const found = nw >= 3 && J >= jMin && consistency >= consMin;
+  return { found, delaySamples: lag, delayMs: (lag * 1000) / sampleRate, rho: J, consistency, perWindow };
 }
 
 // ---------- rimozione ----------
@@ -748,6 +774,239 @@ export function removeEchoV3(channels, sampleRate, { delaySamples, opts = {} }) 
   const rem = createEchoRemoverV3({ delaySamples, sampleRate, channels: channels.length, opts });
   const a = rem.process(channels), b = rem.flush();
   return a.map((x, c) => { const o = new Float32Array(x.length + b[c].length); o.set(x); o.set(b[c], x.length); return o; });
+}
+// ======================================================================================
+// v4: deconvoluzione MIMO di Wiener NON CAUSALE sull'intero file, filtro dell'eco stimato alla cieca (solo y).
+//
+// Modello (misurato): y = A x + B x[n-d], con A ~ identita' (lieve passa-basso / mezzo campione), B = filtro 2x2
+// (termini incrociati L<->R, diverso per ogni video) con |B| ~ |A|: l'inverso ricorsivo causale (v1-v3) e'
+// instabile, quello non causale (FFT sull'intero segnale) no. Forma usata:  H(f) = I + C(f) e^{-jwD}, con C = A^-1 B
+// a risposta corta (supporto [D-W, D+W], W ~ 1.7 ms); z = x filtrato da A. A non serve (equivalenza x' = A x).
+//
+// Stima di C (iterativa, punto fisso, solo statistiche del secondo ordine):
+//   1. y sbiancato (LPC 32, filtro unico, commuta con l'inverso LTI); H = I + C_hat;  z = (H^H H + L)^-1 H^H y  (Wiener, 2x2/bin)
+//   2. residuo di predicibilita': regressione LS MIMO di z[n] su z[n-D-tau], |tau| <= W (equazioni normali a blocchi
+//      Toeplitz da correlazioni via FFT, 2 IFFT/iterazione)  =>  P;  C_hat += P   (5 iterazioni, P -> 0 = z non predicibile a d)
+// Regolarizzazione L(f) = lamW (1 + lamHF (f/4kHz)^2) * c/(c+kappa0),  c = |C_hat(f)|_F^2 / nc  (alle alte frequenze
+// l'inversione amplifica l'errore di modello; dove C~0 non si tocca nulla).
+// Stima su estratto di <= estSeconds (segmenti da 5 s distribuiti); applicazione a tutto il file con overlap-save
+// (blocchi 2^17, margine padSec per lato). Batch: serve tutto l'audio in memoria. Nessun NaN su silenzio/priming.
+// ======================================================================================
+const V4_DEFAULTS = {
+  windowMs: 1.7, iterations: 5, lamW: 1e-2, lamHF: 20, hfHz: 4000, kappa0: 0.1, lamP: 1e-3, lpcOrder: 32,
+  estSeconds: 20, segSeconds: 5, blockLog2: 17, padSec: 0.2, minSeconds: 0.4, gain: 1, limiter: true,
+};
+const nextPow2 = (n) => { let p = 1; while (p < n) p <<= 1; return p; };
+function cholFactor(A, n) { // A SPD riga-maggiore -> L (triangolo inferiore) in place; false se non SPD
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j <= i; j++) {
+      let s = A[i * n + j];
+      for (let k = 0; k < j; k++) s -= A[i * n + k] * A[j * n + k];
+      if (i === j) { if (!(s > 1e-300)) return false; A[i * n + i] = Math.sqrt(s); } else A[i * n + j] = s / A[j * n + j];
+    }
+  }
+  return true;
+}
+function cholSolve(L, b, n) {
+  const y = new Float64Array(n), x = new Float64Array(n);
+  for (let i = 0; i < n; i++) { let s = b[i]; for (let k = 0; k < i; k++) s -= L[i * n + k] * y[k]; y[i] = s / L[i * n + i]; }
+  for (let i = n - 1; i >= 0; i--) { let s = y[i]; for (let k = i + 1; k < n; k++) s -= L[k * n + i] * x[k]; x[i] = s / L[i * n + i]; }
+  return x;
+}
+// G = (H^H H + lam I)^-1 H^H, H 2x2 complex in h[8] (h00r,h00i,h01r,h01i,h10r,h10i,h11r,h11i) -> g[8] (stesso ordine)
+function v4G2(h, lam, g) {
+  const a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], p = h[6], q = h[7];
+  const m00 = a * a + b * b + e * e + f * f + lam, m11 = c * c + d * d + p * p + q * q + lam;
+  const mr = a * c + b * d + e * p + f * q, mi = a * d - b * c + e * q - f * p; // m01 = conj(h00) h01 + conj(h10) h11
+  const det = m00 * m11 - mr * mr - mi * mi, id = 1 / (det > 1e-300 ? det : 1e-300);
+  // g00 = (m11 conj(h00) - m01 conj(h01)) / det ; g01 = (m11 conj(h10) - m01 conj(h11)) / det
+  g[0] = (m11 * a - (mr * c + mi * d)) * id; g[1] = (-m11 * b - (mi * c - mr * d)) * id;
+  g[2] = (m11 * e - (mr * p + mi * q)) * id; g[3] = (-m11 * f - (mi * p - mr * q)) * id;
+  // g10 = (-conj(m01) conj(h00) + m00 conj(h01)) / det ; g11 = (-conj(m01) conj(h10) + m00 conj(h11)) / det
+  g[4] = (-(mr * a - mi * b) + m00 * c) * id; g[5] = (-(-mr * b - mi * a) - m00 * d) * id;
+  g[6] = (-(mr * e - mi * f) + m00 * p) * id; g[7] = (-(-mr * f - mi * e) - m00 * q) * id;
+}
+// spettri di C_hat (4 sequenze reali di T tap posti al loro lag D-W+tau) su griglia N -> p1 = FFT(b00 + j b01), p2 = FFT(b10 + j b11)
+function v4TapSpectra(B, nc, T, D, W, N, s) {
+  s.p1r.fill(0); s.p1i.fill(0); s.p2r.fill(0); s.p2i.fill(0);
+  for (let t = 0; t < T; t++) {
+    const o = (D - W + t);
+    if (nc === 2) { s.p1r[o] = B[t * 4]; s.p1i[o] = B[t * 4 + 1]; s.p2r[o] = B[t * 4 + 2]; s.p2i[o] = B[t * 4 + 3]; }
+    else s.p1r[o] = B[t];
+  }
+  fft(s.p1r, s.p1i); if (nc === 2) fft(s.p2r, s.p2i);
+}
+// legge H = I + C_hat al bin k (m = N-k) dai due spettri impacchettati; ritorna c = |C|_F^2 / nc
+function v4ReadH(s, nc, k, m, h) {
+  const a = s.p1r, b = s.p1i;
+  h[0] = 0.5 * (a[k] + a[m]) + 1; h[1] = 0.5 * (b[k] - b[m]);
+  let c = (h[0] - 1) * (h[0] - 1) + h[1] * h[1];
+  if (nc === 2) {
+    h[2] = 0.5 * (b[k] + b[m]); h[3] = -0.5 * (a[k] - a[m]);
+    const a2 = s.p2r, b2 = s.p2i;
+    h[4] = 0.5 * (a2[k] + a2[m]); h[5] = 0.5 * (b2[k] - b2[m]);
+    h[6] = 0.5 * (b2[k] + b2[m]) + 1; h[7] = -0.5 * (a2[k] - a2[m]);
+    c += h[2] * h[2] + h[3] * h[3] + h[4] * h[4] + h[5] * h[5] + (h[6] - 1) * (h[6] - 1) + h[7] * h[7];
+  }
+  return c / nc;
+}
+function v4LamBase(F, N, sr, o) {
+  const l = new Float64Array(F);
+  for (let k = 0; k < F; k++) { const u = (k * sr) / N / o.hfHz; l[k] = o.lamW * (1 + o.lamHF * u * u); }
+  return l;
+}
+// G(f) a bin k in g[8] (nc=2) o g[0..1] (nc=1: g = conj(h)/(|h|^2+lam))
+function v4Gk(h, nc, lam, g) {
+  if (nc === 2) v4G2(h, lam, g);
+  else { const q = 1 / (h[0] * h[0] + h[1] * h[1] + lam); g[0] = h[0] * q; g[1] = -h[1] * q; }
+}
+
+export function estimateEchoV4(channels, sampleRate, opts = {}) {
+  const o = { ...V4_DEFAULTS, ...opts };
+  const nc = channels.length;
+  if (nc < 1 || nc > 2) throw new Error('estimateEchoV4: 1 o 2 canali');
+  const D = Math.round(o.delaySamples);
+  let W = Math.round((o.windowMs * sampleRate) / 1000);
+  W = Math.max(2, Math.min(W, D - 8));
+  if (!(D >= 16)) throw new Error('delaySamples too short for v4');
+  const T = 2 * W + 1, n = channels[0].length;
+  const res = { nc, D, W, T, B: new Float64Array(T * nc * nc), iterations: 0, estimated: false, N: 0, estSamples: 0 };
+  if (n < Math.max(o.minSeconds * sampleRate, 8 * D)) return res;
+  // estratto
+  const cap = Math.round(o.estSeconds * sampleRate), segLen = Math.round(o.segSeconds * sampleRate);
+  let ex;
+  if (n <= cap) ex = channels.map((c) => Float64Array.from(c));
+  else {
+    const starts = pickWindows(n, segLen, Math.ceil(cap / segLen));
+    ex = channels.map((c) => { const e = new Float64Array(starts.length * segLen); starts.forEach((st, i) => e.set(c.subarray(st, st + segLen), i * segLen)); return e; });
+  }
+  const m = ex[0].length;
+  let en = 0; for (const c of ex) for (let i = 0; i < m; i++) en += c[i] * c[i];
+  if (!(en / (m * nc) > 1e-12)) return res;
+  // sbiancamento LPC (unico per i canali)
+  const P = o.lpcOrder, rr = new Float64Array(P + 1);
+  for (const c of ex) for (let l = 0; l <= P; l++) { let a = 0; for (let i = l; i < m; i++) a += c[i] * c[i - l]; rr[l] += a; }
+  const lp = levinson(rr, P);
+  const ew = ex.map((c) => firApply(c, lp));
+  const N = nextPow2(m + D + 4 * W + 64), F = (N >> 1) + 1, M = N - 1;
+  const s = { p1r: new Float64Array(N), p1i: new Float64Array(N), p2r: new Float64Array(nc === 2 ? N : 0), p2i: new Float64Array(nc === 2 ? N : 0) };
+  // spettro di y sbiancato (meta' positiva, canali separati)
+  const Y = [0, 1, 2, 3].map(() => new Float64Array(nc === 2 ? F : 0)), Y0r = new Float64Array(F), Y0i = new Float64Array(F);
+  {
+    s.p1r.set(ew[0]); if (nc === 2) s.p1i.set(ew[1]);
+    fft(s.p1r, s.p1i);
+    for (let k = 0; k < F; k++) {
+      const mk = (N - k) & M, a = s.p1r[k], b = s.p1i[k], c = s.p1r[mk], d = s.p1i[mk];
+      if (nc === 2) { Y0r[k] = 0.5 * (a + c); Y0i[k] = 0.5 * (b - d); Y[2][k] = 0.5 * (b + d); Y[3][k] = -0.5 * (a - c); }
+      else { Y0r[k] = a; Y0i[k] = b; }
+    }
+  }
+  const lamB = v4LamBase(F, N, sampleRate, o), B = res.B, h = new Float64Array(8), g = new Float64Array(8);
+  const maxLag = D + 2 * W + 2, n2 = T * nc;
+  for (let it = 0; it < o.iterations; it++) {
+    v4TapSpectra(B, nc, T, D, W, N, s);
+    for (let k = 0; k < F; k++) {
+      const mk = (N - k) & M, c = v4ReadH(s, nc, k, mk, h);
+      const lam = it === 0 ? lamB[k] : (lamB[k] * c) / (c + o.kappa0);
+      v4Gk(h, nc, lam, g);
+      const y0r = Y0r[k], y0i = Y0i[k];
+      if (nc === 2) {
+        const y1r = Y[2][k], y1i = Y[3][k];
+        const z0r = g[0] * y0r - g[1] * y0i + g[2] * y1r - g[3] * y1i, z0i = g[0] * y0i + g[1] * y0r + g[2] * y1i + g[3] * y1r;
+        const z1r = g[4] * y0r - g[5] * y0i + g[6] * y1r - g[7] * y1i, z1i = g[4] * y0i + g[5] * y0r + g[6] * y1i + g[7] * y1r;
+        const ll = z0r * z0r + z0i * z0i, rrp = z1r * z1r + z1i * z1i, cr = z0r * z1r + z0i * z1i, ci = z0i * z1r - z0r * z1i;
+        s.p1r[k] = s.p1r[mk] = ll; s.p1i[k] = s.p1i[mk] = rrp;
+        s.p2r[k] = cr; s.p2i[k] = mk === k ? 0 : ci; s.p2r[mk] = cr; s.p2i[mk] = mk === k ? 0 : -ci;
+      } else {
+        const z0r = g[0] * y0r - g[1] * y0i, z0i = g[0] * y0i + g[1] * y0r, ll = z0r * z0r + z0i * z0i;
+        s.p1r[k] = s.p1r[mk] = ll; s.p1i[k] = s.p1i[mk] = 0;
+      }
+    }
+    fft(s.p1r, s.p1i, true); if (nc === 2) fft(s.p2r, s.p2i, true);
+    // R_ab(t) = E z_a[n+t] z_b[n]
+    const Rf = (a, b, t) => {
+      if (t < 0) { t = -t; const x = a; a = b; b = x; }
+      if (a === b) return a === 0 ? s.p1r[t] : s.p1i[t];
+      return a === 0 ? s.p2r[t] : s.p2r[(N - t) & M];
+    };
+    const r0 = nc === 2 ? 0.5 * (Rf(0, 0, 0) + Rf(1, 1, 0)) : Rf(0, 0, 0);
+    if (!(r0 > 1e-20)) break;
+    const A = new Float64Array(n2 * n2), bb = Array.from({ length: nc }, () => new Float64Array(n2));
+    for (let j = 0; j < nc; j++) for (let j2 = 0; j2 < nc; j2++) for (let k = 0; k < T; k++) for (let k2 = 0; k2 < T; k2++) A[(j * T + k) * n2 + j2 * T + k2] = Rf(j2, j, k - k2);
+    for (let i = 0; i < n2; i++) A[i * n2 + i] += o.lamP * r0;
+    for (let i = 0; i < nc; i++) for (let j = 0; j < nc; j++) for (let k = 0; k < T; k++) bb[i][j * T + k] = Rf(i, j, D - W + k);
+    if (!cholFactor(A, n2)) break;
+    const cs = bb.map((b) => cholSolve(A, b, n2));
+    let ok = true;
+    for (let i = 0; i < nc && ok; i++) for (let j = 0; j < nc; j++) for (let k = 0; k < T; k++) if (!Number.isFinite(cs[i][j * T + k])) { ok = false; break; }
+    if (!ok) break;
+    for (let i = 0; i < nc; i++) for (let j = 0; j < nc; j++) for (let k = 0; k < T; k++) B[(k * nc + i) * nc + j] += cs[i][j * T + k];
+    res.iterations++;
+  }
+  res.estimated = res.iterations > 0; res.N = N; res.estSamples = m;
+  return res;
+}
+
+// applica il filtro stimato a tutto il file: Wiener non causale a blocchi (overlap-save), margine pad per lato
+export function applyEchoV4(channels, sampleRate, est, opts = {}) {
+  const o = { ...V4_DEFAULTS, ...opts };
+  const { nc, D, W, T, B } = est, n = channels[0].length;
+  if (!est.estimated || channels.length !== nc) return channels.map((c) => Float32Array.from(c));
+  const pad = Math.max(Math.round(o.padSec * sampleRate), 2 * (D + W));
+  let Nb = 1 << o.blockLog2;
+  while (Nb <= 4 * pad) Nb <<= 1;
+  if (n + 2 * pad < Nb) Nb = Math.max(nextPow2(n + 2 * pad), nextPow2(2 * (D + W) + 64));
+  const F = (Nb >> 1) + 1, M = Nb - 1, hop = Nb - 2 * pad;
+  const s = { p1r: new Float64Array(Nb), p1i: new Float64Array(Nb), p2r: new Float64Array(nc === 2 ? Nb : 0), p2i: new Float64Array(nc === 2 ? Nb : 0) };
+  v4TapSpectra(B, nc, T, D, W, Nb, s);
+  const lamB = v4LamBase(F, Nb, sampleRate, o), h = new Float64Array(8), g = new Float64Array(8), ng = nc === 2 ? 8 : 2;
+  const G = Array.from({ length: ng }, () => new Float64Array(F));
+  for (let k = 0; k < F; k++) {
+    const c = v4ReadH(s, nc, k, (Nb - k) & M, h), lam = (lamB[k] * c) / (c + o.kappa0);
+    v4Gk(h, nc, lam, g);
+    for (let i = 0; i < ng; i++) G[i][k] = g[i];
+  }
+  const out = channels.map(() => new Float32Array(n)), re = s.p1r, im = s.p1i;
+  for (let st = -pad; st + pad < n; st += hop) {
+    for (let i = 0; i < Nb; i++) {
+      const p = st + i, inr = p >= 0 && p < n;
+      re[i] = inr ? channels[0][p] : 0; im[i] = nc === 2 && inr ? channels[1][p] : 0;
+    }
+    fft(re, im);
+    for (let k = 0; k < F; k++) {
+      const mk = (Nb - k) & M, a = re[k], b = im[k], c = re[mk], d = im[mk];
+      if (nc === 2) {
+        const y0r = 0.5 * (a + c), y0i = 0.5 * (b - d), y1r = 0.5 * (b + d), y1i = -0.5 * (a - c);
+        const z0r = G[0][k] * y0r - G[1][k] * y0i + G[2][k] * y1r - G[3][k] * y1i, z0i = G[0][k] * y0i + G[1][k] * y0r + G[2][k] * y1i + G[3][k] * y1r;
+        const z1r = G[4][k] * y0r - G[5][k] * y0i + G[6][k] * y1r - G[7][k] * y1i, z1i = G[4][k] * y0i + G[5][k] * y0r + G[6][k] * y1i + G[7][k] * y1r;
+        re[k] = z0r - z1i; im[k] = z0i + z1r; re[mk] = z0r + z1i; im[mk] = -z0i + z1r;
+      } else {
+        const z0r = G[0][k] * a - G[1][k] * b, z0i = G[0][k] * b + G[1][k] * a;
+        re[k] = z0r; im[k] = z0i; re[mk] = z0r; im[mk] = -z0i;
+      }
+    }
+    fft(re, im, true);
+    const lo = Math.max(0, st + pad), hi = Math.min(n, st + Nb - pad);
+    for (let p = lo; p < hi; p++) {
+      const i = p - st, gn = o.gain;
+      out[0][p] = o.limiter ? softLimit(re[i] * gn) : re[i] * gn;
+      if (nc === 2) out[1][p] = o.limiter ? softLimit(im[i] * gn) : im[i] * gn;
+    }
+  }
+  return out;
+}
+
+// batch: channels = array di Float32Array (1 o 2 canali; con piu' canali a coppie 0-1, 2-3, ...; l'ultimo dispari e' mono)
+export function removeEchoV4(channels, sampleRate, opts = {}) {
+  if (!(opts.delaySamples >= 16)) throw new Error('delaySamples required (>= 16)');
+  const out = new Array(channels.length);
+  for (let c = 0; c < channels.length; c += 2) {
+    const grp = channels.slice(c, Math.min(c + 2, channels.length));
+    const est = estimateEchoV4(grp, sampleRate, opts);
+    const r = applyEchoV4(grp, sampleRate, est, opts);
+    r.forEach((x, i) => { out[c + i] = x; });
+  }
+  return out;
 }
 // metrica di danno: perdita di energia per banda (dB, out/ref) e correlazione per banda (segnali allineati)
 export function echoBandDamage(ref, out, sampleRate, bands = ECHO_BANDS) {

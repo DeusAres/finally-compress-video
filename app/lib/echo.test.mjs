@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { detectEcho, estimateGain, removeEcho, createEchoRemover, estimateEchoFilter, removeEchoV2, createEchoRemoverV2, echoBandRho, echoCepstrumComb, echoFilterMaxResponse, removeEchoV3, createEchoRemoverV3, echoBandDamage } from './echo.js';
+import { detectEcho, estimateGain, removeEcho, createEchoRemover, estimateEchoFilter, removeEchoV2, createEchoRemoverV2, echoBandRho, echoCepstrumComb, echoFilterMaxResponse, removeEchoV3, createEchoRemoverV3, echoBandDamage, removeEchoV4, estimateEchoV4, applyEchoV4 } from './echo.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SR = 44100;
@@ -257,6 +258,135 @@ assert.ok(!d2.found);
   const m1 = removeEchoV3([y[0].subarray(0, SR * 3)], SR, { delaySamples: d });
   const m3 = removeEchoV3([y[0].subarray(0, SR * 3), y[1].subarray(0, SR * 3), y[0].subarray(0, SR * 3)], SR, { delaySamples: d });
   assert.ok(m1.length === 1 && m3.length === 3 && m1[0].length === SR * 3 && m3[2].length === SR * 3);
+}
+
+// 3d. v4: deconvoluzione MIMO di Wiener non causale, filtro stimato alla cieca sull'intero file
+{
+  const bandNames = ['<500', '0.5-2k', '2-6k', '>6k'];
+  // --- sintetico: eco MIMO con termini incrociati L<->R, |B| ~ |A| (l'inverso ricorsivo causale e' instabile) ---
+  const D0 = 1841, n0 = SR * 12;
+  const sx = [pink(n0, 21), pink(n0, 22)];
+  const tapsB = [[[0.55, 0.3, 0.1, -0.1], [0.5, 0.25, 0.0, -0.1]], [[-0.6, -0.2, 0.15, 0.0], [0.6, 0.3, -0.1, 0.05]]]; // B[i][j] = FIR a D0, D0+1, ...
+  const sy = sx.map((c, i) => { const o = new Float32Array(c); for (let j = 0; j < 2; j++) for (let k = 0; k < 4; k++) { const g = tapsB[i][j][k]; for (let t = D0 + k; t < n0; t++) o[t] += g * sx[j][t - D0 - k]; } return o; });
+  const sdet4 = detectEcho(sy, SR);
+  assert.ok(sdet4.found && Math.abs(sdet4.delaySamples - D0) < 3, 'rileva eco MIMO sintetico');
+  const err = (z) => { let e = 0, p = 0; for (let c = 0; c < 2; c++) for (let i = 4000; i < n0 - 4000; i++) { const dd = z[c][i] - sx[c][i]; e += dd * dd; p += sx[c][i] * sx[c][i]; } return 10 * Math.log10(e / p); };
+  const t4 = performance.now();
+  const sz = removeEchoV4(sy, SR, { delaySamples: sdet4.delaySamples });
+  const ms4 = performance.now() - t4;
+  console.log(`v4 sintetico MIMO |B|~|A|: errore vs pulito  y ${err(sy).toFixed(1)} dB -> v4 ${err(sz).toFixed(1)} dB  (${ms4.toFixed(0)} ms per ${(n0 / SR).toFixed(0)} s)`);
+  assert.ok(err(sz) < err(sy) - 8, 'v4: eco sintetico MIMO ridotto di > 8 dB');
+  assert.equal(sz[0].length, n0);
+  // negativo: nessuna eco. Sintetico: v4 quasi trasparente. Audio reale pulito: lo stimatore puo' scambiare la periodicita'
+  // naturale per eco (nessun controllo interno): v4 si applica SOLO se detectEcho trova l'eco (qui found=false, vedi sopra)
+  {
+    const xn = removeEchoV4(syn, SR, { delaySamples: d });
+    const dm = echoBandDamage(syn, xn, SR);
+    console.log(`negativo v4 sintetico (rosa+tono): perdita dB per banda ${dm.map((q) => q.lossDb.toFixed(2)).join('/')} corr ${dm.map((q) => q.corr.toFixed(3)).join('/')}`);
+    for (let b = 0; b < 4; b++) assert.ok(Math.abs(dm[b].lossDb) < 1.5 && dm[b].corr > 0.9, `negativo v4 sintetico: banda ${bandNames[b]} quasi trasparente`);
+    const x2 = removeEchoV4(y2, SR, { delaySamples: d });
+    const dm2 = echoBandDamage(y2, x2, SR);
+    console.log(`(info) v4 forzato su 2147 senza eco (found=${d2.found}, non verrebbe applicato): perdita dB per banda ${dm2.map((q) => q.lossDb.toFixed(2)).join('/')}`);
+    assert.ok(x2.every((c) => c.every(Number.isFinite)));
+  }
+  // --- robustezza: mono, 3 canali, silenzio, priming a zero, clip corte ---
+  const L3 = SR * 4;
+  const m1 = removeEchoV4([sy[0].subarray(0, L3)], SR, { delaySamples: D0 });
+  const m3 = removeEchoV4([sy[0].subarray(0, L3), sy[1].subarray(0, L3), sy[0].subarray(0, L3)], SR, { delaySamples: D0 });
+  assert.ok(m1.length === 1 && m3.length === 3 && m1[0].length === L3 && m3[2].length === L3, 'forma uscita mono/3 canali');
+  const zeros = [new Float32Array(SR * 3), new Float32Array(SR * 3)];
+  const zz = removeEchoV4(zeros, SR, { delaySamples: D0 });
+  assert.ok(zz.every((c) => c.every((v) => v === 0)), 'silenzio -> silenzio, niente NaN');
+  const prim = sy.map((c) => { const o = new Float32Array(c.length + 2048); o.set(c, 2048); return o; });
+  const zp = removeEchoV4(prim, SR, { delaySamples: D0 });
+  assert.ok(zp.every((c) => c.every(Number.isFinite)), 'priming a zero: nessun NaN');
+  const sh = removeEchoV4(sy.map((c) => c.subarray(0, 8000)), SR, { delaySamples: D0 });
+  assert.ok(sh[0].length === 8000 && sh[0].every(Number.isFinite), 'clip corta: copia senza errori');
+  // stimatore/applicatore separati == batch
+  const est = estimateEchoV4(sy, SR, { delaySamples: D0 });
+  const ap = applyEchoV4(sy, SR, est, { delaySamples: D0 });
+  const full = removeEchoV4(sy, SR, { delaySamples: D0 });
+  let md = 0; for (let c = 0; c < 2; c++) for (let i = 0; i < n0; i++) md = Math.max(md, Math.abs(ap[c][i] - full[c][i]));
+  assert.ok(md < 1e-6 && est.estimated && est.iterations === 5);
+
+  // --- audio reale IMG_7440 (nel repo, senza riferimento pulito): rho per banda, comb, danno vs v3 ---
+  const t3r = performance.now(); const v3r = removeEchoV3(y, SR, { delaySamples: d }); const m3ms = performance.now() - t3r;
+  const t4r = performance.now(); const v4r = removeEchoV4(y, SR, { delaySamples: d }); const m4ms = performance.now() - t4r;
+  console.log(`7440 (${(y[0].length / SR).toFixed(1)} s): v3 ${m3ms.toFixed(0)} ms, v4 ${m4ms.toFixed(0)} ms`);
+  console.log('modo     ' + bandNames.map((b) => b.padEnd(15)).join('') + 'comb   danno vs y dB (corr) per banda');
+  const r4 = {};
+  for (const [k, v] of Object.entries({ v0: y, v3: v3r, v4: v4r })) {
+    r4[k] = echoBandRho(v, SR, d); const cc = echoCepstrumComb(v, SR, d); r4[k].comb = cc.ratio;
+    const dm = echoBandDamage(y, v, SR);
+    console.log(k.padEnd(9) + r4[k].map((r) => r.map((q) => q.toFixed(2)).join('/').padEnd(15)).join('') + cc.ratio.toFixed(1).padEnd(7) + dm.map((q) => `${q.lossDb.toFixed(2)}(${q.corr.toFixed(2)})`).join(' '));
+  }
+  for (let b = 0; b < 4; b++) assert.ok(r4.v4[b][0] < r4.v0[b][0] + 1e-9 && (b === 3 || r4.v4[b][0] < 0.5 * r4.v0[b][0]), `v4: rho(d) scende nella banda ${bandNames[b]}`);
+  assert.ok(r4.v4.comb < r4.v0.comb, 'v4: comb < v0');
+  let pk4 = 0; for (const c of v4r) for (const v of c) pk4 = Math.max(pk4, Math.abs(v));
+  assert.ok(pk4 <= 1 && v4r.every((c) => c.every(Number.isFinite)));
+
+  // --- prestazioni: 60 s stereo @ 48 kHz (due coppie concatenate) ---
+  {
+    const nP = 48000 * 60, big = [new Float32Array(nP), new Float32Array(nP)];
+    for (let i = 0; i < nP; i++) { big[0][i] = sy[0][i % n0] * 0.9; big[1][i] = sy[1][i % n0] * 0.9; }
+    if (global.gc) global.gc();
+    const rss0 = process.memoryUsage().rss, tp = performance.now();
+    const zbig = removeEchoV4(big, 48000, { delaySamples: 2005 });
+    const msP = performance.now() - tp, rss1 = process.resourceUsage().maxRSS / 1024;
+    console.log(`perf v4: ${msP.toFixed(0)} ms per 60 s stereo 48 kHz; RSS prima ${(rss0 / 1e6).toFixed(0)} MB, picco ${rss1.toFixed(0)} MB (di cui I/O 2x23 MB)`);
+    assert.ok(zbig[0].length === nP && msP < 60000);
+  }
+
+  // --- coppie di riferimento (verita' di campo: audio pulito x e rovinato y, 48 kHz stereo); file PRIVATI solo in /tmp ---
+  function readNpy(p) {
+    const b = fs.readFileSync(p), hl = b.readUInt16LE(8), hdr = b.subarray(10, 10 + hl).toString();
+    const sh2 = /'shape': \((\d+), (\d+)\)/.exec(hdr), nn = +sh2[1], cc = +sh2[2];
+    if (!/<f8/.test(hdr) || cc !== 2) throw new Error('npy non supportato');
+    const dat = new Float64Array(b.buffer.slice(b.byteOffset + 10 + hl, b.byteOffset + 10 + hl + nn * cc * 8));
+    return [0, 1].map((j) => { const ch = new Float32Array(nn); for (let i = 0; i < nn; i++) ch[i] = dat[i * cc + j]; return ch; });
+  }
+  // echo_level (tools/lab/echo_lab.py): regressione di z sul pulito x (taps +-48 campioni = diretto; 35-50 ms = copia ritardata),
+  // dB(copia/diretto) per canale. Qui colonne 'copia' a passo 16 (lab: 4): +-0.6 dB circa dal valore del lab.
+  function makeEchoLevel(xr, sr = 48000, estep = 16) {
+    const n = xr[0].length, S = 3000, E = n - 3000, len = E - S, cols = [];
+    for (let i = 0; i < 2; i++) {
+      for (let k = -48; k <= 48; k += 4) cols.push({ i, k, e: false });
+      for (let k = Math.floor(0.035 * sr); k < Math.floor(0.05 * sr); k += estep) cols.push({ i, k, e: true });
+    }
+    const nc2 = cols.length;
+    const C = cols.map((c) => { const a = new Float64Array(len); for (let t = 0; t < len; t++) a[t] = xr[c.i][(((S + t - c.k) % n) + n) % n]; return a; });
+    const G = new Float64Array(nc2 * nc2);
+    for (let p = 0; p < nc2; p++) for (let q = 0; q <= p; q++) { let a = 0; const u = C[p], v = C[q]; for (let t = 0; t < len; t++) a += u[t] * v[t]; G[p * nc2 + q] = G[q * nc2 + p] = a; }
+    let tr = 0; for (let p = 0; p < nc2; p++) tr += G[p * nc2 + p];
+    const Lc = Float64Array.from(G); for (let p = 0; p < nc2; p++) Lc[p * nc2 + p] += (1e-12 * tr) / nc2;
+    for (let i = 0; i < nc2; i++) for (let j = 0; j <= i; j++) { let a = Lc[i * nc2 + j]; for (let k = 0; k < j; k++) a -= Lc[i * nc2 + k] * Lc[j * nc2 + k]; if (i === j) Lc[i * nc2 + i] = Math.sqrt(Math.max(a, 1e-300)); else Lc[i * nc2 + j] = a / Lc[j * nc2 + j]; }
+    return (z) => [0, 1].map((o) => {
+      const b = new Float64Array(nc2); for (let p = 0; p < nc2; p++) { let a = 0; const u = C[p]; for (let t = 0; t < len; t++) a += u[t] * z[o][S + t]; b[p] = a; }
+      const w = new Float64Array(nc2), c = new Float64Array(nc2);
+      for (let i = 0; i < nc2; i++) { let a = b[i]; for (let k = 0; k < i; k++) a -= Lc[i * nc2 + k] * w[k]; w[i] = a / Lc[i * nc2 + i]; }
+      for (let i = nc2 - 1; i >= 0; i--) { let a = w[i]; for (let k = i + 1; k < nc2; k++) a -= Lc[k * nc2 + i] * c[k]; c[i] = a / Lc[i * nc2 + i]; }
+      let ed = 0, ee = 0;
+      for (let p = 0; p < nc2; p++) for (let q = 0; q < nc2; q++) if (cols[p].e === cols[q].e) { const v = c[p] * c[q] * G[p * nc2 + q]; if (cols[p].e) ee += v; else ed += v; }
+      return Math.round(10 * Math.log10(ee / ed) * 10) / 10;
+    });
+  }
+  const LAB = '/tmp/claude-0/lab', pairs = { e2790: { l: -4.5, r: -9.5 }, e2813: { l: -8.5, r: -11.5 } }; // soglie di accettazione v4 (L, R)
+  for (const [name, thr] of Object.entries(pairs)) {
+    const px = `${LAB}/${name}/x.npy`, py = `${LAB}/${name}/y.npy`;
+    if (!fs.existsSync(px) || !fs.existsSync(py)) { console.log(`SKIP coppia ${name}: file di riferimento assenti (${px}, ${py})`); continue; }
+    const rx = readNpy(px), ry = readNpy(py), SR48 = 48000;
+    const dY = detectEcho(ry, SR48), dX = detectEcho(rx, SR48);
+    console.log(`${name}: detectEcho(y) found=${dY.found} d=${dY.delayMs.toFixed(2)} ms rho=${dY.rho.toFixed(3)} cons=${dY.consistency.toFixed(2)} | detectEcho(x pulito) found=${dX.found} rho=${dX.rho.toFixed(3)} cons=${dX.consistency.toFixed(2)}`);
+    assert.ok(dY.found && Math.abs(dY.delayMs - 41.8) < 0.5, `${name}: eco rilevata su y`);
+    assert.ok(!dX.found, `${name}: nessuna eco sull'audio pulito`);
+    const lv = makeEchoLevel(rx);
+    const tq = performance.now(); const zr = removeEchoV4(ry, SR48, { delaySamples: dY.delaySamples }); const mq = performance.now() - tq;
+    const lY = lv(ry), lZ = lv(zr), dmg = echoBandDamage(rx, zr, SR48);
+    console.log(`${name}: echo_level (L,R)  rovinato ${lY.join('/')}  v4 ${lZ.join('/')} dB (${mq.toFixed(0)} ms per ${(rx[0].length / SR48).toFixed(1)} s); livello vs pulito per banda ${bandNames.map((b, i) => `${b} ${dmg[i].lossDb.toFixed(1)}`).join(' ')} dB`);
+    assert.ok(lZ[0] < lY[0] - 5 && lZ[1] < lY[1] - 5, `${name}: v4 riduce l'eco di > 5 dB`);
+    assert.ok(lZ[0] <= thr.l && lZ[1] <= thr.r, `${name}: v4 eco residua <= soglia (${thr.l}/${thr.r})`);
+    for (let b = 0; b < 4; b++) assert.ok(dmg[b].lossDb > -5 && dmg[b].lossDb < 4, `${name}: danno spettrale banda ${bandNames[b]} nei limiti`);
+  }
 }
 
 // 4. uscita per ascolto
