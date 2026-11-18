@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>
-<title>Compressore HDR v0.9</title>
+<title>Compressore HDR v0.10.1</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 /* Layout: single-column tool — file in, settings, progress log, result card */
@@ -17,7 +17,7 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
 .big{font-size:1.6rem;font-variant-numeric:tabular-nums;font-weight:600}.ok{color:var(--ok)}.ko{color:var(--ko)}
 progress{width:100%}
 </style>
-<h1>Compressore HDR v0.9</h1>
+<h1>Compressore HDR v0.10.1</h1>
 <p>Prototipo: ricodifica HEVC 10-bit HLG frame per frame a bitrate fisso, con Dolby Vision e metadati originali trapiantati.</p>
 
 <div class="card">
@@ -39,12 +39,12 @@ progress{width:100%}
 <div class="card"><div class="row"><button id="copy">Copia log</button><span id="copyMsg"></span></div><pre id="log">Scegli un video.</pre></div>
 
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.9';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.9';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.9';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.9';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './app/lib/mp4-post.js?v=0.9';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2 } from './app/lib/echo.js?v=0.9';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.10.1';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.10.1';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.10.1';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.10.1';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './app/lib/mp4-post.js?v=0.10.1';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2 } from './app/lib/echo.js?v=0.10.1';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };

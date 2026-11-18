@@ -464,3 +464,217 @@ export function echoCepstrumComb(channels, sampleRate, delaySamples, { frame = 8
   const floor = median(fl), peak = pk(D);
   return { peak, floor, ratio: peak / (floor + 1e-12), peak2: pk(2 * D) };
 }
+
+// ======================================================================================
+// v3: cancellazione adattiva per bin (STFT) + soppressione dell'eco residua.
+//
+// Modello per bin: Y(k,t) = X(k,t) + W(k,t) * R(k,t),  R = STFT di r[n] = xhat1[n-D] (D = round(d)),
+// dove xhat1 e' l'uscita dello stadio lineare (OLA) gia' pulita => struttura ricorsiva come v2 (IIR).
+// Il ritardo frazionario (d - D) e' assorbito dalla fase complessa di W (rampa di fase in k).
+// W: LS ricorsivo con memoria esponenziale (RLS scalare per bin) su statistiche S_yr/S_rr mediate
+//    in tempo (lambda) e su +-F bin; shrink alla Wiener della coerenza (toglie il bias a coerenza ~0),
+//    rilassamento W <- W + mu (W_ls - W), |W| <= maxGain (<0.95), protezione dalla divergenza
+//    (se la potenza di E supera 1.5x quella di Y nel bin -> W dimezzata).
+// Post-filtro: G = max(Gmin, 1 - beta(f) * Pecho / PE), Pecho = |W|^2 |R|^2 (c1 + c2 (1-gamma_yr^2)) + gamma_er^2 PE,
+//    G smussato in frequenza (3 tap) e in tempo (attacco rapido, rilascio lento); beta(f) attivo ~1.8-8 kHz.
+// Vincolo: finestra N <= D (il riferimento ritardato e' sempre gia' finalizzato); N = 1024 (D~1841), hop N/4.
+// Latenza: STFT con finestra N, hop H = N/4 => latenza N-H campioni (768 @ N=1024, 17.4 ms).
+//   Il flusso e' ALLINEATO: l'uscita campione i corrisponde all'ingresso campione i. process() emette i campioni
+//   man mano che sono definitivi (cumulativamente `latency` in meno dell'ingresso); flush() emette il resto.
+//   Somma di tutte le uscite == numero di campioni in ingresso. removeEchoV3 (batch) = process + flush.
+// ======================================================================================
+const V3_DEFAULTS = {
+  frame: 1024, lambda: 0.97, mu: 0.3, span: 2, maxGain: 0.94, coh0: 0.03, reg: 0.02,
+  suppress: true, gMinDb: -12, beta: 1.0, c1: 0.15, c2: 0.5, bandsHz: [1000, 1800, 8000, 12000], tailBeta: 0.25,
+  kappa: 1, lamP: 0.99, smoothUp: 0.35, smoothDown: 0.7, limiter: true,
+};
+function boxSum(src, dst, K, F) {
+  let acc = 0;
+  for (let i = 0; i <= Math.min(F, K - 1); i++) acc += src[i];
+  dst[0] = acc;
+  for (let k = 1; k < K; k++) {
+    if (k + F < K) acc += src[k + F];
+    if (k - F - 1 >= 0) acc -= src[k - F - 1];
+    dst[k] = acc;
+  }
+}
+function v3Params(delaySamples, sampleRate, o) {
+  const D = Math.round(delaySamples);
+  let N = o.frame;
+  while (N > D && N > 64) N >>= 1;
+  if (!(D >= 64)) throw new Error('delay too short for v3');
+  const H = N >> 2, K = (N >> 1) + 1;
+  const w = new Float64Array(N);
+  for (let i = 0; i < N; i++) w[i] = Math.sqrt(0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N));
+  const [b0, b1, b2, b3] = o.bandsHz, bw = new Float64Array(K);
+  for (let k = 0; k < K; k++) {
+    const f = (k * sampleRate) / N;
+    bw[k] = f < b0 ? 0 : f < b1 ? (f - b0) / (b1 - b0) : f <= b2 ? 1 : f < b3 ? 1 - (1 - o.tailBeta) * ((f - b2) / (b3 - b2)) : o.tailBeta;
+  }
+  return { D, N, H, K, w, bw, gMin: Math.pow(10, o.gMinDb / 20), o };
+}
+function v3Channel(P) {
+  const { K } = P, f = () => new Float64Array(K);
+  return {
+    base: 0, cap: 0, inb: new Float64Array(0), o1: new Float64Array(0), o2: new Float64Array(0),
+    inEnd: 0, t: 0, fin: 0, emitted: 0,
+    Wr: f(), Wi: f(), Sxr: f(), Sxi: f(), Srr: f(), Syy: f(), Ser: f(), Sei: f(), See: f(),
+    pe: f(), py: f(), pe2: f(), pr2: f(), Mpe: f(), Mpr: f(), Mpp: f(), Mpx: f(), G: new Float64Array(K).fill(1),
+  };
+}
+function v3Ensure(st, need) {
+  if (st.cap >= need) return;
+  const cap = Math.max(need, st.cap * 2, 1 << 16);
+  for (const k of ['inb', 'o1', 'o2']) { const a = new Float64Array(cap); a.set(st[k]); st[k] = a; }
+  st.cap = cap;
+}
+function v3Frames(P, st, scr) {
+  const { N, H, K, D, w, bw, gMin, o } = P, M = N - 1;
+  const { re, im, cr, ci, pr, py, bcr, bci, bpr, bpy, Er, Ei, tmp, tmp2 } = scr;
+  const lam = o.lambda, a = 1 - lam, F = o.span, lp = o.lamP;
+  while (true) {
+    const s = st.t * H - (N - H);
+    if (s + N > st.inEnd) break;
+    v3Ensure(st, s + N - st.base + 1);
+    for (let i = 0; i < N; i++) {
+      const ai = s + i, ar = ai - D;
+      re[i] = (ai >= 0 ? st.inb[ai - st.base] : 0) * w[i];
+      im[i] = (ar >= 0 ? st.o1[ar - st.base] : 0) * w[i];
+    }
+    fft(re, im);
+    // separa Y (re) e R (im)
+    for (let k = 0; k < K; k++) {
+      const m = (N - k) & M, zr = re[k], zi = im[k], mr = re[m], mi = im[m];
+      const yr = 0.5 * (zr + mr), yi = 0.5 * (zi - mi), rr = 0.5 * (zi + mi), ri = -0.5 * (zr - mr);
+      scr.Yr[k] = yr; scr.Yi[k] = yi; scr.Rr[k] = rr; scr.Ri[k] = ri;
+      cr[k] = yr * rr + yi * ri; ci[k] = yi * rr - yr * ri; pr[k] = rr * rr + ri * ri; py[k] = yr * yr + yi * yi;
+    }
+    boxSum(cr, bcr, K, F); boxSum(ci, bci, K, F); boxSum(pr, bpr, K, F); boxSum(py, bpy, K, F);
+    for (let k = 0; k < K; k++) {
+      const n = Math.min(k + F, K - 1) - Math.max(k - F, 0) + 1;
+      st.Sxr[k] = lam * st.Sxr[k] + a * bcr[k] / n; st.Sxi[k] = lam * st.Sxi[k] + a * bci[k] / n;
+      st.Srr[k] = lam * st.Srr[k] + a * bpr[k] / n; st.Syy[k] = lam * st.Syy[k] + a * bpy[k] / n;
+      const srr = st.Srr[k], den = srr * (1 + o.reg) + 1e-12;
+      const coh = (st.Sxr[k] * st.Sxr[k] + st.Sxi[k] * st.Sxi[k]) / (srr * st.Syy[k] + 1e-20);
+      const sh = coh > o.coh0 ? 1 - o.coh0 / coh : 0;
+      let tr = (st.Sxr[k] / den) * sh, ti = (st.Sxi[k] / den) * sh;
+      const mag = Math.hypot(tr, ti);
+      if (mag > o.maxGain) { tr *= o.maxGain / mag; ti *= o.maxGain / mag; }
+      let wr = st.Wr[k] + o.mu * (tr - st.Wr[k]), wi = st.Wi[k] + o.mu * (ti - st.Wi[k]);
+      const rr = scr.Rr[k], ri = scr.Ri[k];
+      let er = scr.Yr[k] - (wr * rr - wi * ri), ei = scr.Yi[k] - (wr * ri + wi * rr);
+      let pe = er * er + ei * ei;
+      st.pe[k] = 0.9 * st.pe[k] + 0.1 * pe; st.py[k] = 0.9 * st.py[k] + 0.1 * py[k];
+      if (st.pe[k] > 1.5 * st.py[k] + 1e-12) { // protezione dalla divergenza
+        wr *= 0.5; wi *= 0.5;
+        er = scr.Yr[k] - (wr * rr - wi * ri); ei = scr.Yi[k] - (wr * ri + wi * rr); pe = er * er + ei * ei;
+        st.pe[k] = st.py[k];
+      }
+      st.Wr[k] = wr; st.Wi[k] = wi; Er[k] = er; Ei[k] = ei;
+      cr[k] = er * rr + ei * ri; ci[k] = ei * rr - er * ri; pr[k] = pe; py[k] = rr * rr + ri * ri;
+    }
+    if (o.suppress) {
+      boxSum(cr, bcr, K, F); boxSum(ci, bci, K, F); boxSum(pr, bpr, K, F);
+      for (let k = 0; k < K; k++) {
+        const n = Math.min(k + F, K - 1) - Math.max(k - F, 0) + 1;
+        st.Ser[k] = lam * st.Ser[k] + a * bcr[k] / n; st.Sei[k] = lam * st.Sei[k] + a * bci[k] / n; st.See[k] = lam * st.See[k] + a * bpr[k] / n;
+      }
+      // potenze istantanee smussate in frequenza (3 bin) e in tempo
+      for (let k = 0; k < K; k++) {
+        const k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
+        tmp[k] = 0.25 * pr[k0] + 0.5 * pr[k] + 0.25 * pr[k1];
+        tmp2[k] = 0.25 * py[k0] + 0.5 * py[k] + 0.25 * py[k1];
+      }
+      for (let k = 0; k < K; k++) {
+        // regressione in potenza: PE ~ kappa * PR (eco residuo non coerente in fase ma con la stessa inviluppo)
+        st.Mpe[k] = lp * st.Mpe[k] + (1 - lp) * tmp[k]; st.Mpr[k] = lp * st.Mpr[k] + (1 - lp) * tmp2[k];
+        st.Mpp[k] = lp * st.Mpp[k] + (1 - lp) * tmp2[k] * tmp2[k]; st.Mpx[k] = lp * st.Mpx[k] + (1 - lp) * tmp[k] * tmp2[k];
+        const vr = st.Mpp[k] - st.Mpr[k] * st.Mpr[k], kap = vr > 1e-12 * st.Mpp[k] + 1e-20 ? Math.min(1, Math.max(0, (st.Mpx[k] - st.Mpe[k] * st.Mpr[k]) / vr)) : 0;
+        st.pe2[k] = 0.5 * st.pe2[k] + 0.5 * tmp[k]; st.pr2[k] = 0.5 * st.pr2[k] + 0.5 * tmp2[k];
+        const w2 = st.Wr[k] * st.Wr[k] + st.Wi[k] * st.Wi[k];
+        const srr = st.Srr[k];
+        const cyr = (st.Sxr[k] * st.Sxr[k] + st.Sxi[k] * st.Sxi[k]) / (srr * st.Syy[k] + 1e-20);
+        const cer = (st.Ser[k] * st.Ser[k] + st.Sei[k] * st.Sei[k]) / (srr * st.See[k] + 1e-20);
+        const pecho = w2 * st.pr2[k] * (o.c1 + o.c2 * (1 - Math.min(1, cyr))) + Math.min(1, cer) * st.pe2[k] + o.kappa * kap * st.pr2[k];
+        let g = 1 - o.beta * bw[k] * pecho / (st.pe2[k] + 1e-12);
+        tmp[k] = g < gMin ? gMin : g > 1 ? 1 : g;
+      }
+      for (let k = 0; k < K; k++) {
+        const k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
+        const gs = 0.25 * tmp[k0] + 0.5 * tmp[k] + 0.25 * tmp[k1];
+        const al = gs < st.G[k] ? o.smoothDown : o.smoothUp;
+        st.G[k] += al * (gs - st.G[k]);
+      }
+    }
+    // Z = E + j O  (E: stadio lineare, O: dopo soppressione) -> un'unica IFFT
+    for (let k = 0; k < K; k++) {
+      const g = o.suppress ? st.G[k] : 1, er = Er[k], ei = Ei[k], or = g * er, oi = g * ei;
+      re[k] = er - oi; im[k] = ei + or;
+      if (k > 0 && k < N >> 1) { re[N - k] = er + oi; im[N - k] = -ei + or; }
+    }
+    fft(re, im, true);
+    for (let i = 0; i < N; i++) {
+      const j = s + i - st.base;
+      if (s + i >= 0) { st.o1[j] += 0.5 * w[i] * re[i]; st.o2[j] += 0.5 * w[i] * im[i]; }
+    }
+    st.fin = Math.max(st.fin, s + H);
+    st.t++;
+  }
+}
+function v3Scratch(P) {
+  const { N, K } = P, f = () => new Float64Array(K);
+  return { re: new Float64Array(N), im: new Float64Array(N), Yr: f(), Yi: f(), Rr: f(), Ri: f(), cr: f(), ci: f(), pr: f(), py: f(), bcr: f(), bci: f(), bpr: f(), bpy: f(), Er: f(), Ei: f(), tmp: f(), tmp2: f() };
+}
+export function createEchoRemoverV3({ delaySamples, sampleRate = 44100, channels = 1, opts = {} }) {
+  const o = { ...V3_DEFAULTS, ...opts };
+  const P = v3Params(delaySamples, sampleRate, o);
+  const chs = Array.from({ length: channels }, () => v3Channel(P));
+  const scr = v3Scratch(P);
+  let total = 0, flushed = false;
+  const emit = (limit) => chs.map((st) => {
+    const n = Math.max(0, Math.min(st.fin, limit) - st.emitted), out = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const v = st.o2[st.emitted + i - st.base]; out[i] = o.limiter ? softLimit(v) : v; }
+    st.emitted += n;
+    return out;
+  });
+  const compact = () => chs.forEach((st) => {
+    const keep = Math.min(st.emitted, st.t * P.H - (P.N - P.H) - P.D) | 0;
+    const nb = Math.max(st.base, keep);
+    if (nb - st.base < 1 << 16) return;
+    const d = nb - st.base;
+    for (const k of ['inb', 'o1', 'o2']) { st[k].copyWithin(0, d); st[k].fill(0, st.cap - d); }
+    st.base = nb;
+  });
+  return {
+    latency: P.N - P.H, frame: P.N, hop: P.H, delaySamples: P.D,
+    process(chunk) {
+      if (flushed) throw new Error('flushed');
+      const len = chunk[0].length;
+      chs.forEach((st, c) => { v3Ensure(st, st.inEnd - st.base + len + P.N); st.inb.set(chunk[Math.min(c, chunk.length - 1)], st.inEnd - st.base); st.inEnd += len; });
+      total += len;
+      chs.forEach((st) => v3Frames(P, st, scr));
+      const out = emit(Infinity); compact(); return out;
+    },
+    flush() {
+      if (flushed) return chs.map(() => new Float32Array(0));
+      flushed = true;
+      chs.forEach((st) => { v3Ensure(st, st.inEnd - st.base + 2 * P.N); st.inEnd += 2 * P.N; v3Frames(P, st, scr); });
+      return emit(total);
+    },
+  };
+}
+export function removeEchoV3(channels, sampleRate, { delaySamples, opts = {} }) {
+  const rem = createEchoRemoverV3({ delaySamples, sampleRate, channels: channels.length, opts });
+  const a = rem.process(channels), b = rem.flush();
+  return a.map((x, c) => { const o = new Float32Array(x.length + b[c].length); o.set(x); o.set(b[c], x.length); return o; });
+}
+// metrica di danno: perdita di energia per banda (dB, out/ref) e correlazione per banda (segnali allineati)
+export function echoBandDamage(ref, out, sampleRate, bands = ECHO_BANDS) {
+  const n = Math.min(ref[0].length, out[0].length), a = mono(ref, 0, n), b = mono(out, 0, n);
+  return bands.map((bd) => {
+    const x = bandSignal(a, sampleRate, bd), y = bandSignal(b, sampleRate, bd);
+    let xx = 0, yy = 0, xy = 0;
+    for (let i = 0; i < n; i++) { xx += x[i] * x[i]; yy += y[i] * y[i]; xy += x[i] * y[i]; }
+    return { lossDb: 10 * Math.log10((yy + 1e-20) / (xx + 1e-20)), corr: xy / Math.sqrt(xx * yy + 1e-20) };
+  });
+}
