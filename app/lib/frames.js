@@ -28,7 +28,7 @@ export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentat
   let prevMT = null;
   for (const f of frames) {
     const target = (f.ts + f.dur / 2) / 1e6;
-    const pr = stats ? new Promise((res) => { const t = setTimeout(() => res(null), 60); video.requestVideoFrameCallback((_, md) => { clearTimeout(t); res(md.mediaTime); }); }) : null;
+    const pr = stats ? new Promise((res) => { const t = setTimeout(() => res(null), 250); video.requestVideoFrameCallback((_, md) => { clearTimeout(t); res(md.mediaTime); }); }) : null;
     video.currentTime = target;
     const ev = await waitEvent(video, 'seeked', 3000);
     if (ev === 'timeout') throw new Error(`seek timeout @${target.toFixed(3)}s`);

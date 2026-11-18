@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>
-<title>Compressore HDR v0.12.1</title>
+<title>Compressore HDR v0.13</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 /* Layout: single-column tool — file in, settings, progress log, result card */
@@ -17,7 +17,7 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
 .big{font-size:1.6rem;font-variant-numeric:tabular-nums;font-weight:600}.ok{color:var(--ok)}.ko{color:var(--ko)}
 progress{width:100%}
 </style>
-<h1>Compressore HDR v0.12.1</h1>
+<h1>Compressore HDR v0.13</h1>
 <p>Prototipo: ricodifica HEVC 10-bit HLG frame per frame a bitrate fisso, con Dolby Vision e metadati originali trapiantati.</p>
 
 <div class="card">
@@ -25,8 +25,7 @@ progress{width:100%}
   <div class="row">
     <label>Bitrate<select id="br"><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8" selected>8 Mbps</option><option value="10">10 Mbps</option><option value="12">12 Mbps</option><option value="14">14 Mbps</option></select></label>
     <label>Keyframe ogni<select id="gop"><option value="1">1 s</option><option value="4" selected>4 s</option><option value="10">10 s</option></select></label>
-    <label><span>Verifica frame</span><input type="checkbox" id="vf"></label>
-    <label>Audio<select id="amode"><option value="copy" selected>copia originale</option><option value="reenc">solo ricodifica (diagnostica)</option><option value="v1">ripara eco v1</option><option value="v2">ripara eco v2 (filtro per frequenza)</option><option value="v3">ripara eco v3 (adattivo, L+R)</option></select></label>
+        <label>Audio<select id="amode"><option value="copy" selected>copia originale</option><option value="reenc">solo ricodifica (diagnostica)</option><option value="v1">ripara eco v1</option><option value="v2">ripara eco v2 (filtro per frequenza)</option><option value="v3">ripara eco v3 (adattivo, L+R)</option></select></label>
   </div>
   <button id="go" disabled>Comprimi</button>
   <progress id="prog" max="1" value="0"></progress>
@@ -39,12 +38,12 @@ progress{width:100%}
 <div class="card"><div class="row"><button id="copy">Copia log</button><span id="copyMsg"></span></div><pre id="log">Scegli un video.</pre></div>
 
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.12.1';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.12.1';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.12.1';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.12.1';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.12.1';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3 } from './app/lib/echo.js?v=0.12.1';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.13';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.13';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.13';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.13';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.13';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3 } from './app/lib/echo.js?v=0.13';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };
@@ -146,7 +145,9 @@ async function run() {
       nChunks++; pending.push(vsrc.add(pkt, m));
     } });
   const keyEvery = Math.max(1, Math.round(gopSec * 60)); let i = 0; const tE = performance.now();
-  const vstats = $('vf').checked ? { n: 0, dup: 0, off: 0, noCallback: 0, samples: [] } : null;
+  // frame confirmation is MANDATORY: without waiting for the presented frame (rVFC) after 'seeked',
+  // Safari often returns the previous frame (measured: alternating 33/22 dB PSNR, VMAF 43–53). v0.13.
+  const vstats = { n: 0, dup: 0, off: 0, noCallback: 0, samples: [] };
   for await (const vf of seekFrames(video, frames.map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), vstats)) {
     if (encErr) { vf.close(); throw encErr; }
     enc.encode(vf, i % keyEvery === 0); vf.close(); i++;
