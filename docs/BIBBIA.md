@@ -88,6 +88,8 @@ File di ricerca prodotti (leggerli prima di sintetizzare le sezioni 2–11):
 - `research/06-algoritmi-percettivi.md` 🟡 — molte citazioni ❓ (subagent con poche ricerche): **da verificare i paper prima di fidarsi dei numeri**. Ranking: per-scena + keyframe a scene-cut > denoise MC > JND in PU21/HLG > guardia banding > motion masking > ROI volti. Metrica in-loop: SSIM/MS-SSIM in PU21 + controllo banding; offline VMAF NEG / ColorVideoVDP.
 - `research/09-prior-art.md` ✅ — kimymt/iphone-video-compressor (mediabunny, HEVC Main 8-bit, 34 pitfall Safari: niente IDR automatico, user activation, wake lock, 1 encoder HW, fastStart in-memory = RAM); nessuno fa Main10/HDR, pre-filtri WebGPU con metrica, per-scena HEVC, output grandi senza RAM → nostro spazio.
 
+**AGGIORNAMENTO device (Safari 27.0.1)**: vedi research/02 §10. HEVC Main10 10-bit ✅ da frame nativo; AV1 reale ✅ solo da canvas 8-bit (87 fps); quantizer ✗; keyFrame ✅; bitrate al volo ✅ senza keyframe; chunk.duration=0. Decisione da prendere: percorso A (HDR, no filtri pixel) vs B (filtri GPU, 8-bit) vs test canvas HDR float16.
+
 **Prossimi passi alla ripresa**
 0. VMAF — distinzione: (a) LAB offline nel container = ground truth per calibrare (build libvmaf richiede permesso utente); (b) IN-APP = da studiare: ffvmaf (WASM) su frame campione per scena, costo su iPhone, vs MS-SSIM GPU / FUNQUE.
 1. Decisione con utente sul vincolo 02 (8-bit vs attesa vs WASM) + prima build = pagina diagnostica T0–T8 da aprire sull'iPhone (verità sul device reale, Safari 27.x).
