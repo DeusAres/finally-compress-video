@@ -36,12 +36,11 @@ progress{width:100%}
 </div>
 <div class="card"><pre id="log">Scegli un video.</pre></div>
 
-<script src="https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.cjs"></script>
 <script type="module">
 import { openVideoElement, seekFrames, releaseVideoElement } from './lib/frames.js';
 import { createHevcEncoder } from './lib/encode.js';
 import { patchHvcC, stripParameterSets } from './lib/hevc-vui.js';
-const MB = window.Mediabunny;
+import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };
 let file = null, outBlob = null, outName = '';
@@ -50,7 +49,7 @@ $('file').onchange = (e) => { file = e.target.files[0] || null; $('go').disabled
 $('go').onclick = async () => {
   $('go').disabled = true; $('res').hidden = true; logEl.textContent = '';
   let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch {}
-  try { await run(); } catch (e) { log('ERRORE: ' + (e?.stack || e)); }
+  try { await run(); } catch (e) { log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || '')); }
   try { await wake?.release(); } catch {}
   $('go').disabled = false;
 };
