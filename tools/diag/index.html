@@ -1,0 +1,60 @@
+<title>Diagnostica WebCodecs iPhone</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: single column lab report, test cards stacked */
+:root{--bg:#f6f7f9;--fg:#15191f;--mut:#5b6573;--card:#fff;--line:#dde2e8;--acc:#1d5fd1;--ok:#137a3a;--ko:#b3261e;--font:"Inter",system-ui,sans-serif;--mono:ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px;max-width:760px;margin:0 auto}
+h1{font-size:1.4rem;margin:0 0 4px;text-wrap:balance}p{color:var(--mut);margin:0 0 16px;line-height:1.5}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;display:grid;gap:10px;margin-bottom:14px;min-width:0}
+h2{font-size:1rem;margin:0}button,label.btn{font:inherit;background:var(--acc);color:var(--bg);border:0;border-radius:8px;padding:10px 14px;cursor:pointer;justify-self:start}
+button:focus-visible{outline:3px solid var(--fg)}pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;margin:0;max-height:340px}
+.row{display:flex;gap:10px;flex-wrap:wrap}.ok{color:var(--ok)}.ko{color:var(--ko)}input[type=file]{font:inherit;max-width:100%}
+</style>
+<h1>Diagnostica WebCodecs</h1>
+<p>Esegue i test sul Safari di questo iPhone. Alla fine premi «Copia risultati» e incolla il testo in chat.</p>
+
+<div class="card"><h2>1 · Codec supportati</h2><button id="b1">Esegui</button><pre id="o1">In attesa.</pre></div>
+<div class="card"><h2>2 · Encoding HEVC reale (120 frame sintetici 1080p)</h2><button id="b2">Esegui</button><pre id="o2">In attesa.</pre></div>
+<div class="card"><h2>3 · Frame da un tuo video (10-bit? HDR?)</h2>
+<input type="file" id="f3" accept="video/*"><video id="v3" playsinline muted hidden></video><pre id="o3">Scegli un video .mov dell'iPhone.</pre></div>
+<div class="card"><h2>Risultati</h2><div class="row"><button id="bc">Copia risultati</button></div><pre id="oc">{}</pre></div>
+
+<script>
+const R={ua:navigator.userAgent,webgpu:!!navigator.gpu,wakeLock:'wakeLock' in navigator,opfs:!!(navigator.storage&&navigator.storage.getDirectory),VideoEncoder:typeof VideoEncoder,VideoDecoder:typeof VideoDecoder};
+const $=id=>document.getElementById(id);const show=()=>$('oc').textContent=JSON.stringify(R,null,1);show();
+const log=(o,s)=>{o.textContent=(o.textContent==='In attesa.'?'':o.textContent+'\n')+s};
+const W=1920,H=1080;
+$('b1').onclick=async()=>{const o=$('o1');o.textContent='';R.t1={};
+ const codecs={hevcMain:'hvc1.1.6.L123.B0',hevcMain10:'hvc1.2.4.L123.B0',avcHigh:'avc1.640028',av1:'av01.0.08M.08',av1_10:'av01.0.08M.10',vp9:'vp09.00.40.08'};
+ const variants=[{},{bitrateMode:'variable'},{bitrateMode:'constant'},{bitrateMode:'quantizer'},{latencyMode:'quality'},{latencyMode:'realtime'},{hevc:{format:'annexb'}},{contentHint:'detail'}];
+ for(const [n,c] of Object.entries(codecs)){
+  try{const d=await VideoDecoder.isConfigSupported({codec:c,codedWidth:W,codedHeight:H});R.t1['dec_'+n]=d.supported;log(o,`DEC ${n}: ${d.supported}`)}catch(e){R.t1['dec_'+n]='ERR '+e.message;log(o,`DEC ${n}: ERR ${e.message}`)}
+  for(const v of variants){const k=n+' '+JSON.stringify(v);try{const r=await VideoEncoder.isConfigSupported({codec:c,width:W,height:H,bitrate:8e6,framerate:60,...v});R.t1['enc_'+k]=r.supported;
+   const echo=r.config?Object.keys(v).map(x=>x+'='+JSON.stringify(r.config[x])).join(','):'';log(o,`ENC ${k}: ${r.supported} ${echo}`)}catch(e){R.t1['enc_'+k]='ERR '+e.message;log(o,`ENC ${k}: ERR ${e.message}`)}}
+ }show()};
+$('b2').onclick=async()=>{const o=$('o2');o.textContent='Encoding…';const t={chunks:0,key:[],bytes:0,durations:new Set(),ts:[],cfg:null,err:null};
+ const c=new OffscreenCanvas(W,H),g=c.getContext('2d');
+ const enc=new VideoEncoder({output:(ch,meta)=>{t.chunks++;t.bytes+=ch.byteLength;if(ch.type==='key')t.key.push(t.chunks-1);t.durations.add(ch.duration);if(t.ts.length<8)t.ts.push(ch.timestamp);if(meta&&meta.decoderConfig&&!t.cfg)t.cfg={codec:meta.decoderConfig.codec,descLen:meta.decoderConfig.description?.byteLength,colorSpace:meta.decoderConfig.colorSpace}},error:e=>t.err=e.message});
+ try{enc.configure({codec:'hvc1.1.6.L123.B0',width:W,height:H,bitrate:8e6,framerate:60,latencyMode:'quality',bitrateMode:'variable'});
+  const t0=performance.now();let ts=0;
+  for(let i=0;i<120;i++){g.fillStyle=`hsl(${i*3},60%,50%)`;g.fillRect(0,0,W,H);g.fillStyle='#fff';g.fillRect((i*15)%W,400,200,200);
+   const img=g.getImageData(0,0,320,180);for(let j=0;j<img.data.length;j++)img.data[j]=Math.random()*255;g.putImageData(img,0,0);
+   const dur=(i%10===9)?33333:16667; // VFR test
+   const f=new VideoFrame(c,{timestamp:ts,duration:dur});ts+=dur;
+   if(i===60)enc.configure({codec:'hvc1.1.6.L123.B0',width:W,height:H,bitrate:3e6,framerate:60,latencyMode:'quality',bitrateMode:'variable'}); // reconfigure
+   enc.encode(f,{keyFrame:i===90});f.close();while(enc.encodeQueueSize>4)await new Promise(r=>enc.addEventListener('dequeue',r,{once:true}))}
+  await enc.flush();const ms=performance.now()-t0;
+  R.t2={chunks:t.chunks,keyframeIdx:t.key,kbytes:Math.round(t.bytes/1024),kbpsApprox:Math.round(t.bytes*8/ (ts/1e6)/1000),durations:[...t.durations],firstTs:t.ts,cfg:t.cfg,fps:Math.round(120/(ms/1000)),err:t.err};
+ }catch(e){R.t2={err:e.message}}o.textContent=JSON.stringify(R.t2,null,1);show()};
+$('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!file)return;o.textContent='Carico…';R.t3={name:file.name,sizeMB:+(file.size/1048576).toFixed(1)};
+ v.src=URL.createObjectURL(file);try{await v.play()}catch(err){R.t3.playErr=err.message}
+ await new Promise(r=>v.requestVideoFrameCallback?v.requestVideoFrameCallback(()=>r()):setTimeout(r,500));v.pause();
+ try{const f=new VideoFrame(v,{timestamp:0});Object.assign(R.t3,{format:f.format,coded:[f.codedWidth,f.codedHeight],display:[f.displayWidth,f.displayHeight],colorSpace:f.colorSpace.toJSON?f.colorSpace.toJSON():f.colorSpace});
+  try{const n=f.allocationSize();const buf=new Uint8Array(n);const lay=await f.copyTo(buf);R.t3.copyTo={bytes:n,planes:lay.length}}catch(err){R.t3.copyTo='ERR '+err.message}
+  if(navigator.gpu){try{const ad=await navigator.gpu.requestAdapter();const dev=await ad.requestDevice();dev.importExternalTexture({source:f});R.t3.webgpuImport='ok';R.t3.gpuFeatures=[...ad.features].slice(0,30)}catch(err){R.t3.webgpuImport='ERR '+err.message}}
+  f.close()}catch(err){R.t3.frameErr=err.message}
+ o.textContent=JSON.stringify(R.t3,null,1);show()};
+$('bc').onclick=()=>{const s=JSON.stringify(R);navigator.clipboard?.writeText(s).then(()=>$('bc').textContent='Copiato',()=>{getSelection().selectAllChildren($('oc'));$('bc').textContent='Seleziona e copia a mano'})};
+</script>
