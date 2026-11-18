@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { detectEcho, estimateGain, removeEcho, createEchoRemover, estimateEchoFilter, removeEchoV2, createEchoRemoverV2, echoBandRho, echoCepstrumComb, echoFilterMaxResponse } from './echo.js';
+import { detectEcho, estimateGain, removeEcho, createEchoRemover, estimateEchoFilter, removeEchoV2, createEchoRemoverV2, echoBandRho, echoCepstrumComb, echoFilterMaxResponse, removeEchoV3, createEchoRemoverV3, echoBandDamage } from './echo.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SR = 44100;
@@ -187,6 +187,76 @@ assert.ok(!d2.found);
   const nest = estimateEchoFilter(syn, SR, 1841);
   console.log(`negativo v2: maxResponse=${nest.maxResponse.toFixed(3)}`);
   assert.ok(nest.maxResponse < 0.25 && !detectEcho(syn, SR).found);
+}
+
+
+// 3c. v3: cancellazione adattiva STFT (cross-canale) + soppressione residua
+{
+  const bandNames = ['<500', '0.5-2k', '2-6k', '>6k'];
+  const est = estimateEchoFilter(y, SR, d);
+  const xv2 = removeEchoV2(y, SR, { delaySamples: d, h: est.h, mode: 'iir' });
+  const run = () => { const t = performance.now(); const o = removeEchoV3(y, SR, { delaySamples: d }); return [o, ((performance.now() - t) / (y[0].length / SR)) * 10]; };
+  let [xv3, t3] = run(); { const [, t3b] = run(); t3 = Math.min(t3, t3b); }
+  console.log(`perf v3: ${t3.toFixed(0)} ms / 10 s stereo (${(10000 / t3).toFixed(1)}x realtime)`);
+  assert.equal(xv3[0].length, y[0].length, 'v3: stessa lunghezza (allineato)');
+  const res = {};
+  console.log('v3 vs v2: rho al lag d/2d/3d per banda + comb cepstrum; danno = perdita energia dB / correlazione col segnale originale');
+  console.log('modo     ' + bandNames.map((b) => b.padEnd(15)).join('') + 'comb   danno dB (corr) per banda');
+  for (const [k, v] of Object.entries({ v0: y, v2: xv2, v3: xv3 })) {
+    res[k] = echoBandRho(v, SR, d);
+    const cc = echoCepstrumComb(v, SR, d); res[k].comb = cc.ratio;
+    const dm = echoBandDamage(y, v, SR);
+    console.log(k.padEnd(9) + res[k].map((r) => r.map((q) => q.toFixed(2)).join('/').padEnd(15)).join('') + cc.ratio.toFixed(1).padEnd(7) + dm.map((q) => `${q.lossDb.toFixed(2)}(${q.corr.toFixed(2)})`).join(' '));
+    res[k].dmg = dm;
+  }
+  assert.ok(res.v3[2][0] < 0.8 * res.v2[2][0], 'v3: rho(d) 2-6k sotto v2');
+  for (let b = 0; b < 4; b++) {
+    assert.ok(res.v3[b][0] < res.v0[b][0], `v3: rho(d) scende nella banda ${bandNames[b]}`);
+    assert.ok(res.v3[b][0] < res.v2[b][0] + 0.04, `v3: banda ${bandNames[b]} non peggio di v2`);
+    assert.ok(res.v3[b][1] < 0.15 && res.v3[b][2] < 0.15, `v3: niente picchi a 2d/3d banda ${bandNames[b]}`);
+    assert.ok(res.v3.dmg[b].lossDb > -4 && res.v3.dmg[b].corr > 0.8, `v3: non svuota la banda ${bandNames[b]}`);
+  }
+  assert.ok(res.v3.comb < res.v0.comb, 'v3: comb < v0');
+  let pk3 = 0; for (const c of xv3) for (const v of c) pk3 = Math.max(pk3, Math.abs(v));
+  assert.ok(pk3 <= 1);
+  assert.ok(t3 < 500, 'v3 >= 20x realtime');
+  {
+    const n = xv3[0].length, b = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) { b[2 * i] = xv3[0][i]; b[2 * i + 1] = xv3[1][i]; }
+    const e = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'f32le', '-ar', String(SR), '-ac', '2', '-i', '-', '-c:a', 'aac', '-b:a', '256k', '/tmp/claude-0/lab/7440_v3.m4a'], { input: Buffer.from(b.buffer) });
+    assert.equal(e.status, 0, e.stderr?.toString());
+    console.log('scritto /tmp/claude-0/lab/7440_v3.m4a');
+  }
+
+  // streaming == batch con blocchi dispari; la somma delle uscite pareggia l'ingresso (latenza gestita da flush)
+  {
+    const rem = createEchoRemoverV3({ delaySamples: d, sampleRate: SR, channels: 2 });
+    const outs = [[], []]; let p = 0, got = 0;
+    for (const n of [1000, 7, 4096, 333, 33333, 1e9]) {
+      const e = Math.min(y[0].length, p + n); if (e <= p) break;
+      const o = rem.process(y.map((c) => c.subarray(p, e)));
+      outs[0].push(o[0]); outs[1].push(o[1]); p = e; got += o[0].length;
+      assert.ok(got >= p - rem.latency - 1 && got <= p, 'latenza dichiarata rispettata');
+    }
+    const f = rem.flush(); outs[0].push(f[0]); outs[1].push(f[1]);
+    let maxd = 0;
+    for (let c = 0; c < 2; c++) { let off = 0; for (const pc of outs[c]) { for (let i = 0; i < pc.length; i++) maxd = Math.max(maxd, Math.abs(pc[i] - xv3[c][off + i])); off += pc.length; } assert.equal(off, y[c].length); }
+    console.log(`v3 streaming vs batch max diff = ${maxd} (latenza ${rem.latency} campioni = ${(rem.latency / SR * 1000).toFixed(1)} ms, compensata da flush)`);
+    assert.ok(maxd < 1e-6);
+  }
+
+  // controlli negativi: nessun eco -> v3 quasi trasparente (< 0.5 dB per banda)
+  const negs = { 'sintetico (rosa+tono)': syn, '2147 (audio reale senza eco)': y2 };
+  for (const [nm, sig] of Object.entries(negs)) {
+    const xn = removeEchoV3(sig, SR, { delaySamples: d });
+    const dm = echoBandDamage(sig, xn, SR);
+    console.log(`negativo v3 ${nm}: perdita dB per banda ${dm.map((q) => q.lossDb.toFixed(2)).join('/')} corr ${dm.map((q) => q.corr.toFixed(3)).join('/')}`);
+    for (let b = 0; b < 4; b++) assert.ok(Math.abs(dm[b].lossDb) < 0.5 && dm[b].corr > 0.97, `negativo v3 ${nm}: banda ${bandNames[b]} trasparente`);
+  }
+  // mono e 3 canali non devono rompersi
+  const m1 = removeEchoV3([y[0].subarray(0, SR * 3)], SR, { delaySamples: d });
+  const m3 = removeEchoV3([y[0].subarray(0, SR * 3), y[1].subarray(0, SR * 3), y[0].subarray(0, SR * 3)], SR, { delaySamples: d });
+  assert.ok(m1.length === 1 && m3.length === 3 && m1[0].length === SR * 3 && m3[2].length === SR * 3);
 }
 
 // 4. uscita per ascolto

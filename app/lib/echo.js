@@ -485,8 +485,8 @@ export function echoCepstrumComb(channels, sampleRate, delaySamples, { frame = 8
 //   quindi sum(uscite) == sum(ingressi). removeEchoV3 (batch) = process + flush; streaming == batch (bit-exact).
 // ======================================================================================
 const V3_DEFAULTS = {
-  frame: 1024, lambda: 0.97, mu: 0.3, span: 2, maxGain: 0.94, coh0: 0.03, reg: 0.02, cross: true, crossHz: 1500,
-  suppress: true, gMinDb: -12, beta: 1.0, c1: 0.15, c2: 0.5, bandsHz: [1000, 1800, 8000, 12000], tailBeta: 0.25,
+  frame: 1024, lambda: 0.97, mu: 0.3, span: 2, maxGain: 0.94, coh0: 0.03, reg: 0.02, cross: true, crossHz: 1500, maxHz: 10000,
+  suppress: true, gMinDb: -12, beta: 0.5, c1: 0.15, c2: 0.5, bandsHz: [1000, 1800, 8000, 12000], tailBeta: 0.25,
   smoothUp: 0.35, smoothDown: 0.7, limiter: true,
 };
 function boxSum(src, dst, K, F) {
@@ -513,8 +513,9 @@ function v3Params(delaySamples, sampleRate, o) {
     bw[k] = f < b0 ? 0 : f < b1 ? (f - b0) / (b1 - b0) : f <= b2 ? 1 : f < b3 ? 1 - (1 - o.tailBeta) * ((f - b2) / (b3 - b2)) : o.tailBeta;
   }
   const xbin = new Uint8Array(K), cnt = new Float64Array(K);
-  for (let k = 0; k < K; k++) { xbin[k] = (k * sampleRate) / N >= o.crossHz ? 1 : 0; cnt[k] = Math.min(k + o.span, K - 1) - Math.max(k - o.span, 0) + 1; }
-  return { D, N, H, K, w, bw, xbin, cnt, gMin: Math.pow(10, o.gMinDb / 20), o };
+  const KP = Math.min(K, Math.floor((o.maxHz * N) / sampleRate) + 1);
+  for (let k = 0; k < K; k++) { xbin[k] = (k * sampleRate) / N >= o.crossHz ? 1 : 0; cnt[k] = Math.min(k + o.span, KP - 1) - Math.max(k - o.span, 0) + 1; }
+  return { D, N, H, K, KP, w, bw, xbin, cnt, gMin: Math.pow(10, o.gMinDb / 20), o };
 }
 const F64 = (n) => new Float64Array(n);
 // gruppo di 1 o 2 canali accoppiati (il secondo canale di un gruppo mono e' fittizio)
@@ -523,12 +524,12 @@ function v3Group(P, nch) {
   const ch = () => ({
     base: 0, cap: 0, inb: F64(0), o1: F64(0), o2: F64(0), emitted: 0,
     Wr: [f(), f()], Wi: [f(), f()], Br: [f(), f()], Bi: [f(), f()], Syy: f(), pe: f(), py: f(),
-    Ser: [f(), f()], Sei: [f(), f()], See: f(), pe2: f(), pr2: [f(), f()], G: F64(K).fill(1),
+    Ser: [f(), f()], Sei: [f(), f()], See: f(), pe2: f(), G: F64(K).fill(1),
     Yr: f(), Yi: f(), Rr: f(), Ri: f(), Er: f(), Ei: f(), yy: f(),
   });
   return {
     nch, cross: nch === 2 && P.o.cross, c: [ch(), ch()], inEnd: 0, t: 0, fin: 0,
-    A00: f(), A11: f(), A01r: f(), A01i: f(),
+    pr2: [f(), f()], A00: f(), A11: f(), A01r: f(), A01i: f(),
     s: { re: F64(N), im: F64(N), tmp: F64(K), tmp2: F64(K), tmp3: F64(K), x: Array.from({ length: 16 }, f), bx: Array.from({ length: 16 }, f) },
   };
 }
@@ -543,7 +544,7 @@ function v3Frames(P, g) {
   const lam = o.lambda, a = 1 - lam, F = o.span, reg = 1 + o.reg;
   const { re, im, tmp, tmp2, x, bx } = g.s, nc = g.nch, cross = g.cross, c0 = g.c[0], c1 = g.c[1];
   const mg2 = o.maxGain * o.maxGain, mu = o.mu, xb = P.xbin;
-  const cnt = P.cnt;
+  const cnt = P.cnt, KP = P.KP;
   while (true) {
     const s = g.t * H - (N - H);
     if (s + N > g.inEnd) break;
@@ -566,7 +567,7 @@ function v3Frames(P, g) {
     }
     // statistiche istantanee: 0 A00, 1 A11, 2-3 A01, 4.. b_qj (r,i) a 4+q*4+j*2, 12+q yy_q
     const R0r = c0.Rr, R0i = c0.Ri, R1r = c1.Rr, R1i = c1.Ri;
-    for (let k = 0; k < K; k++) {
+    for (let k = 0; k < KP; k++) {
       const r0r = R0r[k], r0i = R0i[k];
       x[0][k] = r0r * r0r + r0i * r0i;
       if (cross) {
@@ -577,19 +578,17 @@ function v3Frames(P, g) {
         const st = g.c[q], yr = st.Yr[k], yi = st.Yi[k], p = 4 + q * 4;
         x[p][k] = yr * r0r + yi * r0i; x[p + 1][k] = yi * r0r - yr * r0i;
         if (cross) { const r1r = R1r[k], r1i = R1i[k]; x[p + 2][k] = yr * r1r + yi * r1i; x[p + 3][k] = yi * r1r - yr * r1i; }
-        x[12 + q][k] = st.yy[k];
       }
     }
-    boxSum(x[0], bx[0], K, F);
-    if (cross) { boxSum(x[1], bx[1], K, F); boxSum(x[2], bx[2], K, F); boxSum(x[3], bx[3], K, F); }
+    boxSum(x[0], bx[0], KP, F);
+    if (cross) { boxSum(x[1], bx[1], KP, F); boxSum(x[2], bx[2], KP, F); boxSum(x[3], bx[3], KP, F); }
     for (let q = 0; q < nc; q++) {
       const p = 4 + q * 4;
-      boxSum(x[p], bx[p], K, F); boxSum(x[p + 1], bx[p + 1], K, F);
-      if (cross) { boxSum(x[p + 2], bx[p + 2], K, F); boxSum(x[p + 3], bx[p + 3], K, F); }
-      boxSum(x[12 + q], bx[12 + q], K, F);
+      boxSum(x[p], bx[p], KP, F); boxSum(x[p + 1], bx[p + 1], KP, F);
+      if (cross) { boxSum(x[p + 2], bx[p + 2], KP, F); boxSum(x[p + 3], bx[p + 3], KP, F); }
     }
     const A00 = g.A00, A11 = g.A11, A01r = g.A01r, A01i = g.A01i;
-    for (let k = 0; k < K; k++) {
+    for (let k = 0; k < KP; k++) {
       const an = a / cnt[k], cx = cross && xb[k];
       A00[k] = lam * A00[k] + an * bx[0][k];
       if (cross) { A11[k] = lam * A11[k] + an * bx[1][k]; A01r[k] = lam * A01r[k] + an * bx[2][k]; A01i[k] = lam * A01i[k] + an * bx[3][k]; }
@@ -598,7 +597,7 @@ function v3Frames(P, g) {
       const coh0 = o.coh0 * (cx ? 2 : 1);
       for (let q = 0; q < nc; q++) {
         const st = g.c[q], p = 4 + q * 4;
-        st.Syy[k] = lam * st.Syy[k] + an * bx[12 + q][k];
+        st.Syy[k] = lam * st.Syy[k] + a * st.yy[k];
         const Br0 = st.Br[0], Bi0 = st.Bi[0], Br1 = st.Br[1], Bi1 = st.Bi[1];
         Br0[k] = lam * Br0[k] + an * bx[p][k]; Bi0[k] = lam * Bi0[k] + an * bx[p + 1][k];
         if (cross) { Br1[k] = lam * Br1[k] + an * bx[p + 2][k]; Bi1[k] = lam * Bi1[k] + an * bx[p + 3][k]; }
@@ -633,37 +632,35 @@ function v3Frames(P, g) {
       }
     }
     if (o.suppress) {
-      for (let q = 0; q < nc; q++) {
-        const st = g.c[q], Er = st.Er, Ei = st.Ei, nj = cross ? 2 : 1;
-        for (let j = 0; j < nj; j++) { // coerenza E-R_j
-          const Rr = j ? R1r : R0r, Ri = j ? R1i : R0i;
-          for (let k = 0; k < K; k++) { x[0][k] = Er[k] * Rr[k] + Ei[k] * Ri[k]; x[1][k] = Ei[k] * Rr[k] - Er[k] * Ri[k]; }
-          boxSum(x[0], bx[0], K, F); boxSum(x[1], bx[1], K, F);
-          const Ser = st.Ser[j], Sei = st.Sei[j];
-          for (let k = 0; k < K; k++) { const an = a / cnt[k]; Ser[k] = lam * Ser[k] + an * bx[0][k]; Sei[k] = lam * Sei[k] + an * bx[1][k]; }
-          // potenza R_j smussata (3 tap) e nel tempo
-          for (let k = 0; k < K; k++) x[2][k] = Rr[k] * Rr[k] + Ri[k] * Ri[k];
-          const pr2 = st.pr2[j];
-          for (let k = 0; k < K; k++) {
-            const k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
-            pr2[k] = 0.5 * pr2[k] + 0.5 * (0.25 * x[2][k0] + 0.5 * x[2][k] + 0.25 * x[2][k1]);
-          }
+      const nj = cross ? 2 : 1;
+      for (let j = 0; j < nj; j++) { // potenza di R_j smussata (3 tap) e nel tempo, condivisa dai canali del gruppo
+        const Rr = j ? R1r : R0r, Ri = j ? R1i : R0i, pr2 = g.pr2[j];
+        for (let k = 0; k < KP; k++) x[2][k] = Rr[k] * Rr[k] + Ri[k] * Ri[k];
+        for (let k = 0; k < KP; k++) {
+          const k0 = k > 0 ? k - 1 : 0, k1 = k < KP - 1 ? k + 1 : KP - 1;
+          pr2[k] = 0.5 * pr2[k] + 0.5 * (0.25 * x[2][k0] + 0.5 * x[2][k] + 0.25 * x[2][k1]);
         }
-        for (let k = 0; k < K; k++) x[2][k] = Er[k] * Er[k] + Ei[k] * Ei[k];
-        boxSum(x[2], bx[2], K, F);
+      }
+      for (let q = 0; q < nc; q++) {
+        const st = g.c[q], Er = st.Er, Ei = st.Ei;
+        for (let j = 0; j < nj; j++) { // coerenza E-R_j (solo media temporale)
+          const Rr = j ? R1r : R0r, Ri = j ? R1i : R0i, Ser = st.Ser[j], Sei = st.Sei[j];
+          for (let k = 0; k < KP; k++) { Ser[k] = lam * Ser[k] + a * (Er[k] * Rr[k] + Ei[k] * Ri[k]); Sei[k] = lam * Sei[k] + a * (Ei[k] * Rr[k] - Er[k] * Ri[k]); }
+        }
         const See = st.See, pe2 = st.pe2;
-        for (let k = 0; k < K; k++) {
-          const an = a / cnt[k], k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
-          See[k] = lam * See[k] + an * bx[2][k];
+        for (let k = 0; k < KP; k++) x[2][k] = Er[k] * Er[k] + Ei[k] * Ei[k];
+        for (let k = 0; k < KP; k++) {
+          const k0 = k > 0 ? k - 1 : 0, k1 = k < KP - 1 ? k + 1 : KP - 1;
+          See[k] = lam * See[k] + a * x[2][k];
           pe2[k] = 0.5 * pe2[k] + 0.5 * (0.25 * x[2][k0] + 0.5 * x[2][k] + 0.25 * x[2][k1]);
         }
-        for (let k = 0; k < K; k++) {
+        for (let k = 0; k < KP; k++) {
           const e2 = pe2[k], syy = st.Syy[k] * 1 + 1e-20;
-          let pw = st.pr2[0][k] * (st.Wr[0][k] * st.Wr[0][k] + st.Wi[0][k] * st.Wi[0][k]);
+          let pw = g.pr2[0][k] * (st.Wr[0][k] * st.Wr[0][k] + st.Wi[0][k] * st.Wi[0][k]);
           let cer = (st.Ser[0][k] * st.Ser[0][k] + st.Sei[0][k] * st.Sei[0][k]) / (A00[k] * See[k] + 1e-20);
           let cyr = (st.Br[0][k] * st.Br[0][k] + st.Bi[0][k] * st.Bi[0][k]) / (A00[k] * syy);
           if (cross) {
-            pw += st.pr2[1][k] * (st.Wr[1][k] * st.Wr[1][k] + st.Wi[1][k] * st.Wi[1][k]);
+            pw += g.pr2[1][k] * (st.Wr[1][k] * st.Wr[1][k] + st.Wi[1][k] * st.Wi[1][k]);
             const c2 = (st.Ser[1][k] * st.Ser[1][k] + st.Sei[1][k] * st.Sei[1][k]) / (A11[k] * See[k] + 1e-20);
             if (c2 > cer) cer = c2;
             const y2 = (st.Br[1][k] * st.Br[1][k] + st.Bi[1][k] * st.Bi[1][k]) / (A11[k] * syy);
@@ -674,13 +671,14 @@ function v3Frames(P, g) {
           tmp2[k] = gg < gMin ? gMin : gg > 1 ? 1 : gg;
         }
         const G = st.G;
-        for (let k = 0; k < K; k++) {
-          const k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
+        for (let k = 0; k < KP; k++) {
+          const k0 = k > 0 ? k - 1 : 0, k1 = k < KP - 1 ? k + 1 : KP - 1;
           const gs = 0.25 * tmp2[k0] + 0.5 * tmp2[k] + 0.25 * tmp2[k1];
           G[k] += (gs < G[k] ? o.smoothDown : o.smoothUp) * (gs - G[k]);
         }
       }
     }
+    if (KP < K) for (let q = 0; q < nc; q++) { const st = g.c[q]; for (let k = KP; k < K; k++) { st.Er[k] = st.Yr[k]; st.Ei[k] = st.Yi[k]; } }
     for (let q = 0; q < nc; q++) { // Z = E + j O (E: stadio lineare, O: dopo soppressione) -> un'unica IFFT
       const st = g.c[q], G = st.G, Er = st.Er, Ei = st.Ei, sup = o.suppress;
       for (let k = 0; k < K; k++) {
