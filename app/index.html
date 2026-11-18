@@ -1,4 +1,4 @@
-<title>Compressore HDR v0</title>
+<title>Compressore HDR v0.5</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 /* Layout: single-column tool — file in, settings, progress log, result card */
@@ -16,15 +16,14 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
 .big{font-size:1.6rem;font-variant-numeric:tabular-nums;font-weight:600}.ok{color:var(--ok)}.ko{color:var(--ko)}
 progress{width:100%}
 </style>
-<h1>Compressore HDR v0</h1>
-<p>Prototipo: ricodifica HEVC 10-bit HLG frame per frame, bitrate fisso. Serve a verificare file, HDR e metadati in Foto.</p>
+<h1>Compressore HDR v0.5</h1>
+<p>Prototipo: ricodifica HEVC 10-bit HLG frame per frame a bitrate fisso, con Dolby Vision e metadati originali trapiantati.</p>
 
 <div class="card">
   <label>Video dall'iPhone (.mov)<input type="file" id="file" accept="video/*"></label>
   <div class="row">
     <label>Bitrate<select id="br"><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8" selected>8 Mbps</option><option value="10">10 Mbps</option></select></label>
     <label>Keyframe ogni<select id="gop"><option value="1">1 s</option><option value="4" selected>4 s</option><option value="10">10 s</option></select></label>
-    <label>Indice (moov)<select id="fs"><option value="in-memory">in testa</option><option value="false" selected>in coda</option></select></label>
     <label><span>Verifica frame</span><input type="checkbox" id="vf" checked></label>
   </div>
   <button id="go" disabled>Comprimi</button>
@@ -41,6 +40,8 @@ progress{width:100%}
 import { openVideoElement, seekFrames, releaseVideoElement } from './lib/frames.js';
 import { createHevcEncoder } from './lib/encode.js';
 import { patchHvcC, stripParameterSets } from './lib/hevc-vui.js';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './lib/dovi.js';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './lib/mp4-post.js';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };
@@ -57,14 +58,22 @@ $('go').onclick = async () => {
 
 async function run() {
   const T0 = performance.now();
-  const bitrate = +$('br').value * 1e6, gopSec = +$('gop').value, fastStart = $('fs').value === 'false' ? false : 'in-memory';
+  const bitrate = +$('br').value * 1e6, gopSec = +$('gop').value, fastStart = false; // moov in coda: necessario per riscrivere il moov
   // 1. Demux
   const input = new MB.Input({ source: new MB.BlobSource(file), formats: MB.ALL_FORMATS });
   const vt = await input.getPrimaryVideoTrack(); if (!vt) throw new Error('nessuna traccia video');
   const srcCs = await vt.getColorSpace(); const tags = await input.getMetadataTags();
   log(`video ${await vt.getCodec()} ${await vt.getDisplayWidth()}×${await vt.getDisplayHeight()} rot ${await vt.getRotation()} cs ${JSON.stringify(srcCs)}`);
-  const pk = [];
-  for await (const p of new MB.EncodedPacketSink(vt).packets(undefined, undefined, { metadataOnly: true })) pk.push({ ts: p.timestamp, dur: p.duration });
+  const readF = async (o, l) => new Uint8Array(await file.slice(o, o + l).arrayBuffer());
+  const loc = await locateMoov(readF, file.size); const srcMoov = loc ? await readF(loc.offset, loc.size) : null;
+  const dvBox = srcMoov ? extractDoviConfigBox(srcMoov) : null;
+  log(`Dolby Vision sorgente: ${dvBox ? 'sì (' + String.fromCharCode(...dvBox.subarray(4, 8)) + ')' : 'no'}`);
+  const pk = []; const rpuByTs = new Map(); let rpuCount = 0;
+  for await (const p of new MB.EncodedPacketSink(vt).packets(undefined, undefined, dvBox ? {} : { metadataOnly: true })) {
+    pk.push({ ts: p.timestamp, dur: p.duration });
+    if (dvBox) { const r = extractNals(p.data, [62]); if (r.length) { rpuByTs.set(Math.round(p.timestamp * 1e6), r); rpuCount++; } }
+  }
+  if (dvBox) log(`RPU Dolby Vision letti: ${rpuCount}`);
   pk.sort((a, b) => a.ts - b.ts);
   const neg = pk.filter((p) => p.ts < 0).length; const frames = pk.filter((p) => p.ts >= 0);
   log(`pacchetti ${pk.length}, presentabili ${frames.length} (scartati ts<0: ${neg}), primo ts ${frames[0]?.ts.toFixed(4)} s`);
@@ -88,13 +97,14 @@ async function run() {
   // 4. Encode
   const hlg = srcCs?.transfer === 'hlg';
   const durByTs = new Map(frames.map((f) => [Math.round(f.ts * 1e6), f.dur]));
-  let first = true, encErr = null, nChunks = 0, firstKeyNal = null; const pending = [];
+  let first = true, encErr = null, nChunks = 0, firstKeyNal = null, rpuUsed = 0; const pending = [];
   const enc = createHevcEncoder({ width: W, height: H, bitrate,
     onError: (e) => { encErr = e; },
     onChunk: (chunk, meta) => {
       const data = new Uint8Array(chunk.byteLength); chunk.copyTo(data);
       const ts = chunk.timestamp / 1e6, dur = durByTs.get(chunk.timestamp) ?? 1 / 60;
-      const pkt = new MB.EncodedPacket(stripParameterSets(data), chunk.type, ts - frames[0].ts, dur);
+      let body = stripParameterSets(data); const rpu = rpuByTs.get(chunk.timestamp); if (rpu) { body = appendNals(body, rpu); rpuUsed++; }
+      const pkt = new MB.EncodedPacket(body, chunk.type, ts - frames[0].ts, dur);
       let m;
       if (first) {
         first = false; { const t = []; for (let o = 0; o + 4 < data.length && t.length < 12;) { const l = (data[o] << 24 | data[o + 1] << 16 | data[o + 2] << 8 | data[o + 3]) >>> 0; t.push((data[o + 4] >> 1) & 63); o += 4 + l; } firstKeyNal = t.join(','); }
@@ -124,7 +134,10 @@ async function run() {
     for await (const p of new MB.EncodedPacketSink(aac).packets()) { if (p.timestamp < 0) continue; await asrc.add(p.clone({ timestamp: p.timestamp - frames[0].ts }), first ? { decoderConfig: cfg } : undefined); first = false; }
     asrc.close(); }
   vsrc.close(); await output.finalize();
-  outBlob = new Blob([target.buffer], { type: 'video/mp4' });
+  const outU8 = new Uint8Array(target.buffer);
+  const { prefixLength, moov } = await rewriteMoov(outU8, (m) => { let x = srcMoov ? copySourceMetadata(srcMoov, m) : m; if (dvBox) x = insertIntoVideoSampleEntry(x, dvBox); return x; });
+  outBlob = new Blob([outU8.subarray(0, prefixLength), moov], { type: 'video/mp4' });
+  log(`RPU trapiantati: ${rpuUsed}/${nChunks}. Metadati originali copiati: ${srcMoov ? 'sì' : 'no'}.`);
   outName = file.name.replace(/\.[^.]+$/, '') + '_hdr.mp4';
   const pct = (1 - outBlob.size / file.size) * 100;
   $('ratio').innerHTML = `${(file.size / 1048576).toFixed(1)} MB → ${(outBlob.size / 1048576).toFixed(1)} MB <span class="${pct > 0 ? 'ok' : 'ko'}">(${pct > 0 ? '−' : '+'}${Math.abs(pct).toFixed(0)}%)</span>`;
@@ -132,10 +145,20 @@ async function run() {
   log(`fatto in ${((performance.now() - T0) / 1000).toFixed(1)} s. Moov ${fastStart ? 'in testa' : 'in coda'}.`);
 }
 
-$('save').onclick = async () => {
-  const dl = await window.claude?.use?.('downloads');
+$('save').onclick = () => {
+  // Fuori dall'artifact (GitHub Pages): share sheet con SOLO il file → iOS offre «Salva video» (diretto in Foto).
+  // share() va chiamato subito nel tap (user activation ~5 s), senza await prima; promise non attesa per la UI.
+  if (!window.claude?.use) {
+    const f = new File([outBlob], outName, { type: 'video/mp4' });
+    if (navigator.canShare?.({ files: [f] })) { navigator.share({ files: [f] }).catch((e) => { if (e?.name !== 'AbortError') $('saveMsg').textContent = 'Condivisione non riuscita: ' + e.message; }); return; }
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(outBlob), download: outName }); document.body.appendChild(a); a.click(); a.remove(); return;
+  }
+  saveViaArtifact();
+};
+async function saveViaArtifact() {
+  const dl = await window.claude.use('downloads');
   if (!dl) { $('saveMsg').textContent = 'Il salvataggio non è disponibile in questa vista.'; return; }
   try { const r = await dl.save({ filename: outName, data: outBlob }); $('saveMsg').textContent = r.status === 'saved' ? 'Salvato. Aprilo da File e scegli «Salva video» per metterlo in Foto.' : ''; }
   catch (e) { $('saveMsg').textContent = `Non salvato (${e.code || e.message}).`; }
-};
+}
 </script>
