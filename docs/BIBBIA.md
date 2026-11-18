@@ -189,7 +189,7 @@
 | T19 | VMAF/VMAF-NEG offline (serve permesso build libvmaf) + clip low-light; VMAF in-app (ffvmaf) su iPhone | R1 |
 
 
-## 11. Architettura proposta (BOZZA v1 — basata su misure device run 1–7)
+## 11. Architettura proposta (BOZZA v1 — percorso A validato su device, run 1–9)
 
 **Percorso principale "A — HDR 10-bit preservato"** (unico che preserva HLG; misurato fattibile)
 ```
@@ -212,7 +212,7 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 **Realismo dell'obiettivo −50 % (lab VMAF, x265 faster proxy, research/05)**: IMG_7440 (20.4 Mbps) → VMAF 95 a ~7.5 Mbps = **−63 %**; IMG_2147 (12.6 Mbps) → VMAF 95 stimato a 8–9 Mbps = **solo −30/35 %** (a −54 % VMAF 91.4). ⇒ il risparmio dipende dal bitrate di partenza; VideoToolbox realtime (no B-frame) sarà verosimilmente meno efficiente di x265. Il −50 % a VMAF 95 **non è garantito** per tutti i clip. Il denoise non migliora le metriche FR (atteso). VMAF p5 15–17 punti sotto la media → guidare la ricerca anche sul percentile basso. Prossimo passo lab: rifare con `hdr_vmaf_v1.1.8`.
 
 **Incognite residue da testare prima di costruire**
-1. t9: i frame da seek sono distinti e in ordine (fingerprint GPU).
+1. ~~t9~~ ✅ risolto (t10): seek → frame distinti, 5 ms/seek.
 2. Foto: import di HEVC Main10 con colr HLG + VUI patchata → badge HDR? metadati data/luogo letti? moov in coda accettato? (contraddizione research/04 vs 09)
 3. Primo chunk = IDR (NAL 19/20) e non CRA.
 4. Qualità reale del rate control VideoToolbox realtime (no B-frame) vs originale iPhone → quanto bitrate serve per VMAF ≥ 95 (laboratorio non può emulare VT: misurare su device con encode di prova + metrica).
