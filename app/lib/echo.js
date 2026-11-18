@@ -92,7 +92,9 @@ export function detectEcho(channels, sampleRate, opts = {}) {
   const minMs = opts.minMs ?? 5, maxMs = opts.maxMs ?? 120, lobeMs = opts.lobeMs ?? 3;
   const maxSeconds = opts.maxSeconds ?? 30;
   const total = channels[0].length;
-  const winLen = Math.round(sampleRate);
+  // window: 1 s, shortened for short clips (min 0.4 s) so that >= 3 windows exist (2.5 s clips were missed)
+  const winSec = opts.windowSec ?? Math.max(0.4, Math.min(1, total / sampleRate / 4));
+  const winLen = Math.round(sampleRate * winSec);
   const lo = Math.max(Math.ceil((Math.max(minMs, lobeMs) * sampleRate) / 1000), 2);
   const hi = Math.floor((maxMs * sampleRate) / 1000);
   const perWindow = [];
