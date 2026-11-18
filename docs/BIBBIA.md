@@ -116,12 +116,12 @@
 
 ## 6. Algoritmi percettivi (pre-encoder)
 
-→ vedi research/06 e research/07 (in revisione)
+→ vedi research/06 (fonti verificate 2026-11-18) e research/07. Sintesi metrica: in-loop proxy WGSL (Y-FUNQUE+ o MS-SSIM su HLG), 8–12 frame stratificati/scena, media + 5° percentile, clip di prova contiguo; offline HDR-VMAF v1.1.8 + ColorVideoVDP standard_hdr_hlg + SSIMULACRA2. VMAF WASM (ffvmaf) poco maturo; nessun port WebGPU di VMAF.
 
 
 ## 7. Metriche di qualità eseguibili sulla GPU del telefono
 
-→ vedi research/06 e research/07 (in revisione)
+→ vedi research/06 (fonti verificate 2026-11-18) e research/07. Sintesi metrica: in-loop proxy WGSL (Y-FUNQUE+ o MS-SSIM su HLG), 8–12 frame stratificati/scena, media + 5° percentile, clip di prova contiguo; offline HDR-VMAF v1.1.8 + ColorVideoVDP standard_hdr_hlg + SSIMULACRA2. VMAF WASM (ffvmaf) poco maturo; nessun port WebGPU di VMAF.
 
 
 ## 8. Controllo dell'encoder: rate control, GOP, ricerca a circuito chiuso
