@@ -81,7 +81,7 @@
 **Fase attuale: RICERCA (pre-costruzione). Nessun codice app ancora.**
 
 File di ricerca prodotti (leggerli prima di sintetizzare le sezioni 2–11):
-- `research/02-webkit-webcodecs.md` — subagent ancora in corso al momento della pausa: **verificare se il file esiste**; se manca, rilanciare la ricerca (domande: path encoder WebKit/VT realtime?, opzioni config rispettate, Main10/I420P10/HLG, configure() a metà stream, WebGPU external texture HDR).
+- `research/02-webkit-webcodecs.md` ✅ (letto sorgente WebKit) — **VINCOLO CRITICO**: in Safari 27.0–27.2 l'encoder è il wrapper libwebrtc `RTCVideoEncoderH265` (VT **RealTime**, **no B-frame**, solo AverageBitRate, BitrateAdjuster); bitrateMode/quantizer/framerate/contentHint ignorati; keyFrame per-frame OK; configure() col solo bitrate = cambio al volo senza keyframe. **Niente VideoFrame 10-bit costruibili né copyTo 10-bit**; frame da canvas/WebGPU → NV12 8-bit; decoder release probabilmente 8-bit. VT diretto + 10-bit solo su WebKit `main` (futuro). WebGPU importExternalTexture mantiene 10-bit ma ignora colorSpace. → Nel release: **HDR 10-bit + pre-filtro GPU non fattibile**; opzioni: output 8-bit (SDR tone-mapped o HLG 8-bit ❓), attendere Safari futuro, o encoder WASM. Test device T0–T8 nel file.
 - `research/03-memoria-ios.md` ✅ — limite WebContent soft ~1.5 GB (bug 277848), ~2–3 GB osservati; regole anti-crash con budget (frame in volo ≤4, decodeQueue ≤8, encodeQueue ≤4, footprint ≤700 MB); OPFS + createSyncAccessHandle in worker; Wake Lock in PWA da iOS 18.4; share sheet con file grandi problematico.
 - `research/04-container-metadati.md` ✅ — Mediabunny 1.66: legge hvc1 Main10/colr/rotazione/VFR/tag mdta; NON scrive apac/mebx; tag mdta in udta/meta (Foto potrebbe ignorarli → post-processing moov/meta); usare fastStart:false + StreamTarget OPFS; pipeline manuale VideoSampleSink→Source (Conversion via canvas rischia 8-bit); copiare `amve` (TN3145) + mdcv/clli; rimuovere dvcC/dvvC; APAC: passthrough non supportato → proposta: scartare, tenere AAC.
 - `research/05-esperimenti-proxy.md` ✅ — GOP lungo ≈ 6–10 % bitrate; denoise penalizzato dalle metriche FR; SSIM-Y 0.95 a ~9–10 Mbps (x265 faster) ≈ −50 %. VMAF da ottenere (serve permesso).
@@ -89,7 +89,8 @@ File di ricerca prodotti (leggerli prima di sintetizzare le sezioni 2–11):
 - `research/09-prior-art.md` ✅ — kimymt/iphone-video-compressor (mediabunny, HEVC Main 8-bit, 34 pitfall Safari: niente IDR automatico, user activation, wake lock, 1 encoder HW, fastStart in-memory = RAM); nessuno fa Main10/HDR, pre-filtri WebGPU con metrica, per-scena HEVC, output grandi senza RAM → nostro spazio.
 
 **Prossimi passi alla ripresa**
-1. Controllare/completare `02-webkit-webcodecs.md`.
+0. VMAF — distinzione: (a) LAB offline nel container = ground truth per calibrare (build libvmaf richiede permesso utente); (b) IN-APP = da studiare: ffvmaf (WASM) su frame campione per scena, costo su iPhone, vs MS-SSIM GPU / FUNQUE.
+1. Decisione con utente sul vincolo 02 (8-bit vs attesa vs WASM) + prima build = pagina diagnostica T0–T8 da aprire sull'iPhone (verità sul device reale, Safari 27.x).
 2. Verificare le fonti ❓ di `06` (subagent Sonnet dedicato, solo verifica paper + numeri).
 3. Chiedere all'utente il permesso per compilare libvmaf (bloccato dal classificatore) → rifare ladder con VMAF/VMAF-NEG + clip low-light.
 4. Sintetizzare sezioni 2–11 di questa BIBBIA dai file research + elenco "Test da eseguire su device" unificato (prima build = pagina diagnostica che esegue isConfigSupported & co. sull'iPhone).
