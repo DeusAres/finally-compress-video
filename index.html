@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>
-<title>Compressore HDR v0.8</title>
+<title>Compressore HDR v0.8.1</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 /* Layout: single-column tool — file in, settings, progress log, result card */
@@ -17,7 +17,7 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
 .big{font-size:1.6rem;font-variant-numeric:tabular-nums;font-weight:600}.ok{color:var(--ok)}.ko{color:var(--ko)}
 progress{width:100%}
 </style>
-<h1>Compressore HDR v0.8</h1>
+<h1>Compressore HDR v0.8.1</h1>
 <p>Prototipo: ricodifica HEVC 10-bit HLG frame per frame a bitrate fisso, con Dolby Vision e metadati originali trapiantati.</p>
 
 <div class="card">
@@ -26,8 +26,7 @@ progress{width:100%}
     <label>Bitrate<select id="br"><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8" selected>8 Mbps</option><option value="10">10 Mbps</option></select></label>
     <label>Keyframe ogni<select id="gop"><option value="1">1 s</option><option value="4" selected>4 s</option><option value="10">10 s</option></select></label>
     <label><span>Verifica frame</span><input type="checkbox" id="vf"></label>
-    <label><span>Ripara eco audio (sperimentale)</span><input type="checkbox" id="echo"></label>
-    <label>Risoluzione<select id="res"><option value="0" selected>originale</option><option value="1080">1080p (lato corto)</option></select></label>
+    <label>Audio<select id="amode"><option value="copy" selected>copia originale</option><option value="reenc">solo ricodifica (diagnostica)</option><option value="v1">ripara eco v1</option></select></label>
   </div>
   <button id="go" disabled>Comprimi</button>
   <progress id="prog" max="1" value="0"></progress>
@@ -40,12 +39,12 @@ progress{width:100%}
 <div class="card"><div class="row"><button id="copy">Copia log</button><span id="copyMsg"></span></div><pre id="log">Scegli un video.</pre></div>
 
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.8';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.8';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.8';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.8';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './app/lib/mp4-post.js?v=0.8';
-import { detectEcho, estimateGain, createEchoRemover } from './app/lib/echo.js?v=0.8';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.8.1';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.8.1';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.8.1';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.8.1';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './app/lib/mp4-post.js?v=0.8.1';
+import { detectEcho, estimateGain, createEchoRemover } from './app/lib/echo.js?v=0.8.1';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };
@@ -86,9 +85,7 @@ async function run() {
 
   // 2. Frame source (native 10-bit via seek)
   const video = await openVideoElement(file);
-  const SW = video.videoWidth, SH = video.videoHeight; const short = +$('res').value;
-  let W = SW, H = SH; if (short && Math.min(SW, SH) > short) { const k = short / Math.min(SW, SH); W = Math.round(SW * k / 2) * 2; H = Math.round(SH * k / 2) * 2; }
-  log(`frame nativi ${SW}×${SH} → uscita ${W}×${H}${W !== SW ? ' (scalatura affidata all\'encoder, frame nativi a 10 bit)' : ''}`);
+  const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}`);
 
   // 3. Output
   const target = new MB.BufferTarget();
@@ -96,7 +93,8 @@ async function run() {
   const vsrc = new MB.EncodedVideoPacketSource('hevc'); output.addVideoTrack(vsrc);
   // Audio: passthrough, unless an echo (copy summed with a delay, e.g. iOS "Encode Media" shortcut) is detected
   let asrc = null, echoFix = null;
-  if (aac && $('echo').checked) {
+  const amode = $('amode').value;
+  if (aac && amode !== 'copy') {
     try {
       const planes = []; let sr = 0, nch = 0;
       for await (const s of new MB.AudioSampleSink(aac).samples(0, 30)) {
@@ -107,11 +105,11 @@ async function run() {
       const ch = planes.map((list) => { const n = list.reduce((a, b) => a + b.length, 0), o = new Float32Array(n); let k = 0; for (const b of list) { o.set(b, k); k += b.length; } return o; });
       const det = detectEcho(ch, sr);
       log(`analisi eco: ${det.found ? 'TROVATA' : 'assente'} (ritardo ${det.delayMs?.toFixed(2)} ms, rho ${det.rho?.toFixed(2)}, consistenza ${det.consistency?.toFixed(2)}, ${sr} Hz ${nch} ch)`);
-      if (det.found) {
-        const g = estimateGain(ch, sr, det.delaySamples);
+      if (det.found || amode === 'reenc') {
+        const g = det.found ? estimateGain(ch, sr, det.delaySamples) : { gain: 0, gainHigh: 0, crossoverHz: 2000, rhoBefore: 0, rhoAfter: 0 };
         const sup = await AudioEncoder.isConfigSupported({ codec: 'mp4a.40.2', sampleRate: sr, numberOfChannels: nch, bitrate: 256000 }).catch((e) => ({ supported: false, e }));
         log(`correzione: gain basse ${g.gain.toFixed(2)} / alte ${g.gainHigh.toFixed(2)}, rho ${g.rhoBefore.toFixed(2)} → ${g.rhoAfter.toFixed(2)}. Encoder AAC: ${sup.supported ? 'ok' : 'NON supportato → audio copiato senza correzione'}`);
-        if (sup.supported) echoFix = { ...g, delaySamples: det.delaySamples, sr, nch };
+        if (sup.supported) echoFix = amode === 'reenc' ? { gain: 0, gainHigh: 0, crossoverHz: 2000, delaySamples: 100, sr, nch, reencOnly: true } : { ...g, delaySamples: det.delaySamples, sr, nch };
       }
     } catch (e) { log('analisi eco fallita: ' + e.message + ' → audio copiato'); }
   }
@@ -173,7 +171,7 @@ async function run() {
       const as = new MB.AudioSample({ data, format: 'f32-planar', numberOfChannels: nch, sampleRate: echoFix.sr, timestamp: Math.max(0, ts) });
       await asrc.add(as); as.close(); nS++;
     }
-    asrc.close(); log(`audio corretto e ricodificato AAC 256 kbps (${nS} blocchi)`);
+    asrc.close(); log(`audio ${echoFix.reencOnly ? 'SOLO ricodificato (nessun filtro)' : 'corretto e ricodificato'} AAC 256 kbps (${nS} blocchi)`);
   } else if (asrc) { let first = true; const cfg = await aac.getDecoderConfig();
     for await (const p of new MB.EncodedPacketSink(aac).packets()) { if (p.timestamp < 0) continue; await asrc.add(p.clone({ timestamp: p.timestamp - frames[0].ts }), first ? { decoderConfig: cfg } : undefined); first = false; }
     asrc.close(); }
