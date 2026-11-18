@@ -209,6 +209,8 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 
 **Percorso opzionale "B — SDR con pre-filtri percettivi"**: frame → WebGPU (denoise temporale, JND, motion masking, tone-map HLG→SDR) → canvas 8-bit → HEVC Main 8-bit (o AV1 8-bit ~90–100 fps, ❓ qualità). Per utenti che accettano di perdere l'HDR in cambio di più compressione. Da valutare con VMAF in laboratorio.
 
+**Realismo dell'obiettivo −50 % (lab VMAF, x265 faster proxy, research/05)**: IMG_7440 (20.4 Mbps) → VMAF 95 a ~7.5 Mbps = **−63 %**; IMG_2147 (12.6 Mbps) → VMAF 95 stimato a 8–9 Mbps = **solo −30/35 %** (a −54 % VMAF 91.4). ⇒ il risparmio dipende dal bitrate di partenza; VideoToolbox realtime (no B-frame) sarà verosimilmente meno efficiente di x265. Il −50 % a VMAF 95 **non è garantito** per tutti i clip. Il denoise non migliora le metriche FR (atteso). VMAF p5 15–17 punti sotto la media → guidare la ricerca anche sul percentile basso. Prossimo passo lab: rifare con `hdr_vmaf_v1.1.8`.
+
 **Incognite residue da testare prima di costruire**
 1. t9: i frame da seek sono distinti e in ordine (fingerprint GPU).
 2. Foto: import di HEVC Main10 con colr HLG + VUI patchata → badge HDR? metadati data/luogo letti? moov in coda accettato? (contraddizione research/04 vs 09)
