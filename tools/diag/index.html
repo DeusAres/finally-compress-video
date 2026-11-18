@@ -107,6 +107,13 @@ $('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!
    await buf.mapAsync(GPUMapMode.READ);const a=new Uint8Array(buf.getMappedRange());let h=2166136261;for(let k=0;k<a.length;k++){h^=a[k];h=Math.imul(h,16777619)}buf.unmap();hashes.push(h>>>0)}
   let rep=0;for(let i=1;i<hashes.length;i++)if(hashes[i]===hashes[i-1])rep++;
   r.seeks=N;r.distinct=new Set(hashes).size;r.consecutiveRepeats=rep;r.fps=+(N/((performance.now()-t0)/1000)).toFixed(1)}catch(err){r.err=err.message}R.t9=r}
- o.textContent=JSON.stringify(R.t3,null,1)+'\nT6..T9 fatti.';show()};
+ // T10: correctness. 2D-canvas fingerprint (independent of GPU path); wait modes: seeked only vs seeked+rVFC
+ {const cv=new OffscreenCanvas(32,32),g=cv.getContext('2d',{willReadFrequently:true});const fp=src=>{g.drawImage(src,0,0,32,32);const a=g.getImageData(0,0,32,32).data;let h=2166136261;for(let k=0;k<a.length;k++){h^=a[k];h=Math.imul(h,16777619)}return [h>>>0,a[0]+a[1]+a[2]+a[2000]]};
+  const N=Math.min(90,Math.floor(v.duration*60));v.pause();R.t10={};
+  for(const mode of ['seeked','seeked+rvfc']){const r={hv:[],hf:[],lat:[],sample:[]};const t0=performance.now();
+   for(let i=0;i<N;i++){const s=performance.now();const target=(i+0.5)/60;const pr=mode==='seeked'?null:new Promise(res=>{const to=setTimeout(()=>res('to'),2000);v.requestVideoFrameCallback((n,md)=>{clearTimeout(to);res(md.mediaTime)})});v.currentTime=target;await WT(v,'seeked',2000);if(pr)r.lastMediaTime=await pr;r.lat.push(performance.now()-s);
+    const [h1,px]=fp(v);r.hv.push(h1);if(i%30===0)r.sample.push(px);const vf=new VideoFrame(v,{timestamp:i});r.hf.push(fp(vf)[0]);vf.close()}
+   const L=r.lat.sort((a,b)=>a-b);R.t10[mode]={n:N,distinctFromVideoEl:new Set(r.hv).size,distinctFromVideoFrame:new Set(r.hf).size,msMedian:+L[L.length>>1].toFixed(1),msP90:+L[Math.floor(L.length*.9)].toFixed(1),fps:+(N/((performance.now()-t0)/1000)).toFixed(1),pixelSamples:r.sample}}}
+ o.textContent=JSON.stringify(R.t3,null,1)+'\nT6..T10 fatti.';show()};
 $('bc').onclick=()=>{const s=JSON.stringify(R);navigator.clipboard?.writeText(s).then(()=>$('bc').textContent='Copiato',()=>{getSelection().selectAllChildren($('oc'));$('bc').textContent='Seleziona e copia a mano'})};
 </script>
