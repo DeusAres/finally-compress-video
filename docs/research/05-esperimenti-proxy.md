@@ -77,3 +77,14 @@ IMG_2147 (1080p orizzontale 60 fps, 3.5 s, originale ~12.55 Mbps; **non low-ligh
 - File: samples/IMG_7440_hdr.mp4 (app v0.5–0.6, target 8 Mbps, GOP 4 s) vs IMG_7440.mov. Struttura: HEVC Main10, HLG BT.2020 tv-range, DV p8 compat 4, 522 frame, **solo I/P (3 I, 519 P, nessun B-frame)**, 8.18 Mbps video. Allineamento verificato (PSNR 120 frame: offset 0 → 35.4 dB, ±1 → 21.2 dB).
 - **VMAF 88.86 (p5 73.07), VMAF-NEG 86.74 (p5 71.14)** a 8.2 Mbps (modello SDR su HLG: indicativo).
 - Confronto proxy x265 faster (GOP lungo): VMAF 95 a ~7.5 Mbps. ⇒ **l'encoder Safari realtime è sensibilmente meno efficiente**: a parità di bitrate ~6 punti VMAF in meno. Per VMAF 95 serviranno verosimilmente ~12–15 Mbps su questo clip (−30/40 % invece di −63 %) — da misurare con la ladder 4/6/8/10/12/14 Mbps. L'obiettivo −50 % a VMAF 95 è a rischio con questo encoder; servono le leve (per-scena, GOP lungo, frame quasi-duplicati) e una decisione sulla soglia.
+
+## Curva qualità/bitrate REALE dell'encoder Safari (app v0.13, frame verificati) — IMG_7440 ✅
+| target | video Mbps | file MB | risparmio vs 21.6 MB | VMAF | p5 | NEG |
+|---|---|---|---|---|---|---|
+| 4 | 4.22 | 4.66 | −78 % | 76.6 | 59.2 | 74.2 |
+| 6 | 6.21 | 6.72 | −69 % | 84.1 | 67.5 | 81.8 |
+| 8 | 8.16 | 8.75 | −60 % | 88.8 | 73.0 | 86.7 |
+| 10 | 10.11 | 10.77 | −50 % | 92.0 | 77.2 | 90.1 |
+| 12 | 12.03 | 12.76 | −41 % | 94.4 | 81.6 | 92.8 |
+- Con alimentazione a tempo reale (v0.13) il bitrate prodotto ≈ target (prima, alimentando a ~175 fps, l'encoder sotto-produceva).
+- VMAF 95 (modello SDR) ≈ 12.5–13 Mbps (−38 %). Il giudizio visivo dell'utente (criterio di progetto) va rifatto su questi file: i giudizi precedenti erano su file con frame stantii.
