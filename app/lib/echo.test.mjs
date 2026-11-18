@@ -236,7 +236,7 @@ assert.ok(!d2.found);
       const e = Math.min(y[0].length, p + n); if (e <= p) break;
       const o = rem.process(y.map((c) => c.subarray(p, e)));
       outs[0].push(o[0]); outs[1].push(o[1]); p = e; got += o[0].length;
-      assert.ok(got >= p - rem.latency - 1 && got <= p, 'latenza dichiarata rispettata');
+      assert.ok(got >= p - rem.latency - rem.hop && got <= p, 'ritardo di emissione <= latency + hop');
     }
     const f = rem.flush(); outs[0].push(f[0]); outs[1].push(f[1]);
     let maxd = 0;

@@ -485,8 +485,8 @@ export function echoCepstrumComb(channels, sampleRate, delaySamples, { frame = 8
 //   quindi sum(uscite) == sum(ingressi). removeEchoV3 (batch) = process + flush; streaming == batch (bit-exact).
 // ======================================================================================
 const V3_DEFAULTS = {
-  frame: 1024, lambda: 0.97, mu: 0.3, span: 2, maxGain: 0.94, coh0: 0.03, reg: 0.02, cross: true, crossHz: 1500, maxHz: 10000,
-  suppress: true, gMinDb: -12, beta: 0.5, c1: 0.15, c2: 0.5, bandsHz: [1000, 1800, 8000, 12000], tailBeta: 0.25,
+  frame: 1024, lambda: 0.97, mu: 0.3, span: 2, maxGain: 0.94, coh0: 0.03, reg: 0.02, cross: true, crossHz: 1500, maxHz: 8000,
+  suppress: true, gMinDb: -12, beta: 0.3, c1: 0.15, c2: 0.5, bandsHz: [1000, 1800, 6000, 8000], tailBeta: 0.25,
   smoothUp: 0.35, smoothDown: 0.7, limiter: true,
 };
 function boxSum(src, dst, K, F) {
