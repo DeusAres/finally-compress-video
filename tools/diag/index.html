@@ -83,6 +83,12 @@ $('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!
  o.textContent=JSON.stringify(R.t3,null,1)+'\nTest frame-exactness <video> in corso (circa 3x durata video)…';show();
  // T6b: <video> frame delivery at playbackRate 1,2,4
  R.t6_video={duration:v.duration};for(const rate of [1,2,4]){const r={};try{v.currentTime=0;await new Promise(res=>v.onseeked=res);let n=0;const seen=new Set();const cb=(now,md)=>{n++;seen.add(md.mediaTime);if(!v.ended)v.requestVideoFrameCallback(cb)};v.requestVideoFrameCallback(cb);v.playbackRate=rate;const t0=performance.now();await v.play();await new Promise(res=>v.onended=res);r.callbacks=n;r.uniqueMediaTimes=seen.size;r.wallSec=+((performance.now()-t0)/1000).toFixed(2);const q=v.getVideoPlaybackQuality?v.getVideoPlaybackQuality():null;if(q)r.quality={total:q.totalVideoFrames,dropped:q.droppedVideoFrames}}catch(err){r.err=err.message}R.t6_video['x'+rate]=r}
- v.playbackRate=1;o.textContent=JSON.stringify(R.t3,null,1)+'\nT6 fatto.';show()};
+ // T7: slow playback + seek-stepping
+ R.t7={};for(const rate of [0.25,0.5]){const r={};try{v.currentTime=0;await new Promise(res=>v.onseeked=res);const seen=new Set();const cb=(now,md)=>{seen.add(md.mediaTime);if(!v.ended)v.requestVideoFrameCallback(cb)};v.requestVideoFrameCallback(cb);v.playbackRate=rate;const t0=performance.now();await v.play();await new Promise(res=>v.onended=res);r.uniqueFrames=seen.size;r.wallSec=+((performance.now()-t0)/1000).toFixed(2)}catch(err){r.err=err.message}R.t7['x'+rate]=r}
+ v.playbackRate=1;show();
+ {const r={};try{v.pause();const seen=new Set();const t0=performance.now();let t=0;const step=1/120;let misses=0;
+  while(t<v.duration){v.currentTime=t;await new Promise(res=>{let done=false;const fin=()=>{if(!done){done=true;res()}};v.requestVideoFrameCallback((n,md)=>{seen.add(md.mediaTime);fin()});setTimeout(()=>{misses++;fin()},300)});t+=step}
+  r.uniqueFrames=seen.size;r.seeks=Math.ceil(v.duration/step);r.timeouts=misses;r.wallSec=+((performance.now()-t0)/1000).toFixed(2)}catch(err){r.err=err.message}R.t7.seekStep=r}
+ o.textContent=JSON.stringify(R.t3,null,1)+'\nT6+T7 fatti.';show()};
 $('bc').onclick=()=>{const s=JSON.stringify(R);navigator.clipboard?.writeText(s).then(()=>$('bc').textContent='Copiato',()=>{getSelection().selectAllChildren($('oc'));$('bc').textContent='Seleziona e copia a mano'})};
 </script>
