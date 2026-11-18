@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>
-<title>Compressore HDR v0.8.1</title>
+<title>Compressore HDR v0.9</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 /* Layout: single-column tool — file in, settings, progress log, result card */
@@ -17,7 +17,7 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
 .big{font-size:1.6rem;font-variant-numeric:tabular-nums;font-weight:600}.ok{color:var(--ok)}.ko{color:var(--ko)}
 progress{width:100%}
 </style>
-<h1>Compressore HDR v0.8.1</h1>
+<h1>Compressore HDR v0.9</h1>
 <p>Prototipo: ricodifica HEVC 10-bit HLG frame per frame a bitrate fisso, con Dolby Vision e metadati originali trapiantati.</p>
 
 <div class="card">
@@ -26,7 +26,7 @@ progress{width:100%}
     <label>Bitrate<select id="br"><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8" selected>8 Mbps</option><option value="10">10 Mbps</option></select></label>
     <label>Keyframe ogni<select id="gop"><option value="1">1 s</option><option value="4" selected>4 s</option><option value="10">10 s</option></select></label>
     <label><span>Verifica frame</span><input type="checkbox" id="vf"></label>
-    <label>Audio<select id="amode"><option value="copy" selected>copia originale</option><option value="reenc">solo ricodifica (diagnostica)</option><option value="v1">ripara eco v1</option></select></label>
+    <label>Audio<select id="amode"><option value="copy" selected>copia originale</option><option value="reenc">solo ricodifica (diagnostica)</option><option value="v1">ripara eco v1</option><option value="v2">ripara eco v2 (filtro per frequenza)</option></select></label>
   </div>
   <button id="go" disabled>Comprimi</button>
   <progress id="prog" max="1" value="0"></progress>
@@ -39,12 +39,12 @@ progress{width:100%}
 <div class="card"><div class="row"><button id="copy">Copia log</button><span id="copyMsg"></span></div><pre id="log">Scegli un video.</pre></div>
 
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.8.1';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.8.1';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.8.1';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.8.1';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './app/lib/mp4-post.js?v=0.8.1';
-import { detectEcho, estimateGain, createEchoRemover } from './app/lib/echo.js?v=0.8.1';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.9';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.9';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.9';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.9';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov } from './app/lib/mp4-post.js?v=0.9';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2 } from './app/lib/echo.js?v=0.9';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };
@@ -109,7 +109,8 @@ async function run() {
         const g = det.found ? estimateGain(ch, sr, det.delaySamples) : { gain: 0, gainHigh: 0, crossoverHz: 2000, rhoBefore: 0, rhoAfter: 0 };
         const sup = await AudioEncoder.isConfigSupported({ codec: 'mp4a.40.2', sampleRate: sr, numberOfChannels: nch, bitrate: 256000 }).catch((e) => ({ supported: false, e }));
         log(`correzione: gain basse ${g.gain.toFixed(2)} / alte ${g.gainHigh.toFixed(2)}, rho ${g.rhoBefore.toFixed(2)} → ${g.rhoAfter.toFixed(2)}. Encoder AAC: ${sup.supported ? 'ok' : 'NON supportato → audio copiato senza correzione'}`);
-        if (sup.supported) echoFix = amode === 'reenc' ? { gain: 0, gainHigh: 0, crossoverHz: 2000, delaySamples: 100, sr, nch, reencOnly: true } : { ...g, delaySamples: det.delaySamples, sr, nch };
+        if (sup.supported && amode === 'v2' && det.found) { const f = estimateEchoFilter(ch, sr, det.delaySamples); log(`filtro v2: ${f.taps} tap per canale, risposta max ${f.maxResponse.toFixed(2)}${f.scale < 1 ? ' (scalato)' : ''}`); echoFix = { v2: true, h: f.h, delaySamples: det.delaySamples, sr, nch }; }
+        else if (sup.supported) echoFix = amode === 'reenc' ? { gain: 0, gainHigh: 0, crossoverHz: 2000, delaySamples: 100, sr, nch, reencOnly: true } : { ...g, delaySamples: det.delaySamples, sr, nch };
       }
     } catch (e) { log('analisi eco fallita: ' + e.message + ' → audio copiato'); }
   }
@@ -159,7 +160,7 @@ async function run() {
 
   // 5. Audio passthrough
   if (asrc && echoFix) {
-    const rm = createEchoRemover({ delaySamples: echoFix.delaySamples, gain: echoFix.gain, gainHigh: echoFix.gainHigh, crossoverHz: echoFix.crossoverHz, sampleRate: echoFix.sr, channels: echoFix.nch });
+    const rm = echoFix.v2 ? createEchoRemoverV2({ delaySamples: echoFix.delaySamples, h: echoFix.h, mode: 'iir', channels: echoFix.nch }) : createEchoRemover({ delaySamples: echoFix.delaySamples, gain: echoFix.gain, gainHigh: echoFix.gainHigh, crossoverHz: echoFix.crossoverHz, sampleRate: echoFix.sr, channels: echoFix.nch });
     let nS = 0;
     for await (const s of new MB.AudioSampleSink(aac).samples()) {
       const n = s.numberOfFrames, nch = s.numberOfChannels, ts = s.timestamp - frames[0].ts;

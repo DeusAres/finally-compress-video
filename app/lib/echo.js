@@ -235,3 +235,232 @@ export function estimateGain(channels, sampleRate, delaySamples, opts = {}) {
   const after = ev(aLo, aHi);
   return { gain: aLo, gainHigh: aHi, crossoverHz, analytic, rhoBefore: before.full, rhoAfter: after.full };
 }
+
+// =====================================================================================
+// v2: eco con percorso filtrato  y[n] = x[n] + sum_k h[k] x[n-D-k],  k in [-K,K], D = round(delay)
+// h FIR centrata stimata ai minimi quadrati (Wiener, regolarizzata) su segnale sbiancato (LPC),
+// raffinata per iterazioni (il predittore di Wiener su y e' distorto: a/(1+a^2) invece di a).
+// Inverso: 'iir'  x[n] = y[n] - sum h[k] x[n-D-k]           (stabile se max_f|H(f)| < 1)
+//          'fir'  Horner a M stadi  x_m = y - H z^-D x_{m-1}  (x_M = y - Hy_d + HHy_2d - ...; sempre stabile)
+// ---------------------------------------------------------------------------------------
+function acRaw(x, maxLag) {
+  let n = 1;
+  while (n < x.length + maxLag + 1) n <<= 1;
+  const re = new Float64Array(n), im = new Float64Array(n);
+  re.set(x);
+  fft(re, im);
+  for (let i = 0; i < n; i++) { re[i] = re[i] * re[i] + im[i] * im[i]; im[i] = 0; }
+  fft(re, im, true);
+  return re.subarray(0, maxLag + 1);
+}
+function levinson(r, order) {
+  const a = new Float64Array(order + 1); a[0] = 1;
+  let e = r[0] * (1 + 1e-6) + 1e-30;
+  for (let i = 1; i <= order; i++) {
+    let acc = r[i];
+    for (let j = 1; j < i; j++) acc += a[j] * r[i - j];
+    const k = -acc / e;
+    const prev = a.slice();
+    for (let j = 1; j < i; j++) a[j] = prev[j] + k * prev[i - j];
+    a[i] = k;
+    e *= 1 - k * k;
+  }
+  return a;
+}
+function firApply(x, a) {
+  const out = new Float64Array(x.length), p = a.length;
+  for (let n = 0; n < x.length; n++) {
+    let s = 0;
+    for (let i = 0; i < p && i <= n; i++) s += a[i] * x[n - i];
+    out[n] = s;
+  }
+  return out;
+}
+function solveSPD(A, b, n) { // Cholesky, A riga-maggiore (modificata in place)
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j <= i; j++) {
+      let s = A[i * n + j];
+      for (let k = 0; k < j; k++) s -= A[i * n + k] * A[j * n + k];
+      if (i === j) A[i * n + i] = Math.sqrt(Math.max(s, 1e-300));
+      else A[i * n + j] = s / A[j * n + j];
+    }
+  }
+  const y = new Float64Array(n);
+  for (let i = 0; i < n; i++) { let s = b[i]; for (let k = 0; k < i; k++) s -= A[i * n + k] * y[k]; y[i] = s / A[i * n + i]; }
+  const x = new Float64Array(n);
+  for (let i = n - 1; i >= 0; i--) { let s = y[i]; for (let k = i + 1; k < n; k++) s -= A[k * n + i] * x[k]; x[i] = s / A[i * n + i]; }
+  return x;
+}
+// max_f |H(f)| con H(f)=sum h[j] e^{-j w j}
+export function echoFilterMaxResponse(h) {
+  let n = 1; while (n < 8 * h.length) n <<= 1;
+  const re = new Float64Array(n), im = new Float64Array(n);
+  for (let j = 0; j < h.length; j++) re[j] = h[j];
+  fft(re, im);
+  let m = 0;
+  for (let i = 0; i <= n >> 1; i++) m = Math.max(m, Math.hypot(re[i], im[i]));
+  return m;
+}
+
+// ----- nucleo di filtraggio a blocchi (Float64 interno; stato = storia degli stadi) -----
+function makeCore({ D, K, hs, mode, stages, channels }) {
+  if (!(D > K + 1)) throw new Error('delay must exceed taps/2');
+  const L = D + K, M = mode === 'iir' ? 1 : Math.max(1, stages | 0), rec = mode === 'iir', T = 2 * K + 1;
+  const hist = Array.from({ length: channels }, () => Array.from({ length: M + 1 }, () => new Float64Array(L)));
+  return {
+    run(chunk) {
+      const len = chunk[0].length;
+      return chunk.map((inp, c) => {
+        const h = hs[c], hh = hist[c];
+        const ext = [];
+        for (let m = 0; m <= M; m++) { const e = new Float64Array(L + len); e.set(hh[m]); ext.push(e); }
+        const e0 = ext[0];
+        for (let i = 0; i < len; i++) e0[L + i] = inp[i];
+        for (let m = 1; m <= M; m++) {
+          const dst = ext[m], src = rec ? dst : ext[m - 1];
+          for (let i = 0; i < len; i++) {
+            const base = L + i - D + K;
+            let s = 0;
+            for (let j = 0; j < T; j++) s += h[j] * src[base - j];
+            dst[L + i] = e0[L + i] - s;
+          }
+        }
+        for (let m = 0; m <= M; m++) hh[m] = ext[m].slice(len);
+        return ext[M].subarray(L);
+      });
+    },
+  };
+}
+
+export function estimateEchoFilter(channels, sampleRate, delaySamples, opts = {}) {
+  const D = Math.round(delaySamples), nch = channels.length;
+  let K = ((opts.taps ?? 129) - 1) >> 1;
+  K = Math.max(1, Math.min(K, D - 2));
+  const T = 2 * K + 1, perChannel = opts.perChannel ?? true;
+  const iterations = opts.iterations ?? 5, lambda = opts.lambda ?? 1e-3, maxGain = opts.maxGain ?? 0.9;
+  const total = channels[0].length;
+  let segLen = Math.round((opts.segSec ?? 1.5) * sampleRate);
+  if (total < segLen) segLen = total;
+  const zero = () => Array.from({ length: nch }, () => new Float64Array(T));
+  if (segLen < 8 * D) return { h: zero(), K, D, taps: T, perChannel, maxResponse: 0, scale: 1, iterations: 0 };
+  const starts = pickWindows(total, segLen, opts.segments ?? 5);
+  const sig = channels.map((ch) => starts.map((s) => Float64Array.from(ch.subarray(s, s + segLen))));
+  // filtro sbiancante LPC (ordine 32) da tutti i segmenti: non cambia h (LTI), ma rende R ~ diagonale
+  const rr = new Float64Array(33);
+  for (const ch of sig) for (const sg of ch) { const r = acRaw(sg, 32); for (let i = 0; i <= 32; i++) rr[i] += r[i]; }
+  const a = levinson(rr, 32);
+  const w = sig.map((ch) => ch.map((sg) => firApply(sg, a)));
+  const groups = perChannel ? Array.from({ length: nch }, (_, c) => [c]) : [Array.from({ length: nch }, (_, c) => c)];
+  const skip = 3 * D + K;
+  const hOut = new Array(nch);
+  let maxResponse = 0;
+  const gh = groups.map((g) => {
+    const h = new Float64Array(T);
+    for (let it = 0; it < iterations; it++) {
+      const r = new Float64Array(D + K + 1);
+      for (const c of g) for (const sg of w[c]) {
+        let u = sg;
+        if (it > 0) u = makeCore({ D, K, hs: [h], mode: 'iir', channels: 1 }).run([sg])[0];
+        const ac = acRaw(u.subarray(skip), D + K);
+        for (let i = 0; i < r.length; i++) r[i] += ac[i];
+      }
+      const A = new Float64Array(T * T), b = new Float64Array(T);
+      for (let i = 0; i < T; i++) {
+        const q = (i - K) / K;
+        for (let j = 0; j < T; j++) A[i * T + j] = r[Math.abs(i - j)];
+        A[i * T + i] += lambda * r[0] * (1 + 8 * q * q);
+        b[i] = r[D + i - K];
+      }
+      const e = solveSPD(A, b, T);
+      for (let i = 0; i < T; i++) h[i] += e[i];
+    }
+    const mr = echoFilterMaxResponse(h);
+    maxResponse = Math.max(maxResponse, mr);
+    if (mr > maxGain) { const s = maxGain / mr; for (let i = 0; i < T; i++) h[i] *= s; }
+    return h;
+  });
+  for (let c = 0; c < nch; c++) hOut[c] = gh[perChannel ? c : 0];
+  return { h: hOut, K, D, taps: T, perChannel, maxResponse, scale: maxResponse > maxGain ? maxGain / maxResponse : 1, iterations };
+}
+
+// h: Float64Array (condivisa) oppure array di Float64Array (una per canale)
+export function createEchoRemoverV2({ delaySamples, h, mode = 'iir', stages = 3, channels = 1, limiter = true }) {
+  const D = Math.round(delaySamples);
+  const hs = Array.from({ length: channels }, (_, c) => (typeof h[0] === 'number' ? h : h[Math.min(c, h.length - 1)]));
+  const K = (hs[0].length - 1) >> 1;
+  const core = makeCore({ D, K, hs, mode, stages, channels });
+  return {
+    process(chunk) {
+      const o = core.run(chunk);
+      return o.map((d) => { const f = new Float32Array(d.length); for (let i = 0; i < d.length; i++) f[i] = limiter ? softLimit(d[i]) : d[i]; return f; });
+    },
+  };
+}
+export function removeEchoV2(channels, sampleRate, { delaySamples, h, mode = 'iir', stages = 3, limiter = true }) {
+  return createEchoRemoverV2({ delaySamples, h, mode, stages, channels: channels.length, limiter }).process(channels);
+}
+
+// ---------- metriche v2 ----------
+function biquad(type, fc, sr, x) {
+  const w0 = (2 * Math.PI * fc) / sr, al = Math.sin(w0) / (2 * Math.SQRT1_2), cs = Math.cos(w0);
+  let b0, b1, b2;
+  if (type === 'lp') { b0 = (1 - cs) / 2; b1 = 1 - cs; b2 = b0; } else { b0 = (1 + cs) / 2; b1 = -(1 + cs); b2 = b0; }
+  const a0 = 1 + al, a1 = -2 * cs, a2 = 1 - al;
+  const out = new Float64Array(x.length);
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < x.length; i++) {
+    const y = (b0 * x[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+    x2 = x1; x1 = x[i]; y2 = y1; y1 = y; out[i] = y;
+  }
+  return out;
+}
+export const ECHO_BANDS = [[0, 500], [500, 2000], [2000, 6000], [6000, Infinity]];
+export function bandSignal(x, sr, [lo, hi]) {
+  let s = x;
+  if (lo > 0) s = biquad('hp', lo, sr, biquad('hp', lo, sr, s));
+  if (isFinite(hi)) s = biquad('lp', hi, sr, biquad('lp', hi, sr, s));
+  return s;
+}
+// rho medio (su finestre da 1 s) ai lag m*d, m=1..3, per banda; max |rho| entro +-1.5 campioni
+export function echoBandRho(channels, sampleRate, delaySamples, { bands = ECHO_BANDS, lags = [1, 2, 3] } = {}) {
+  const n = channels[0].length, m = mono(channels, 0, n);
+  for (let i = 0; i < n; i++) m[i] *= 0.5;
+  const starts = pickWindows(n, sampleRate, 12);
+  return bands.map((bd) => {
+    const bs = bandSignal(m, sampleRate, bd);
+    return lags.map((mult) => {
+      let acc = 0, cnt = 0;
+      for (const s of starts) {
+        const seg = bs.subarray(s, s + sampleRate);
+        let best = 0;
+        for (let o = -1.5; o <= 1.5; o += 0.5) best = Math.max(best, Math.abs(corrAt(seg, mult * delaySamples + o)));
+        acc += best; cnt++;
+      }
+      return cnt ? acc / cnt : 0;
+    });
+  });
+}
+// indice di comb: picco del cepstrum reale (log-spettro medio) al quefrency d / |c| mediano in [0.5d,1.5d]
+export function echoCepstrumComb(channels, sampleRate, delaySamples, { frame = 8192 } = {}) {
+  const n = channels[0].length, m = mono(channels, 0, n);
+  const D = Math.round(delaySamples), logAvg = new Float64Array(frame);
+  let nf = 0;
+  for (let s = 0; s + frame <= n; s += frame >> 1) {
+    const re = new Float64Array(frame), im = new Float64Array(frame);
+    let e = 0;
+    for (let i = 0; i < frame; i++) { const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / frame); re[i] = m[s + i] * w; e += re[i] * re[i]; }
+    if (e < 1e-6) continue;
+    fft(re, im);
+    for (let i = 0; i < frame; i++) logAvg[i] += Math.log(re[i] * re[i] + im[i] * im[i] + 1e-12) * 0.5;
+    nf++;
+  }
+  if (!nf) return { peak: 0, floor: 0, ratio: 0, peak2: 0 };
+  const im = new Float64Array(frame);
+  for (let i = 0; i < frame; i++) logAvg[i] /= nf;
+  fft(logAvg, im, true);
+  const pk = (q) => { let b = -Infinity; for (let o = -2; o <= 2; o++) b = Math.max(b, logAvg[q + o]); return b; };
+  const fl = [];
+  for (let q = Math.floor(0.5 * D); q <= Math.ceil(1.5 * D); q++) if (Math.abs(q - D) > 8) fl.push(Math.abs(logAvg[q]));
+  const floor = median(fl), peak = pk(D);
+  return { peak, floor, ratio: peak / (floor + 1e-12), peak2: pk(2 * D) };
+}

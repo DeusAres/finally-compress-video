@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { detectEcho, estimateGain, removeEcho, createEchoRemover } from './echo.js';
+import { detectEcho, estimateGain, removeEcho, createEchoRemover, estimateEchoFilter, removeEchoV2, createEchoRemoverV2, echoBandRho, echoCepstrumComb, echoFilterMaxResponse } from './echo.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const SR = 44100;
@@ -106,6 +106,88 @@ const d2 = detectEcho(y2, SR);
 console.log(`2147 (${(y2[0].length / SR).toFixed(1)} s): found=${d2.found} d=${d2.delayMs.toFixed(2)} ms rho=${fmt(d2.rho)} cons=${fmt(d2.consistency)} win=${d2.perWindow.length}`);
 console.log('   per finestra:', d2.perWindow.map((p) => `${p.lagMs.toFixed(2)}ms/${fmt(p.rho)}`).join(' '));
 assert.ok(!d2.found);
+
+// 3b. v2: filtro FIR per eco con percorso filtrato (non identico alla sorgente)
+{
+  const bandNames = ['<500', '0.5-2k', '2-6k', '>6k'];
+  const enc = (chs, name) => {
+    const n = chs[0].length, b = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) { b[2 * i] = chs[0][i]; b[2 * i + 1] = chs[1][i]; }
+    const e = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'f32le', '-ar', String(SR), '-ac', '2', '-i', '-', '-c:a', 'aac', '-b:a', '256k', `/tmp/claude-0/lab/${name}.m4a`], { input: Buffer.from(b.buffer) });
+    assert.equal(e.status, 0, e.stderr?.toString());
+  };
+  const t2 = performance.now();
+  const est = estimateEchoFilter(y, SR, d);
+  console.log(`v2 estimateEchoFilter: ${(performance.now() - t2).toFixed(0)} ms, taps=${est.taps} maxResponse=${est.maxResponse.toFixed(3)} scale=${est.scale.toFixed(3)}`);
+  assert.ok(echoFilterMaxResponse(est.h[0]) < 1 && echoFilterMaxResponse(est.h[1]) < 1, 'filtro stabile');
+  const timeIt = (fn) => { const t = performance.now(); const o = fn(); return [o, ((performance.now() - t) / (y[0].length / SR)) * 10]; };
+  const [xi, ti] = timeIt(() => removeEchoV2(y, SR, { delaySamples: d, h: est.h, mode: 'iir' }));
+  const [xf, tf] = timeIt(() => removeEchoV2(y, SR, { delaySamples: d, h: est.h, mode: 'fir', stages: 3 }));
+  console.log(`perf v2: iir ${ti.toFixed(0)} ms / 10 s stereo, fir(3 stadi) ${tf.toFixed(0)} ms / 10 s stereo`);
+  const rows = { v0: y, v1: x, 'v2-iir': xi, 'v2-fir': xf };
+  const res = {};
+  console.log('rho al lag d/2d/3d per banda (media su finestre da 1 s) + comb cepstrum picco/pavimento');
+  console.log('modo     ' + bandNames.map((b) => b.padEnd(15)).join('') + 'comb');
+  for (const [k, v] of Object.entries(rows)) {
+    res[k] = echoBandRho(v, SR, d);
+    const cc = echoCepstrumComb(v, SR, d); res[k].comb = cc.ratio;
+    console.log(k.padEnd(9) + res[k].map((r) => r.map((q) => q.toFixed(2)).join('/').padEnd(15)).join('') + cc.ratio.toFixed(1));
+  }
+  for (const k of ['v2-iir', 'v2-fir']) {
+    for (let b = 0; b < 4; b++) {
+      assert.ok(res[k][b][0] < res.v0[b][0], `${k}: rho(d) scende nella banda ${bandNames[b]}`);
+      assert.ok(res[k][b][1] < 0.15 && res[k][b][2] < 0.15, `${k}: niente picchi a 2d/3d banda ${bandNames[b]}`);
+    }
+    assert.ok(res[k][0][0] < 0.3 * res.v0[0][0] && res[k][1][0] < 0.4 * res.v0[1][0], `${k}: basse fortemente ridotte`);
+    assert.ok(res[k].comb < res.v0.comb && res[k].comb < res.v1.comb, `${k}: comb < v0 e v1`);
+  }
+  assert.ok(res['v2-iir'][3][0] < res.v1[3][0], 'v2 non peggiora le alte come v1');
+  let pk2 = 0; for (const c of xi) for (const v of c) pk2 = Math.max(pk2, Math.abs(v));
+  assert.ok(pk2 <= 1);
+  assert.ok(ti < 1000, 'iir >> realtime');
+  enc(x, '7440_v1'); enc(xi, '7440_v2iir'); enc(xf, '7440_v2fir');
+  console.log('scritti /tmp/claude-0/lab/7440_{v1,v2iir,v2fir}.m4a');
+
+  // streaming == batch, entrambi i modi, blocchi dispari
+  for (const mode of ['iir', 'fir']) {
+    const batch = mode === 'iir' ? xi : xf;
+    const rem = createEchoRemoverV2({ delaySamples: d, h: est.h, mode, stages: 3, channels: 2 });
+    let p = 0, maxd = 0;
+    for (const n of [1000, 7, 4096, 33333, 1e9]) {
+      const e = Math.min(y[0].length, p + n); if (e <= p) break;
+      const o = rem.process(y.map((c) => c.subarray(p, e)));
+      for (let c = 0; c < 2; c++) for (let i = 0; i < o[c].length; i++) maxd = Math.max(maxd, Math.abs(o[c][i] - batch[c][p + i]));
+      p = e;
+    }
+    console.log(`v2 streaming vs batch (${mode}) max diff = ${maxd}`);
+    assert.ok(maxd < 1e-6);
+  }
+
+  // sintetico: eco NON identico (percorso passa-basso disperso + tap anticipato), v2 deve ridurre in ogni banda
+  const D0 = 1841, g = [0.35, 0.2, 0.1, 0.05, 0.03];
+  const sx = [pink(SR * 12, 11), pink(SR * 12, 12)];
+  const sy = sx.map((c) => { const o = new Float32Array(c); for (let i = D0 + 5; i < o.length; i++) { let a = 0.15 * c[i - D0 + 2]; for (let k = 0; k < g.length; k++) a += g[k] * c[i - D0 - k]; o[i] += a; } return o; });
+  const sdet = detectEcho(sy, SR);
+  assert.ok(sdet.found && Math.abs(sdet.delaySamples - D0) < 3, 'rileva eco sintetico filtrato');
+  const sest = estimateEchoFilter(sy, SR, sdet.delaySamples);
+  const sb = echoBandRho(sy, SR, sdet.delaySamples);
+  for (const mode of ['iir', 'fir']) {
+    const sr2 = echoBandRho(removeEchoV2(sy, SR, { delaySamples: sdet.delaySamples, h: sest.h, mode }), SR, sdet.delaySamples);
+    console.log(`sintetico ${mode}: prima ${sb.map((r) => r[0].toFixed(2)).join('/')} dopo ${sr2.map((r) => r[0].toFixed(2)).join('/')} (2d: ${sr2.map((r) => r[1].toFixed(2)).join('/')})`);
+    for (let b = 0; b < 4; b++) {
+      if (sb[b][0] > 0.2) assert.ok(sr2[b][0] < 0.5 * sb[b][0], `sintetico ${mode}: banda ${bandNames[b]} ridotta`);
+      assert.ok(sr2[b][1] < 0.12 && sr2[b][2] < 0.12, `sintetico ${mode}: no picchi 2d/3d`);
+    }
+  }
+  // stabilita': h con risposta > 1 viene scalata
+  const hot = estimateEchoFilter(sx.map((c) => { const o = new Float32Array(c); for (let i = D0; i < o.length; i++) o[i] += 1.5 * c[i - D0]; return o; }), SR, D0);
+  console.log(`eco forte (1.5): maxResponse=${hot.maxResponse.toFixed(3)} scale=${hot.scale.toFixed(3)}`);
+  assert.ok(echoFilterMaxResponse(hot.h[0]) <= 0.9 + 1e-9, 'h sempre scalata a max_f|H|<=0.9');
+  // controllo negativo: senza eco h ~ 0, e detect resta false
+  const nest = estimateEchoFilter(syn, SR, 1841);
+  console.log(`negativo v2: maxResponse=${nest.maxResponse.toFixed(3)}`);
+  assert.ok(nest.maxResponse < 0.25 && !detectEcho(syn, SR).found);
+}
 
 // 4. uscita per ascolto
 const buf = new Float32Array(x[0].length * 2);
