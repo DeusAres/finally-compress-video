@@ -593,7 +593,8 @@ function v3Frames(P, g) {
       A00[k] = lam * A00[k] + an * bx[0][k];
       if (cross) { A11[k] = lam * A11[k] + an * bx[1][k]; A01r[k] = lam * A01r[k] + an * bx[2][k]; A01i[k] = lam * A01i[k] + an * bx[3][k]; }
       const a00 = A00[k] * reg + 1e-12, a11 = A11[k] * reg + 1e-12, a01r = A01r[k], a01i = A01i[k];
-      const det = cx ? a00 * a11 - a01r * a01r - a01i * a01i : 1;
+      let det = cx ? a00 * a11 - a01r * a01r - a01i * a01i : 1;
+      if (!(det > 1e-30)) det = Infinity; // near-singular (e.g. digital silence / AAC priming): no update instead of NaN
       const coh0 = o.coh0 * (cx ? 2 : 1);
       for (let q = 0; q < nc; q++) {
         const st = g.c[q], p = 4 + q * 4;
@@ -609,10 +610,11 @@ function v3Frames(P, g) {
           w1r = (a00 * b1r - (a01r * b0r - a01i * b0i)) / det; w1i = (a00 * b1i - (a01r * b0i + a01i * b0r)) / det;
           coh = (w0r * b0r + w0i * b0i + w1r * b1r + w1i * b1i) / syy;
         } else if (q === 0) { // riferimento proprio = canale 0
-          w0r = b0r / a00; w0i = b0i / a00; coh = (b0r * b0r + b0i * b0i) / (A00[k] * syy);
+          w0r = b0r / a00; w0i = b0i / a00; coh = (b0r * b0r + b0i * b0i) / (A00[k] * syy + 1e-30);
         } else { // q = 1, riferimento proprio = canale 1 (b_q1)
-          w1r = b1r / a11; w1i = b1i / a11; coh = (b1r * b1r + b1i * b1i) / (A11[k] * syy);
+          w1r = b1r / a11; w1i = b1i / a11; coh = (b1r * b1r + b1i * b1i) / (A11[k] * syy + 1e-30);
         }
+        if (!Number.isFinite(coh) || !Number.isFinite(w0r + w0i + w1r + w1i)) { coh = 0; w0r = w0i = w1r = w1i = 0; } // NaN guard
         const sh = coh > coh0 ? 1 - coh0 / Math.min(coh, 1) : 0;
         w0r *= sh; w0i *= sh; w1r *= sh; w1i *= sh;
         const nrm = w0r * w0r + w0i * w0i + w1r * w1r + w1i * w1i;
@@ -658,12 +660,12 @@ function v3Frames(P, g) {
           const e2 = pe2[k], syy = st.Syy[k] * 1 + 1e-20;
           let pw = g.pr2[0][k] * (st.Wr[0][k] * st.Wr[0][k] + st.Wi[0][k] * st.Wi[0][k]);
           let cer = (st.Ser[0][k] * st.Ser[0][k] + st.Sei[0][k] * st.Sei[0][k]) / (A00[k] * See[k] + 1e-20);
-          let cyr = (st.Br[0][k] * st.Br[0][k] + st.Bi[0][k] * st.Bi[0][k]) / (A00[k] * syy);
+          let cyr = (st.Br[0][k] * st.Br[0][k] + st.Bi[0][k] * st.Bi[0][k]) / (A00[k] * syy + 1e-30);
           if (cross) {
             pw += g.pr2[1][k] * (st.Wr[1][k] * st.Wr[1][k] + st.Wi[1][k] * st.Wi[1][k]);
             const c2 = (st.Ser[1][k] * st.Ser[1][k] + st.Sei[1][k] * st.Sei[1][k]) / (A11[k] * See[k] + 1e-20);
             if (c2 > cer) cer = c2;
-            const y2 = (st.Br[1][k] * st.Br[1][k] + st.Bi[1][k] * st.Bi[1][k]) / (A11[k] * syy);
+            const y2 = (st.Br[1][k] * st.Br[1][k] + st.Bi[1][k] * st.Bi[1][k]) / (A11[k] * syy + 1e-30);
             if (y2 > cyr) cyr = y2;
           }
           const pecho = pw * (o.c1 + o.c2 * (1 - (cyr > 1 ? 1 : cyr))) + (cer > 1 ? 1 : cer) * e2;
