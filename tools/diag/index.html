@@ -26,6 +26,8 @@ const R={ua:navigator.userAgent,webgpu:!!navigator.gpu,wakeLock:'wakeLock' in na
 const $=id=>document.getElementById(id);const show=()=>$('oc').textContent=JSON.stringify(R,null,1);show();
 const log=(o,s)=>{o.textContent=(o.textContent==='In attesa.'?'':o.textContent+'\n')+s};
 const W=1920,H=1080;
+const WT=(el,ev,ms)=>new Promise(res=>{const t=setTimeout(()=>res('timeout'),ms);el.addEventListener(ev,()=>{clearTimeout(t);res(ev)},{once:true})});
+const PL=(v,ms)=>Promise.race([v.play().then(()=>'ok',e=>'playErr '+e.message),new Promise(r=>setTimeout(()=>r('playTimeout'),ms))]);
 $('b1').onclick=async()=>{const o=$('o1');o.textContent='';R.t1={};
  const codecs={hevcMain:'hvc1.1.6.L123.B0',hevcMain10:'hvc1.2.4.L123.B0',avcHigh:'avc1.640028',av1:'av01.0.08M.08',av1_10:'av01.0.08M.10',vp9:'vp09.00.40.08'};
  const variants=[{},{bitrateMode:'variable'},{bitrateMode:'constant'},{bitrateMode:'quantizer'},{latencyMode:'quality'},{latencyMode:'realtime'},{hevc:{format:'annexb'}},{contentHint:'detail'}];
@@ -82,9 +84,9 @@ $('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!
   f.close()}catch(err){R.t3.frameErr=err.message}
  o.textContent=JSON.stringify(R.t3,null,1)+'\nTest frame-exactness <video> in corso (circa 3x durata video)…';show();
  // T6b: <video> frame delivery at playbackRate 1,2,4
- R.t6_video={duration:v.duration};for(const rate of [1,2,4]){const r={};try{v.currentTime=0;await new Promise(res=>v.onseeked=res);let n=0;const seen=new Set();const cb=(now,md)=>{n++;seen.add(md.mediaTime);if(!v.ended)v.requestVideoFrameCallback(cb)};v.requestVideoFrameCallback(cb);v.playbackRate=rate;const t0=performance.now();await v.play();await new Promise(res=>v.onended=res);r.callbacks=n;r.uniqueMediaTimes=seen.size;r.wallSec=+((performance.now()-t0)/1000).toFixed(2);const q=v.getVideoPlaybackQuality?v.getVideoPlaybackQuality():null;if(q)r.quality={total:q.totalVideoFrames,dropped:q.droppedVideoFrames}}catch(err){r.err=err.message}R.t6_video['x'+rate]=r}
+ R.t6_video={duration:v.duration};for(const rate of [1,2,4]){const r={};try{v.currentTime=0;r.seek=await WT(v,'seeked',3000);let n=0;const seen=new Set();const cb=(now,md)=>{n++;seen.add(md.mediaTime);if(!v.ended)v.requestVideoFrameCallback(cb)};v.requestVideoFrameCallback(cb);v.playbackRate=rate;const t0=performance.now();r.play=await PL(v,3000);r.end=await WT(v,'ended',v.duration/rate*1000+5000);r.callbacks=n;r.uniqueMediaTimes=seen.size;r.wallSec=+((performance.now()-t0)/1000).toFixed(2);const q=v.getVideoPlaybackQuality?v.getVideoPlaybackQuality():null;if(q)r.quality={total:q.totalVideoFrames,dropped:q.droppedVideoFrames}}catch(err){r.err=err.message}R.t6_video['x'+rate]=r}
  // T7: slow playback + seek-stepping
- R.t7={};for(const rate of [0.25,0.5]){const r={};try{v.currentTime=0;await new Promise(res=>v.onseeked=res);const seen=new Set();const cb=(now,md)=>{seen.add(md.mediaTime);if(!v.ended)v.requestVideoFrameCallback(cb)};v.requestVideoFrameCallback(cb);v.playbackRate=rate;const t0=performance.now();await v.play();await new Promise(res=>v.onended=res);r.uniqueFrames=seen.size;r.wallSec=+((performance.now()-t0)/1000).toFixed(2)}catch(err){r.err=err.message}R.t7['x'+rate]=r}
+ R.t7={};for(const rate of [0.25,0.5]){const r={};try{v.currentTime=0;r.seek=await WT(v,'seeked',3000);const seen=new Set();const cb=(now,md)=>{seen.add(md.mediaTime);if(!v.ended)v.requestVideoFrameCallback(cb)};v.requestVideoFrameCallback(cb);v.playbackRate=rate;const t0=performance.now();r.play=await PL(v,3000);r.end=await WT(v,'ended',v.duration/rate*1000+5000);r.uniqueFrames=seen.size;r.wallSec=+((performance.now()-t0)/1000).toFixed(2)}catch(err){r.err=err.message}R.t7['x'+rate]=r}
  v.playbackRate=1;show();
  {const r={};try{v.pause();const seen=new Set();const t0=performance.now();let t=0;const step=1/120;let misses=0;
   while(t<v.duration){v.currentTime=t;await new Promise(res=>{let done=false;const fin=()=>{if(!done){done=true;res()}};v.requestVideoFrameCallback((n,md)=>{seen.add(md.mediaTime);fin()});setTimeout(()=>{misses++;fin()},300)});t+=step}
