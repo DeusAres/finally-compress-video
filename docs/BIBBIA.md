@@ -189,7 +189,32 @@
 | T19 | VMAF/VMAF-NEG offline (serve permesso build libvmaf) + clip low-light; VMAF in-app (ffvmaf) su iPhone | R1 |
 
 
-## 11. Architettura proposta
+## 11. Architettura proposta (BOZZA v1 — basata su misure device run 1–7)
+
+**Percorso principale "A — HDR 10-bit preservato"** (unico che preserva HLG; misurato fattibile)
+```
+.mov (File, streaming)
+ ├─ Demux (Mediabunny, solo lettura): timestamp esatti dei frame, scene/keyframe sorgente, AAC, metadati mdta, colr/amve/rotazione
+ ├─ Decode 10-bit: <video> + seek al timestamp esatto + evento 'seeked' + new VideoFrame(video)   [t8: 5 ms/frame, ~190 fps, frame nativi HLG]
+ ├─ Analisi (WebGPU, 8-bit è sufficiente): scene-cut, complessità, near-duplicate, metrica (FUNQUE+/MS-SSIM)
+ ├─ Encode: VideoEncoder HEVC (Main10 automatico da frame nativo) [~200 fps]
+ │    · keyFrame solo ai cambi scena (GOP lungo)          · bitrate per scena via configure() al volo (senza keyframe)
+ │    · ricerca a circuito chiuso: encode di prova di un campione contiguo per scena → VideoDecoder (NV12) → metrica vs sorgente → bisezione
+ │    · drop dei frame quasi-duplicati (VFR) = leva "senza toccare i pixel"
+ ├─ Fix bitstream/container: riscrittura SPS in hvcC con VUI (BT.2020/HLG/limited), box colr nclx 9/18/9, copia amve(+mdcv/clli), niente dvcC/dvvC
+ ├─ Mux (Mediabunny StreamTarget → OPFS, fastStart:false) + AAC passthrough + metadati mdta in moov/meta (post-processing) + rotazione
+ └─ Consegna: share sheet "Salva video" (❓ limite dimensione) 
+```
+Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, audio. **Niente pre-filtri sui pixel** (passare dalla GPU = 8-bit, run 4).
+
+**Percorso opzionale "B — SDR con pre-filtri percettivi"**: frame → WebGPU (denoise temporale, JND, motion masking, tone-map HLG→SDR) → canvas 8-bit → HEVC Main 8-bit (o AV1 8-bit ~90–100 fps, ❓ qualità). Per utenti che accettano di perdere l'HDR in cambio di più compressione. Da valutare con VMAF in laboratorio.
+
+**Incognite residue da testare prima di costruire**
+1. t9: i frame da seek sono distinti e in ordine (fingerprint GPU).
+2. Foto: import di HEVC Main10 con colr HLG + VUI patchata → badge HDR? metadati data/luogo letti? moov in coda accettato? (contraddizione research/04 vs 09)
+3. Primo chunk = IDR (NAL 19/20) e non CRA.
+4. Qualità reale del rate control VideoToolbox realtime (no B-frame) vs originale iPhone → quanto bitrate serve per VMAF ≥ 95 (laboratorio non può emulare VT: misurare su device con encode di prova + metrica).
+5. Throttling termico su clip lunghi; memoria (budget research/03).
 
 ## 12. Diario delle decisioni
 

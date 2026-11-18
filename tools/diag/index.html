@@ -95,6 +95,18 @@ $('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!
  {const r={lat:[],fmts:new Set(),timeouts:0};try{v.pause();const t0=performance.now();const N=Math.min(120,Math.floor(v.duration*60)-1);
   for(let i=0;i<N;i++){const s=performance.now();v.currentTime=(i+0.5)/60;const ev=await WT(v,'seeked',2000);if(ev==='timeout')r.timeouts++;const vf=new VideoFrame(v,{timestamp:i});r.fmts.add(String(vf.format)+'|'+vf.colorSpace.transfer);vf.close();r.lat.push(performance.now()-s)}
   const L=r.lat.sort((a,b)=>a-b);R.t8={frames:N,timeouts:r.timeouts,msMedian:+L[L.length>>1].toFixed(1),msP90:+L[Math.floor(L.length*0.9)].toFixed(1),fpsEquivalent:+(N/((performance.now()-t0)/1000)).toFixed(1),formats:[...r.fmts]}}catch(err){R.t8={err:err.message}}}
- o.textContent=JSON.stringify(R.t3,null,1)+'\nT6+T7+T8 fatti.';show()};
+ // T9: frame distinctness via GPU 32x32 fingerprint on seeked frames
+ {const r={};try{const ad=await navigator.gpu.requestAdapter();const dev=await ad.requestDevice();const S=32;
+  const tex=dev.createTexture({size:[S,S],format:'rgba8unorm',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.COPY_SRC});const buf=dev.createBuffer({size:S*S*4,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
+  const mod=dev.createShaderModule({code:`@group(0)@binding(0) var t:texture_external;@group(0)@binding(1) var s:sampler;struct O{@builtin(position) p:vec4f,@location(0) uv:vec2f};@vertex fn vs(@builtin(vertex_index) i:u32)->O{var q=array(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:O;o.p=vec4f(q[i],0,1);o.uv=vec2f((q[i].x+1)/2,(1-q[i].y)/2);return o;}@fragment fn fs(o:O)->@location(0) vec4f{return textureSampleBaseClampToEdge(t,s,o.uv);}`});
+  const pip=dev.createRenderPipeline({layout:'auto',vertex:{module:mod,entryPoint:'vs'},fragment:{module:mod,entryPoint:'fs',targets:[{format:'rgba8unorm'}]}});const smp=dev.createSampler({minFilter:'linear',magFilter:'linear'});
+  const hashes=[];const N=Math.floor(v.duration*60);v.pause();const t0=performance.now();
+  for(let i=0;i<N;i++){v.currentTime=(i+0.5)/60;await WT(v,'seeked',2000);const vf=new VideoFrame(v,{timestamp:i});
+   const bg=dev.createBindGroup({layout:pip.getBindGroupLayout(0),entries:[{binding:0,resource:dev.importExternalTexture({source:vf})},{binding:1,resource:smp}]});
+   const ce=dev.createCommandEncoder();const p=ce.beginRenderPass({colorAttachments:[{view:tex.createView(),loadOp:'clear',storeOp:'store'}]});p.setPipeline(pip);p.setBindGroup(0,bg);p.draw(3);p.end();ce.copyTextureToBuffer({texture:tex},{buffer:buf,bytesPerRow:S*4},[S,S]);dev.queue.submit([ce.finish()]);vf.close();
+   await buf.mapAsync(GPUMapMode.READ);const a=new Uint8Array(buf.getMappedRange());let h=2166136261;for(let k=0;k<a.length;k++){h^=a[k];h=Math.imul(h,16777619)}buf.unmap();hashes.push(h>>>0)}
+  let rep=0;for(let i=1;i<hashes.length;i++)if(hashes[i]===hashes[i-1])rep++;
+  r.seeks=N;r.distinct=new Set(hashes).size;r.consecutiveRepeats=rep;r.fps=+(N/((performance.now()-t0)/1000)).toFixed(1)}catch(err){r.err=err.message}R.t9=r}
+ o.textContent=JSON.stringify(R.t3,null,1)+'\nT6..T9 fatti.';show()};
 $('bc').onclick=()=>{const s=JSON.stringify(R);navigator.clipboard?.writeText(s).then(()=>$('bc').textContent='Copiato',()=>{getSelection().selectAllChildren($('oc'));$('bc').textContent='Seleziona e copia a mano'})};
 </script>
