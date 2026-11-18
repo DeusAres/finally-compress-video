@@ -485,7 +485,7 @@ export function echoCepstrumComb(channels, sampleRate, delaySamples, { frame = 8
 //   quindi sum(uscite) == sum(ingressi). removeEchoV3 (batch) = process + flush; streaming == batch (bit-exact).
 // ======================================================================================
 const V3_DEFAULTS = {
-  frame: 1024, lambda: 0.97, mu: 0.3, span: 2, maxGain: 0.94, coh0: 0.03, reg: 0.02, cross: true,
+  frame: 1024, lambda: 0.97, mu: 0.3, span: 2, maxGain: 0.94, coh0: 0.03, reg: 0.02, cross: true, crossHz: 1500,
   suppress: true, gMinDb: -12, beta: 1.0, c1: 0.15, c2: 0.5, bandsHz: [1000, 1800, 8000, 12000], tailBeta: 0.25,
   smoothUp: 0.35, smoothDown: 0.7, limiter: true,
 };
@@ -512,7 +512,9 @@ function v3Params(delaySamples, sampleRate, o) {
     const f = (k * sampleRate) / N;
     bw[k] = f < b0 ? 0 : f < b1 ? (f - b0) / (b1 - b0) : f <= b2 ? 1 : f < b3 ? 1 - (1 - o.tailBeta) * ((f - b2) / (b3 - b2)) : o.tailBeta;
   }
-  return { D, N, H, K, w, bw, gMin: Math.pow(10, o.gMinDb / 20), o };
+  const xbin = new Uint8Array(K), cnt = new Float64Array(K);
+  for (let k = 0; k < K; k++) { xbin[k] = (k * sampleRate) / N >= o.crossHz ? 1 : 0; cnt[k] = Math.min(k + o.span, K - 1) - Math.max(k - o.span, 0) + 1; }
+  return { D, N, H, K, w, bw, xbin, cnt, gMin: Math.pow(10, o.gMinDb / 20), o };
 }
 const F64 = (n) => new Float64Array(n);
 // gruppo di 1 o 2 canali accoppiati (il secondo canale di un gruppo mono e' fittizio)
@@ -539,158 +541,157 @@ function v3Ensure(st, need) {
 function v3Frames(P, g) {
   const { N, H, K, D, w, bw, gMin, o } = P, M = N - 1, half = N >> 1;
   const lam = o.lambda, a = 1 - lam, F = o.span, reg = 1 + o.reg;
-  const { re, im, tmp, tmp2, tmp3, x, bx } = g.s, nc = g.nch, cross = g.cross, c0 = g.c[0], c1 = g.c[1];
-  const coh0 = o.coh0 * (cross ? 2 : 1), mg2 = o.maxGain * o.maxGain;
+  const { re, im, tmp, tmp2, x, bx } = g.s, nc = g.nch, cross = g.cross, c0 = g.c[0], c1 = g.c[1];
+  const mg2 = o.maxGain * o.maxGain, mu = o.mu, xb = P.xbin;
+  const cnt = P.cnt;
   while (true) {
     const s = g.t * H - (N - H);
     if (s + N > g.inEnd) break;
     for (let q = 0; q < nc; q++) {
       const st = g.c[q];
       v3Ensure(st, s + N - st.base + 1);
+      const inb = st.inb, o1 = st.o1, base = st.base;
       for (let i = 0; i < N; i++) {
         const ai = s + i, ar = ai - D;
-        re[i] = (ai >= 0 ? st.inb[ai - st.base] : 0) * w[i];
-        im[i] = (ar >= 0 ? st.o1[ar - st.base] : 0) * w[i];
+        re[i] = (ai >= 0 ? inb[ai - base] : 0) * w[i];
+        im[i] = (ar >= 0 ? o1[ar - base] : 0) * w[i];
       }
       fft(re, im);
+      const Yr = st.Yr, Yi = st.Yi, Rr = st.Rr, Ri = st.Ri, yy = st.yy;
       for (let k = 0; k < K; k++) { // separa Y (parte reale) e R (parte immaginaria)
         const m = (N - k) & M, zr = re[k], zi = im[k], mr = re[m], mi = im[m];
-        st.Yr[k] = 0.5 * (zr + mr); st.Yi[k] = 0.5 * (zi - mi); st.Rr[k] = 0.5 * (zi + mi); st.Ri[k] = -0.5 * (zr - mr);
-        st.yy[k] = st.Yr[k] * st.Yr[k] + st.Yi[k] * st.Yi[k];
+        const yr = 0.5 * (zr + mr), yi = 0.5 * (zi - mi);
+        Yr[k] = yr; Yi[k] = yi; Rr[k] = 0.5 * (zi + mi); Ri[k] = -0.5 * (zr - mr); yy[k] = yr * yr + yi * yi;
       }
     }
-    // statistiche istantanee: A00 A11 A01(r,i), b_cj (r,i), yy_c; poi box in frequenza e media in tempo
-    const nj = cross ? 2 : 1;
+    // statistiche istantanee: 0 A00, 1 A11, 2-3 A01, 4.. b_qj (r,i) a 4+q*4+j*2, 12+q yy_q
+    const R0r = c0.Rr, R0i = c0.Ri, R1r = c1.Rr, R1i = c1.Ri;
     for (let k = 0; k < K; k++) {
-      const r0r = c0.Rr[k], r0i = c0.Ri[k];
+      const r0r = R0r[k], r0i = R0i[k];
       x[0][k] = r0r * r0r + r0i * r0i;
       if (cross) {
-        const r1r = c1.Rr[k], r1i = c1.Ri[k];
+        const r1r = R1r[k], r1i = R1i[k];
         x[1][k] = r1r * r1r + r1i * r1i; x[2][k] = r0r * r1r + r0i * r1i; x[3][k] = r0i * r1r - r0r * r1i;
       }
       for (let q = 0; q < nc; q++) {
-        const st = g.c[q], yr = st.Yr[k], yi = st.Yi[k];
-        for (let j = 0; j < nj; j++) {
-          const jr = (cross ? g.c[j] : st).Rr[k], ji = (cross ? g.c[j] : st).Ri[k], p = 4 + q * 4 + j * 2;
-          x[p][k] = yr * jr + yi * ji; x[p + 1][k] = yi * jr - yr * ji;
-        }
+        const st = g.c[q], yr = st.Yr[k], yi = st.Yi[k], p = 4 + q * 4;
+        x[p][k] = yr * r0r + yi * r0i; x[p + 1][k] = yi * r0r - yr * r0i;
+        if (cross) { const r1r = R1r[k], r1i = R1i[k]; x[p + 2][k] = yr * r1r + yi * r1i; x[p + 3][k] = yi * r1r - yr * r1i; }
         x[12 + q][k] = st.yy[k];
       }
     }
-    const nx = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
-    for (const p of nx) { if (p >= 1 && p <= 3 && !cross) continue; if (p >= 6 && p <= 7 && !cross) continue; if (p >= 10 && p <= 11 && !cross) continue; if (p === 13 && nc < 2) continue; if (p >= 8 && p <= 11 && nc < 2) continue; boxSum(x[p], bx[p], K, F); }
+    boxSum(x[0], bx[0], K, F);
+    if (cross) { boxSum(x[1], bx[1], K, F); boxSum(x[2], bx[2], K, F); boxSum(x[3], bx[3], K, F); }
+    for (let q = 0; q < nc; q++) {
+      const p = 4 + q * 4;
+      boxSum(x[p], bx[p], K, F); boxSum(x[p + 1], bx[p + 1], K, F);
+      if (cross) { boxSum(x[p + 2], bx[p + 2], K, F); boxSum(x[p + 3], bx[p + 3], K, F); }
+      boxSum(x[12 + q], bx[12 + q], K, F);
+    }
+    const A00 = g.A00, A11 = g.A11, A01r = g.A01r, A01i = g.A01i;
     for (let k = 0; k < K; k++) {
-      const n = Math.min(k + F, K - 1) - Math.max(k - F, 0) + 1, an = a / n;
-      g.A00[k] = lam * g.A00[k] + an * bx[0][k];
-      if (cross) { g.A11[k] = lam * g.A11[k] + an * bx[1][k]; g.A01r[k] = lam * g.A01r[k] + an * bx[2][k]; g.A01i[k] = lam * g.A01i[k] + an * bx[3][k]; }
+      const an = a / cnt[k], cx = cross && xb[k];
+      A00[k] = lam * A00[k] + an * bx[0][k];
+      if (cross) { A11[k] = lam * A11[k] + an * bx[1][k]; A01r[k] = lam * A01r[k] + an * bx[2][k]; A01i[k] = lam * A01i[k] + an * bx[3][k]; }
+      const a00 = A00[k] * reg + 1e-12, a11 = A11[k] * reg + 1e-12, a01r = A01r[k], a01i = A01i[k];
+      const det = cx ? a00 * a11 - a01r * a01r - a01i * a01i : 1;
+      const coh0 = o.coh0 * (cx ? 2 : 1);
       for (let q = 0; q < nc; q++) {
-        const st = g.c[q];
+        const st = g.c[q], p = 4 + q * 4;
         st.Syy[k] = lam * st.Syy[k] + an * bx[12 + q][k];
-        for (let j = 0; j < nj; j++) { const p = 4 + q * 4 + j * 2; st.Br[j][k] = lam * st.Br[j][k] + an * bx[p][k]; st.Bi[j][k] = lam * st.Bi[j][k] + an * bx[p + 1][k]; }
-      }
-      const a00 = g.A00[k] * reg + 1e-12;
-      let a11 = 0, a01r = 0, a01i = 0, det = 1;
-      if (cross) {
-        a11 = g.A11[k] * reg + 1e-12; a01r = g.A01r[k]; a01i = g.A01i[k];
-        det = a00 * a11 - a01r * a01r - a01i * a01i;
-      }
-      for (let q = 0; q < nc; q++) {
-        const st = g.c[q];
-        let w0r, w0i, w1r = 0, w1i = 0;
-        const b0r = st.Br[0][k], b0i = st.Bi[0][k];
-        if (cross) {
-          const b1r = st.Br[1][k], b1i = st.Bi[1][k];
-          // W0 = (b0 A11 - b1 A10)/det, A10 = conj(A01);  W1 = (A00 b1 - A01 b0)/det
+        const Br0 = st.Br[0], Bi0 = st.Bi[0], Br1 = st.Br[1], Bi1 = st.Bi[1];
+        Br0[k] = lam * Br0[k] + an * bx[p][k]; Bi0[k] = lam * Bi0[k] + an * bx[p + 1][k];
+        if (cross) { Br1[k] = lam * Br1[k] + an * bx[p + 2][k]; Bi1[k] = lam * Bi1[k] + an * bx[p + 3][k]; }
+        const b0r = Br0[k], b0i = Bi0[k], b1r = Br1[k], b1i = Bi1[k], syy = st.Syy[k] + 1e-20;
+        let w0r = 0, w0i = 0, w1r = 0, w1i = 0, coh;
+        if (cx) {
+          // W0 = (b0 A11 - b1 conj(A01))/det ; W1 = (A00 b1 - A01 b0)/det
           w0r = (b0r * a11 - (b1r * a01r + b1i * a01i)) / det; w0i = (b0i * a11 - (b1i * a01r - b1r * a01i)) / det;
           w1r = (a00 * b1r - (a01r * b0r - a01i * b0i)) / det; w1i = (a00 * b1i - (a01r * b0i + a01i * b0r)) / det;
-          const pred = w0r * b0r + w0i * b0i + w1r * b1r + w1i * b1i;
-          var coh = pred / (st.Syy[k] + 1e-20);
-        } else {
-          w0r = b0r / a00; w0i = b0i / a00;
-          coh = (b0r * b0r + b0i * b0i) / (g.A00[k] * st.Syy[k] + 1e-20);
+          coh = (w0r * b0r + w0i * b0i + w1r * b1r + w1i * b1i) / syy;
+        } else if (q === 0) { // riferimento proprio = canale 0
+          w0r = b0r / a00; w0i = b0i / a00; coh = (b0r * b0r + b0i * b0i) / (A00[k] * syy);
+        } else { // q = 1, riferimento proprio = canale 1 (b_q1)
+          w1r = b1r / a11; w1i = b1i / a11; coh = (b1r * b1r + b1i * b1i) / (A11[k] * syy);
         }
         const sh = coh > coh0 ? 1 - coh0 / Math.min(coh, 1) : 0;
         w0r *= sh; w0i *= sh; w1r *= sh; w1i *= sh;
         const nrm = w0r * w0r + w0i * w0i + w1r * w1r + w1i * w1i;
         if (nrm > mg2) { const sc = o.maxGain / Math.sqrt(nrm); w0r *= sc; w0i *= sc; w1r *= sc; w1i *= sc; }
-        const mu = o.mu;
-        let u0r = st.Wr[0][k] + mu * (w0r - st.Wr[0][k]), u0i = st.Wi[0][k] + mu * (w0i - st.Wi[0][k]);
-        let u1r = st.Wr[1][k] + mu * (w1r - st.Wr[1][k]), u1i = st.Wi[1][k] + mu * (w1i - st.Wi[1][k]);
-        const yr = st.Yr[k], yi = st.Yi[k];
-        const ra = g.c[0], rb = cross ? g.c[1] : null;
-        const fe = () => {
-          let er = yr - (u0r * ra.Rr[k] - u0i * ra.Ri[k]), ei = yi - (u0r * ra.Ri[k] + u0i * ra.Rr[k]);
-          if (cross) { er -= u1r * rb.Rr[k] - u1i * rb.Ri[k]; ei -= u1r * rb.Ri[k] + u1i * rb.Rr[k]; }
-          return [er, ei];
-        };
-        // in modalita' non cross il riferimento del canale q e' il suo stesso R
-        let er, ei;
-        if (!cross) { const rq = st; er = yr - (u0r * rq.Rr[k] - u0i * rq.Ri[k]); ei = yi - (u0r * rq.Ri[k] + u0i * rq.Rr[k]); }
-        else [er, ei] = fe();
+        const Wr0 = st.Wr[0], Wi0 = st.Wi[0], Wr1 = st.Wr[1], Wi1 = st.Wi[1];
+        let u0r = Wr0[k] + mu * (w0r - Wr0[k]), u0i = Wi0[k] + mu * (w0i - Wi0[k]);
+        let u1r = Wr1[k] + mu * (w1r - Wr1[k]), u1i = Wi1[k] + mu * (w1i - Wi1[k]);
+        const yr = st.Yr[k], yi = st.Yi[k], r0r = R0r[k], r0i = R0i[k], r1r = R1r[k], r1i = R1i[k];
+        let er = yr - (u0r * r0r - u0i * r0i) - (u1r * r1r - u1i * r1i), ei = yi - (u0r * r0i + u0i * r0r) - (u1r * r1i + u1i * r1r);
         st.pe[k] = 0.9 * st.pe[k] + 0.1 * (er * er + ei * ei); st.py[k] = 0.9 * st.py[k] + 0.1 * st.yy[k];
         if (st.pe[k] > 1.5 * st.py[k] + 1e-12) { // protezione dalla divergenza
           u0r *= 0.5; u0i *= 0.5; u1r *= 0.5; u1i *= 0.5;
-          if (!cross) { er = yr - (u0r * st.Rr[k] - u0i * st.Ri[k]); ei = yi - (u0r * st.Ri[k] + u0i * st.Rr[k]); } else [er, ei] = fe();
+          er = yr - (u0r * r0r - u0i * r0i) - (u1r * r1r - u1i * r1i); ei = yi - (u0r * r0i + u0i * r0r) - (u1r * r1i + u1i * r1r);
           st.pe[k] = st.py[k];
         }
-        st.Wr[0][k] = u0r; st.Wi[0][k] = u0i; st.Wr[1][k] = u1r; st.Wi[1][k] = u1i; st.Er[k] = er; st.Ei[k] = ei;
+        Wr0[k] = u0r; Wi0[k] = u0i; Wr1[k] = u1r; Wi1[k] = u1i; st.Er[k] = er; st.Ei[k] = ei;
       }
     }
     if (o.suppress) {
-      // statistiche E-R per il post-filtro (coerenza residua) per ciascun canale/riferimento
       for (let q = 0; q < nc; q++) {
-        const st = g.c[q];
-        for (let j = 0; j < nj; j++) {
-          const rj = cross ? g.c[j] : st;
-          for (let k = 0; k < K; k++) { x[0][k] = st.Er[k] * rj.Rr[k] + st.Ei[k] * rj.Ri[k]; x[1][k] = st.Ei[k] * rj.Rr[k] - st.Er[k] * rj.Ri[k]; }
+        const st = g.c[q], Er = st.Er, Ei = st.Ei, nj = cross ? 2 : 1;
+        for (let j = 0; j < nj; j++) { // coerenza E-R_j
+          const Rr = j ? R1r : R0r, Ri = j ? R1i : R0i;
+          for (let k = 0; k < K; k++) { x[0][k] = Er[k] * Rr[k] + Ei[k] * Ri[k]; x[1][k] = Ei[k] * Rr[k] - Er[k] * Ri[k]; }
           boxSum(x[0], bx[0], K, F); boxSum(x[1], bx[1], K, F);
-          for (let k = 0; k < K; k++) { const n = Math.min(k + F, K - 1) - Math.max(k - F, 0) + 1; st.Ser[j][k] = lam * st.Ser[j][k] + a * bx[0][k] / n; st.Sei[j][k] = lam * st.Sei[j][k] + a * bx[1][k] / n; }
-        }
-        for (let k = 0; k < K; k++) x[2][k] = st.Er[k] * st.Er[k] + st.Ei[k] * st.Ei[k];
-        boxSum(x[2], bx[2], K, F);
-        for (let k = 0; k < K; k++) { const n = Math.min(k + F, K - 1) - Math.max(k - F, 0) + 1; st.See[k] = lam * st.See[k] + a * bx[2][k] / n; }
-      }
-      for (let q = 0; q < nc; q++) {
-        const st = g.c[q];
-        for (let k = 0; k < K; k++) {
-          const k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
-          const e = (i) => st.Er[i] * st.Er[i] + st.Ei[i] * st.Ei[i];
-          tmp[k] = 0.25 * e(k0) + 0.5 * e(k) + 0.25 * e(k1);
-        }
-        for (let k = 0; k < K; k++) {
-          st.pe2[k] = 0.5 * st.pe2[k] + 0.5 * tmp[k];
-          let pw = 0, cer = 0;
-          for (let j = 0; j < nj; j++) {
-            const rj = cross ? g.c[j] : st, k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
-            const pr = (i) => rj.Rr[i] * rj.Rr[i] + rj.Ri[i] * rj.Ri[i];
-            st.pr2[j][k] = 0.5 * st.pr2[j][k] + 0.5 * (0.25 * pr(k0) + 0.5 * pr(k) + 0.25 * pr(k1));
-            pw += (st.Wr[j][k] * st.Wr[j][k] + st.Wi[j][k] * st.Wi[j][k]) * st.pr2[j][k];
-            const srr = j === 0 ? g.A00[k] : g.A11[k];
-            cer = Math.max(cer, (st.Ser[j][k] * st.Ser[j][k] + st.Sei[j][k] * st.Sei[j][k]) / (srr * st.See[k] + 1e-20));
+          const Ser = st.Ser[j], Sei = st.Sei[j];
+          for (let k = 0; k < K; k++) { const an = a / cnt[k]; Ser[k] = lam * Ser[k] + an * bx[0][k]; Sei[k] = lam * Sei[k] + an * bx[1][k]; }
+          // potenza R_j smussata (3 tap) e nel tempo
+          for (let k = 0; k < K; k++) x[2][k] = Rr[k] * Rr[k] + Ri[k] * Ri[k];
+          const pr2 = st.pr2[j];
+          for (let k = 0; k < K; k++) {
+            const k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
+            pr2[k] = 0.5 * pr2[k] + 0.5 * (0.25 * x[2][k0] + 0.5 * x[2][k] + 0.25 * x[2][k1]);
           }
-          let cyr = 0;
-          { const b0 = st.Br[0][k] * st.Br[0][k] + st.Bi[0][k] * st.Bi[0][k]; cyr = b0 / (g.A00[k] * st.Syy[k] + 1e-20); if (cross) { const b1 = st.Br[1][k] * st.Br[1][k] + st.Bi[1][k] * st.Bi[1][k]; cyr = Math.max(cyr, b1 / (g.A11[k] * st.Syy[k] + 1e-20)); } }
-          const pecho = pw * (o.c1 + o.c2 * (1 - Math.min(1, cyr))) + Math.min(1, cer) * st.pe2[k];
-          const gg = 1 - o.beta * bw[k] * pecho / (st.pe2[k] + 1e-12);
+        }
+        for (let k = 0; k < K; k++) x[2][k] = Er[k] * Er[k] + Ei[k] * Ei[k];
+        boxSum(x[2], bx[2], K, F);
+        const See = st.See, pe2 = st.pe2;
+        for (let k = 0; k < K; k++) {
+          const an = a / cnt[k], k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
+          See[k] = lam * See[k] + an * bx[2][k];
+          pe2[k] = 0.5 * pe2[k] + 0.5 * (0.25 * x[2][k0] + 0.5 * x[2][k] + 0.25 * x[2][k1]);
+        }
+        for (let k = 0; k < K; k++) {
+          const e2 = pe2[k], syy = st.Syy[k] * 1 + 1e-20;
+          let pw = st.pr2[0][k] * (st.Wr[0][k] * st.Wr[0][k] + st.Wi[0][k] * st.Wi[0][k]);
+          let cer = (st.Ser[0][k] * st.Ser[0][k] + st.Sei[0][k] * st.Sei[0][k]) / (A00[k] * See[k] + 1e-20);
+          let cyr = (st.Br[0][k] * st.Br[0][k] + st.Bi[0][k] * st.Bi[0][k]) / (A00[k] * syy);
+          if (cross) {
+            pw += st.pr2[1][k] * (st.Wr[1][k] * st.Wr[1][k] + st.Wi[1][k] * st.Wi[1][k]);
+            const c2 = (st.Ser[1][k] * st.Ser[1][k] + st.Sei[1][k] * st.Sei[1][k]) / (A11[k] * See[k] + 1e-20);
+            if (c2 > cer) cer = c2;
+            const y2 = (st.Br[1][k] * st.Br[1][k] + st.Bi[1][k] * st.Bi[1][k]) / (A11[k] * syy);
+            if (y2 > cyr) cyr = y2;
+          }
+          const pecho = pw * (o.c1 + o.c2 * (1 - (cyr > 1 ? 1 : cyr))) + (cer > 1 ? 1 : cer) * e2;
+          const gg = 1 - o.beta * bw[k] * pecho / (e2 + 1e-12);
           tmp2[k] = gg < gMin ? gMin : gg > 1 ? 1 : gg;
         }
+        const G = st.G;
         for (let k = 0; k < K; k++) {
           const k0 = k > 0 ? k - 1 : 0, k1 = k < K - 1 ? k + 1 : K - 1;
           const gs = 0.25 * tmp2[k0] + 0.5 * tmp2[k] + 0.25 * tmp2[k1];
-          st.G[k] += (gs < st.G[k] ? o.smoothDown : o.smoothUp) * (gs - st.G[k]);
+          G[k] += (gs < G[k] ? o.smoothDown : o.smoothUp) * (gs - G[k]);
         }
       }
     }
     for (let q = 0; q < nc; q++) { // Z = E + j O (E: stadio lineare, O: dopo soppressione) -> un'unica IFFT
-      const st = g.c[q];
+      const st = g.c[q], G = st.G, Er = st.Er, Ei = st.Ei, sup = o.suppress;
       for (let k = 0; k < K; k++) {
-        const gk = o.suppress ? st.G[k] : 1, er = st.Er[k], ei = st.Ei[k], or = gk * er, oi = gk * ei;
+        const gk = sup ? G[k] : 1, er = Er[k], ei = Ei[k], or = gk * er, oi = gk * ei;
         re[k] = er - oi; im[k] = ei + or;
         if (k > 0 && k < half) { re[N - k] = er + oi; im[N - k] = -ei + or; }
       }
       fft(re, im, true);
+      const o1 = st.o1, o2 = st.o2, base = st.base;
       for (let i = 0; i < N; i++) {
-        if (s + i >= 0) { const j = s + i - st.base; st.o1[j] += 0.5 * w[i] * re[i]; st.o2[j] += 0.5 * w[i] * im[i]; }
+        if (s + i >= 0) { const j = s + i - base, ww = 0.5 * w[i]; o1[j] += ww * re[i]; o2[j] += ww * im[i]; }
       }
     }
     g.fin = Math.max(g.fin, s + H);
@@ -701,7 +702,8 @@ export function createEchoRemoverV3({ delaySamples, sampleRate = 44100, channels
   const o = { ...V3_DEFAULTS, ...opts };
   const P = v3Params(delaySamples, sampleRate, o);
   const groups = [];
-  for (let c = 0; c < channels; c += 2) groups.push({ c0: c, g: v3Group(P, c + 1 < channels ? 2 : 1) });
+  const step = o.cross ? 2 : 1;
+  for (let c = 0; c < channels; c += step) groups.push({ c0: c, g: v3Group(P, c + step <= channels ? step : 1) });
   let total = 0, flushed = false;
   const emit = (limit) => {
     const out = [];
