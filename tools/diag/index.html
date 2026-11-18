@@ -17,7 +17,7 @@ button:focus-visible{outline:3px solid var(--fg)}pre{font-family:var(--mono);fon
 
 <div class="card"><h2>1 · Codec supportati</h2><button id="b1">Esegui</button><pre id="o1">In attesa.</pre></div>
 <div class="card"><h2>2 · Encoding HEVC reale (120 frame sintetici 1080p)</h2><button id="b2">Esegui</button><pre id="o2">In attesa.</pre></div>
-<div class="card"><h2>3 · Frame da un tuo video (10-bit? HDR?)</h2>
+<div class="card"><h2>3+4 · Frame da un tuo video (10-bit? HDR?) + encoding nativo HEVC Main10 / AV1</h2>
 <input type="file" id="f3" accept="video/*"><video id="v3" playsinline muted hidden></video><pre id="o3">Scegli un video .mov dell'iPhone.</pre></div>
 <div class="card"><h2>Risultati</h2><div class="row"><button id="bc">Copia risultati</button></div><pre id="oc">{}</pre></div>
 
@@ -54,6 +54,10 @@ $('f3').onchange=async e=>{const o=$('o3'),v=$('v3'),file=e.target.files[0];if(!
  try{const f=new VideoFrame(v,{timestamp:0});Object.assign(R.t3,{format:f.format,coded:[f.codedWidth,f.codedHeight],display:[f.displayWidth,f.displayHeight],colorSpace:f.colorSpace.toJSON?f.colorSpace.toJSON():f.colorSpace});
   try{const n=f.allocationSize();const buf=new Uint8Array(n);const lay=await f.copyTo(buf);R.t3.copyTo={bytes:n,planes:lay.length}}catch(err){R.t3.copyTo='ERR '+err.message}
   if(navigator.gpu){try{const ad=await navigator.gpu.requestAdapter();const dev=await ad.requestDevice();dev.importExternalTexture({source:f});R.t3.webgpuImport='ok';R.t3.gpuFeatures=[...ad.features].slice(0,30)}catch(err){R.t3.webgpuImport='ERR '+err.message}}
+  R.t4={};for(const codec of ['hvc1.2.4.L123.B0','hvc1.1.6.L123.B0','av01.0.08M.10','av01.0.08M.08']){const r={};const t0=performance.now();
+   try{const en=new VideoEncoder({output:(ch,meta)=>{r.bytes=(r.bytes||0)+ch.byteLength;r.type=ch.type;if(meta?.decoderConfig)r.cfg={codec:meta.decoderConfig.codec,colorSpace:meta.decoderConfig.colorSpace,descLen:meta.decoderConfig.description?.byteLength}},error:e=>r.err=e.message});
+    en.configure({codec,width:f.codedWidth,height:f.codedHeight,bitrate:8e6,framerate:60,latencyMode:'quality'});
+    for(let i=0;i<30;i++){const c2=new VideoFrame(f,{timestamp:i*16667});en.encode(c2,{keyFrame:i===0});c2.close()}await en.flush();en.close();r.fps30=Math.round(30/((performance.now()-t0)/1000))}catch(err){r.err=err.message}R.t4[codec]=r}
   f.close()}catch(err){R.t3.frameErr=err.message}
  o.textContent=JSON.stringify(R.t3,null,1);show()};
 $('bc').onclick=()=>{const s=JSON.stringify(R);navigator.clipboard?.writeText(s).then(()=>$('bc').textContent='Copiato',()=>{getSelection().selectAllChildren($('oc'));$('bc').textContent='Seleziona e copia a mano'})};
