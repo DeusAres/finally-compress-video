@@ -24,7 +24,8 @@ progress{width:100%}
   <div class="row">
     <label>Bitrate<select id="br"><option value="4">4 Mbps</option><option value="6">6 Mbps</option><option value="8" selected>8 Mbps</option><option value="10">10 Mbps</option></select></label>
     <label>Keyframe ogni<select id="gop"><option value="1">1 s</option><option value="4" selected>4 s</option><option value="10">10 s</option></select></label>
-    <label>Indice (moov)<select id="fs"><option value="in-memory" selected>in testa</option><option value="false">in coda</option></select></label>
+    <label>Indice (moov)<select id="fs"><option value="in-memory">in testa</option><option value="false" selected>in coda</option></select></label>
+    <label><span>Verifica frame</span><input type="checkbox" id="vf" checked></label>
   </div>
   <button id="go" disabled>Comprimi</button>
   <progress id="prog" max="1" value="0"></progress>
@@ -105,7 +106,8 @@ async function run() {
       nChunks++; pending.push(vsrc.add(pkt, m));
     } });
   const keyEvery = Math.max(1, Math.round(gopSec * 60)); let i = 0; const tE = performance.now();
-  for await (const vf of seekFrames(video, frames.map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })))) {
+  const vstats = $('vf').checked ? { n: 0, dup: 0, off: 0, noCallback: 0, samples: [] } : null;
+  for await (const vf of seekFrames(video, frames.map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), vstats)) {
     if (encErr) { vf.close(); throw encErr; }
     enc.encode(vf, i % keyEvery === 0); vf.close(); i++;
     await enc.drain(4);
@@ -113,6 +115,8 @@ async function run() {
   }
   await enc.flush(); enc.close(); releaseVideoElement(video); await Promise.all(pending);
   const encSec = (performance.now() - tE) / 1000;
+  if (vstats) log(`verifica frame: ${vstats.n} seek, doppioni ${vstats.dup}, fuori posto ${vstats.off}, senza callback ${vstats.noCallback} ${vstats.samples.length ? 'es. ' + JSON.stringify(vstats.samples) : ''}`);
+  { const d = frames.map((f) => Math.round(f.dur * 1000)); const h = {}; d.forEach((x) => h[x] = (h[x] || 0) + 1); log(`durate frame sorgente (ms→n): ${JSON.stringify(h)}`); }
   log(`codificati ${i} frame → ${nChunks} chunk in ${encSec.toFixed(1)} s (${(i / encSec).toFixed(0)} fps). NAL nel primo frame: ${firstKeyNal} (19/20 = IDR, 21 = CRA, 39 = SEI, 32-34 = parametri)`);
 
   // 5. Audio passthrough

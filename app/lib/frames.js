@@ -23,13 +23,23 @@ export async function openVideoElement(file) {
  * Seeks to the centre of each frame so VFR (17/33 ms) frames are hit exactly once.
  * Caller MUST close() every frame.
  */
-export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentation order */) {
+export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentation order */, stats = null) {
+  // stats (optional): verify via rVFC which frame was actually presented after each seek.
+  let prevMT = null;
   for (const f of frames) {
     const target = (f.ts + f.dur / 2) / 1e6;
-    if (Math.abs(video.currentTime - target) > 1e-6) {
-      video.currentTime = target;
-      const ev = await waitEvent(video, 'seeked', 3000);
-      if (ev === 'timeout') throw new Error(`seek timeout @${target.toFixed(3)}s`);
+    const pr = stats ? new Promise((res) => { const t = setTimeout(() => res(null), 60); video.requestVideoFrameCallback((_, md) => { clearTimeout(t); res(md.mediaTime); }); }) : null;
+    video.currentTime = target;
+    const ev = await waitEvent(video, 'seeked', 3000);
+    if (ev === 'timeout') throw new Error(`seek timeout @${target.toFixed(3)}s`);
+    if (stats) {
+      const mt = await pr; stats.n++;
+      if (mt == null) stats.noCallback++;
+      else {
+        if (prevMT != null && Math.abs(mt - prevMT) < 1e-4) stats.dup++;
+        if (mt < f.ts / 1e6 - 2e-3 || mt > (f.ts + f.dur) / 1e6 + 2e-3) { stats.off++; if (stats.samples.length < 5) stats.samples.push([+(f.ts / 1e6).toFixed(4), +mt.toFixed(4)]); }
+        prevMT = mt;
+      }
     }
     yield new VideoFrame(video, { timestamp: f.ts, duration: f.dur });
   }
