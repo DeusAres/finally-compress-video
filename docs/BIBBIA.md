@@ -229,6 +229,8 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 
 - 2026-11-18 — **Un solo posto**: l'app vive su `main`, servita da GitHub Pages "Deploy from branch: main / (root)" → https://deusares.github.io/finally-compress-video/ . `index.html` alla radice (documento completo), moduli in `app/lib/`, `.nojekyll`. Artifact e workflow Actions dismessi. Salvataggio: share sheet con solo il file → «Salva video» (stesso pattern di finally-cool-film).
 
+- 2026-11-19 — **Soglia qualità decisa dall'utente**: "quasi perfetto" = file 8 Mbps verificato (VMAF 88.9, frame allineati). 4 Mbps (VMAF 76.6) giudicato troppo estremo. Niente altri confronti visivi. Default app: 8 Mbps (IMG_7440: −60 %). Obiettivo −50 % raggiunto su contenuti ad alto bitrate.
+
 ## 13. STATO / RIPRESA (leggere per primo)
 
 **Fase attuale: RICERCA (pre-costruzione). Nessun codice app ancora.**
