@@ -10,8 +10,8 @@
 // Everything browser-dependent is INJECTED (deps), so this module runs in Node with stubs
 // (app/lib/ratecontrol.test.mjs). No WebCodecs/DOM access here.
 
-import { segmentScenes, pickTrialWindow } from './scenes.js?v=0.18';
-import { DEFAULT_CALIBRATION, pool, estimateVmaf } from './quality.js?v=0.18';
+import { segmentScenes, pickTrialWindow } from './scenes.js?v=0.19';
+import { DEFAULT_CALIBRATION, pool, estimateVmaf } from './quality.js?v=0.19';
 
 export const DEFAULTS = Object.freeze({
   targetVmaf: 88,        // user decision 2026-11-19 (BIBBIA §12): ≈ the verified 8 Mbps file

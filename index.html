@@ -1,32 +1,39 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.18</title>
+<title>Compressore HDR v0.19</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
 <style>
 html,body{touch-action:manipulation}
 body{margin:0;background:var(--bg)}
 #app{max-width:720px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px))}
 #notice{margin:0 0 12px;padding:10px 12px;font-size:14px;line-height:1.4;background:var(--surface);color:var(--text);box-shadow:var(--px-ring)}
+#update{display:block;width:100%;margin:0 0 12px;padding:12px;font:inherit;font-size:14px;line-height:1.4;text-align:left;cursor:pointer;border:0;background:var(--accent);color:var(--accent-text);box-shadow:var(--px-ring)}
+#update[hidden]{display:none}
 #notice[hidden]{display:none}#notice.bad{color:var(--danger)}#notice.warn{color:var(--warn,var(--text))}
 </style></head><body>
-<main id="app-wrap"><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
+<main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.18';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.18';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.18';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.18';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.18';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.18';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.18';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.18';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.18';
-import { mountUI } from './app/ui/ui.js?v=0.18';
-import { bus, emit } from './app/ui/bus.js?v=0.18';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.19';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.19';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.19';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.19';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.19';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.19';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.19';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.19';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.19';
+import { mountUI } from './app/ui/ui.js?v=0.19';
+import { bus, emit } from './app/ui/bus.js?v=0.19';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const log = (s) => emit('log', { line: String(s) });
 const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
+// Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
+const BUILD_ID = '0.19-20261119T205240Z';
+const BUILD_LABEL = 'v0.19 · 19/11 21:52';
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false }, NFtot = 0;
 let file = null, outFile = null, outName = '', info = null, running = false, cancelled = false, wake = null, store = null, cur = { enc: null, video: null, output: null };
 // job = packet store OPFS del job in corso (jobstore.js); savedJob = job salvato compatibile col file scelto; analysis = demux in cache per la ripresa in memoria
@@ -507,11 +514,52 @@ async function saveViaArtifact() {
 ui = mountUI(document.getElementById('app'), {
   onFile, onStart: start, onCancel() { cancelled = true; log('Annullamento richiesto'); }, onSave,
   onCopyLog() { const t = ui.getLog(); const ok = () => ui.setCopyMessage('Copiato!'); const sel = () => ui.setCopyMessage('Seleziona e copia dal log'); if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(ok, sel); else sel(); },
-}, { version: document.title.match(/v[\d.]+/)?.[0] });
+}, { version: BUILD_LABEL.startsWith('__') ? VER : BUILD_LABEL });
 ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false });
 // Niente zoom (iOS ignora user-scalable): blocco doppio tocco e pinch.
 for (const t of ['dblclick', 'gesturestart', 'gesturechange']) document.addEventListener(t, (e) => e.preventDefault(), { passive: false });
 let lastTouchEnd = 0;
 document.addEventListener('touchend', (e) => { const n = Date.now(); if (n - lastTouchEnd < 350 && !e.target.closest?.('input,select,textarea')) e.preventDefault(); lastTouchEnd = n; }, { passive: false });
+
+// ---- Aggiornamenti / offline (sw.js) ----
+// Il sito è servito da GitHub Pages senza CI: tools/stamp-version.sh scrive version.txt (= BUILD_ID) prima del commit.
+// All'avvio e al ritorno in primo piano si legge version.txt oltre ogni cache; se è nuovo: reload automatico UNA volta per id
+// (solo senza export in corso né video scelto; un job interrotto si riprende da OPFS), altrimenti un tasto «tocca per aggiornare».
+let updating = false;
+const updateBtn = $('update');
+async function freshReload() {
+  updating = true; log('aggiornamento: ricarico la pagina');
+  try { await fetch('index.html', { cache: 'reload' }); } catch { /* offline: reload semplice */ }
+  location.reload();
+}
+function offerUpdate(id) {
+  updateBtn.textContent = 'Nuova versione disponibile — tocca per aggiornare';
+  updateBtn.hidden = false; updateBtn.onclick = freshReload;
+  log(`aggiornamento: offerta mostrata (${id})`);
+}
+async function checkUpdate() {
+  if (BUILD_ID.startsWith('__') || updating) return;
+  try {
+    const r = await fetch(`version.txt?t=${Date.now()}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    const id = (await r.text()).trim();
+    if (!id || id === BUILD_ID) return;
+    log(`aggiornamento: nuova versione ${BUILD_ID} -> ${id}`);
+    let tried = null; try { tried = sessionStorage.getItem('fcv_reload_for'); } catch { /* storage bloccato */ }
+    if (!running && !file && tried !== id) {   // una sola volta per id: la CDN può servire ancora il vecchio index.html (niente loop)
+      try { sessionStorage.setItem('fcv_reload_for', id); } catch { /* storage bloccato */ }
+      return freshReload();
+    }
+    offerUpdate(id);
+  } catch { /* offline */ }
+}
+// sw.js solo da https (localhost/file: rete normale). persist(): il browser non sfratta l'app in cache né il job OPFS.
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('sw.js').then(() => log('sw: registrato'), (e) => log('sw: ' + (e?.message || e)));
+  navigator.storage?.persist?.().then((ok) => log(`storage persist: ${ok}`), () => {});
+}
+checkUpdate();
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
+addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate(); });
 </script>
 </body></html>
