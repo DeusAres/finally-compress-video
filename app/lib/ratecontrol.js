@@ -10,8 +10,8 @@
 // Everything browser-dependent is INJECTED (deps), so this module runs in Node with stubs
 // (app/lib/ratecontrol.test.mjs). No WebCodecs/DOM access here.
 
-import { segmentScenes, pickTrialWindow } from './scenes.js';
-import { DEFAULT_CALIBRATION, pool, estimateVmaf } from './quality.js';
+import { segmentScenes, pickTrialWindow } from './scenes.js?v=0.16';
+import { DEFAULT_CALIBRATION, pool, estimateVmaf } from './quality.js?v=0.16';
 
 export const DEFAULTS = Object.freeze({
   targetVmaf: 88,        // user decision 2026-11-19 (BIBBIA §12): ≈ the verified 8 Mbps file
@@ -19,13 +19,16 @@ export const DEFAULTS = Object.freeze({
   lowVmaf: 72,           // guard on the 5th-percentile frame (8 Mbps file: p5 73.0)
   minBitrate: 2e6, maxBitrate: 20e6,
   trialSec: 1.0,         // trial window length (VT rate control needs ~1 s to settle)
-  budget: 0.25,          // trial frames (counted once per round) ≤ budget × clip frames
+  trialPick: 'center',   // 'center' | 'max' (highest source bitrate), see scenes.pickTrialWindow
+  budget: 0.4,           // trial frames (counted once per round) ≤ budget × clip frames; with 2–4 s
+                         // segments and 1 s windows, 0.4 tests every segment of a typical clip (≈ 1/3)
+  untestedSafety: 1.2,   // extra factor on prior×correction for segments left without a trial
   maxRounds: 2,          // round 1: two bitrates in parallel; round 2: one refinement if extrapolated
   bracket: 1.3,          // round-1 bitrates = prior / bracket, prior × bracket
   slopePerDoubling: 10,  // VMAF points per ×2 bitrate, used only for extrapolation (IMG_7440: 9.6–11.3)
   // prior: needed bitrate ≈ k · srcBitrate^e (bit/s), fitted by tools/lab/calibrate_quality.mjs
-  prior: { k: 0.4, e: 1.0 },
-  segment: { minSec: 2, maxSec: 8 },
+  priorModel: { k: 0.4, e: 1.0 },
+  segment: { minSec: 2, maxSec: 4 },
   calibration: DEFAULT_CALIBRATION,
 });
 
@@ -34,7 +37,7 @@ const log2 = Math.log2;
 
 /** Prior guess of the bitrate a window needs, from its source (camera) bitrate. */
 export function predictBitrate(srcBitrate, o = DEFAULTS) {
-  const { k, e } = o.prior ?? DEFAULTS.prior;
+  const { k, e } = o.priorModel ?? DEFAULTS.priorModel;
   return clamp(k * Math.pow(srcBitrate, e), o.minBitrate ?? DEFAULTS.minBitrate, o.maxBitrate ?? DEFAULTS.maxBitrate);
 }
 
@@ -52,14 +55,15 @@ export function planSegments(frames, sourcePackets, opts = {}) {
   const pk = sourcePackets.map((p, i) => ({ size: p.size, key: !!p.key, dur: frames[i].dur }));
   const segs = segmentScenes(pk, { ...o.segment, lumaDiff: opts.lumaDiff });
   const segments = segs.map((s) => {
-    const trialWindow = pickTrialWindow(pk, s, o.trialSec);
+    const trialWindow = pickTrialWindow(pk, s, o.trialSec, o.trialPick);
     return { ...s, trialWindow, prior: predictBitrate(trialWindow?.srcBitrate ?? s.srcBitrate, o), trial: false };
   });
-  // Budget: each tested segment costs ≈ 1 window per round (round-1 bitrates run in parallel).
-  // Prefer long segments (they weigh most on file size); always test at least one if the clip
-  // is ≥ 3 s, to learn the clip-level correction applied to untested segments.
+  // Budget: each tested segment costs 1 window (round-1 bitrates run in parallel from the same
+  // frames); a refinement round only runs while budget is left (runSearch). Prefer long segments
+  // (they weigh most on file size); always test at least one if the clip is ≥ 3 s, to learn the
+  // clip-level correction applied to untested segments.
   const N = frames.length, budgetFrames = Math.floor(o.budget * N);
-  const expRounds = 1 + 0.5 * (o.maxRounds - 1);
+  const expRounds = 1;
   let used = 0;
   const order = [...segments].sort((a, b) => b.duration - a.duration);
   const clipSec = frames.reduce((s, f) => s + f.dur, 0);
@@ -103,7 +107,7 @@ export async function searchBitrate(segment, deps, opts = {}) {
   const o = { ...DEFAULTS, ...opts }, cal = o.calibration;
   const w = segment.trialWindow;
   const tMean = o.targetVmaf + o.marginSd * cal.sd, tLow = o.lowVmaf + o.marginSd * cal.sdLow;
-  const prior = clamp(opts.prior ?? segment.prior ?? predictBitrate(w.srcBitrate, o), o.minBitrate, o.maxBitrate);
+  const prior = clamp(opts.priorBitrate ?? segment.prior ?? predictBitrate(w.srcBitrate, o), o.minBitrate, o.maxBitrate);
   const points = [];
   const run = async (rates) => {
     rates = [...new Set(rates.map((r) => Math.round(clamp(r, o.minBitrate, o.maxBitrate) / 1e4) * 1e4))]
@@ -132,15 +136,17 @@ export async function searchBitrate(segment, deps, opts = {}) {
   const bitrate = Math.round(clamp(b, o.minBitrate, o.maxBitrate) / 1e4) * 1e4;
   // estimate at the chosen rate (log-linear between the points) for logging
   const at = (key) => { const pts = points.map((p) => ({ x: log2(p.bitrate), y: p[key] })).sort((a, c) => a.x - c.x); const x = log2(bitrate);
-    for (let i = 0; i + 1 < pts.length; i++) if (x >= pts[i].x && x <= pts[i + 1].x) return pts[i].y + (x - pts[i].x) / (pts[i + 1].x - pts[i].x) * (pts[i + 1].y - pts[i].y);
-    return NaN; };
+    if (pts.length === 1) return pts[0].y + (x - pts[0].x) * o.slopePerDoubling;
+    let i = 0; while (i < pts.length - 2 && x > pts[i + 1].x) i++; // interpolate, or extrapolate from the nearest pair
+    return pts[i].y + (x - pts[i].x) / (pts[i + 1].x - pts[i].x) * (pts[i + 1].y - pts[i].y); };
   return { bitrate, points, rounds, reason, est: { mean: at('q'), low: at('qLow') }, prior };
 }
 
 /**
  * Run the search over a plan. Tested segments get their searched bitrate; untested ones get their
- * prior multiplied by the clip correction learned on the tested ones (geometric mean of
- * searched/prior), so one trial already adapts the whole clip.
+ * prior × clip correction learned on the tested ones (geometric mean of searched/prior, + 1 s.d.)
+ * × untestedSafety (simulation on IMG_7440: an untested segment at prior×mean correction fell to
+ * VMAF 82 — inside a clip the source bitrate does not predict the need, so untested = risky).
  * onProgress?(i, segment, result) is called after each tested segment.
  * @returns {{segments: Array<segment & {bitrate:number, searched?:object}>, correction:number}}
  */
@@ -148,15 +154,21 @@ export async function runSearch(plan, deps, opts = {}, onProgress) {
   const o = { ...DEFAULTS, ...opts };
   const segs = plan.segments.map((s) => ({ ...s }));
   const logs = [];
+  let left = (plan.budgetFrames ?? Infinity) - (plan.trialFrames ?? 0);
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i]; if (!s.trial) continue;
-    const r = await searchBitrate(s, deps, o);
+    const wlen = s.trialWindow.endIdx - s.trialWindow.startIdx;
+    const r = await searchBitrate(s, deps, { ...o, maxRounds: left >= wlen ? o.maxRounds : 1 });
+    if (r.rounds > 1) left -= wlen * (r.rounds - 1);
     s.bitrate = r.bitrate; s.searched = r;
     if (r.reason === 'searched') logs.push(Math.log(r.bitrate / r.prior));
     onProgress?.(i, s, r);
   }
-  const correction = logs.length ? Math.exp(logs.reduce((a, b) => a + b, 0) / logs.length) : 1;
-  for (const s of segs) if (!s.trial) s.bitrate = Math.round(clamp(s.prior * correction, o.minBitrate, o.maxBitrate) / 1e4) * 1e4;
+  // conservative clip correction: geometric mean of searched/prior, plus one s.d. when ≥ 2 trials
+  const m = logs.length ? logs.reduce((a, b) => a + b, 0) / logs.length : 0;
+  const sd = logs.length > 1 ? Math.sqrt(logs.reduce((a, b) => a + (b - m) ** 2, 0) / (logs.length - 1)) : 0;
+  const correction = Math.exp(m + sd);
+  for (const s of segs) if (!s.trial) s.bitrate = Math.round(clamp(s.prior * correction * o.untestedSafety, o.minBitrate, o.maxBitrate) / 1e4) * 1e4;
   return { segments: segs, correction };
 }
 

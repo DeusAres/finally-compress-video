@@ -22,7 +22,8 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lumaFromPlane, ssim, msssim, psnr, toDb, half } from '../../app/lib/quality.js';
-import { segmentScenes as planSegments, sourceBitrateSeries } from '../../app/lib/scenes.js';
+import { segmentScenes, sourceBitrateSeries } from '../../app/lib/scenes.js';
+import { planSegments, runSearch, expectedBitrate, DEFAULTS } from '../../app/lib/ratecontrol.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const args = process.argv.slice(2);
@@ -173,8 +174,39 @@ const lf = linfit(ok.map((r) => Math.log(r.src)), ok.map((r) => Math.log(r.needV
 console.log(`log-log fit need = exp(${lf.a.toFixed(3)}) · src^${lf.b.toFixed(3)}  (sd log ${lf.sd.toFixed(3)})`);
 console.log(`metric-based need vs VMAF-based need: mean ratio ${mean(ok.filter((r) => Number.isFinite(r.needM) && r.needM > 0).map((r) => r.needM / r.needV)).toFixed(3)}`);
 
+// ---------- closed-loop simulation (replay of the real outputs) ----------
+// encodeTrial(window, r) is replayed by interpolating, in log-rate, the per-frame ssimDb of the real
+// outputs at the two nearest target bitrates; the "true" VMAF of a segment at rate r is interpolated
+// the same way. Approximation: real outputs were encoded continuously, a trial starts with an IDR.
+const rates = dists.map((d) => d.mbps * 1e6), dbF = dists.map((_, k) => res[k][V].map(toDb));
+const interp = (series, i, r) => {
+  const x = Math.log(r), xs = rates.map(Math.log); let j = 0; while (j < rates.length - 2 && x > xs[j + 1]) j++;
+  const u = (x - xs[j]) / (xs[j + 1] - xs[j]); return series[j][i] + u * (series[j + 1][i] - series[j][i]);
+};
+const frames = refPk.slice(0, N).map((p) => ({ ts: p.t, dur: 1 / fps })), srcPk = refPk.slice(0, N).map((p) => ({ size: p.size, key: p.key }));
+const deps = {
+  encodeTrial: async (w, rs) => rs.map((r) => ({ bitrate: r, bytes: r * (w.endIdx - w.startIdx) / fps / 8, encoded: r })),
+  measure: async (w, r) => { const o = []; for (let i = w.startIdx; i < w.endIdx; i++) o.push(interp(dbF, i, r)); return o; },
+};
+const trueV = (s, r) => mean(Array.from({ length: s.endIdx - s.startIdx }, (_, j) => interp(vm, s.startIdx + j, r)));
+const calib = { ...DEFAULTS.calibration, a: F.a, b: F.b, sd: F.sd, aLow: F.aLow, bLow: F.bLow, sdLow: F.sdLow };
+for (const [budget, trialPick] of [[0.2, 'center'], [0.4, 'center'], [1, 'max']]) {
+  const plan = planSegments(frames, srcPk, { budget, trialPick, calibration: calib });
+  const out = await runSearch(plan, deps, { calibration: calib });
+  const avg = expectedBitrate(out.segments);
+  console.log(`\nsimulation budget ${budget}, window ${trialPick}: ${out.segments.length} segments, trial frames ${plan.trialFrames}/${N}, correction ${out.correction.toFixed(2)}`);
+  for (const s of out.segments) console.log(`  [${s.startIdx}-${s.endIdx}) ${s.duration.toFixed(2)}s src ${(s.srcBitrate / 1e6).toFixed(1)}M → ${(s.bitrate / 1e6).toFixed(2)} Mbps ${s.trial ? `(trial [${s.trialWindow.startIdx}-${s.trialWindow.endIdx}), rounds ${s.searched.rounds}, est ${s.searched.est.mean.toFixed(1)}/p5 ${s.searched.est.low.toFixed(1)}, ${s.searched.reason})` : '(prior×corr)'}  true VMAF ${trueV(s, s.bitrate).toFixed(1)}`);
+  const tv = mean(out.segments.flatMap((s) => Array.from({ length: s.endIdx - s.startIdx }, (_, j) => interp(vm, s.startIdx + j, s.bitrate))));
+  console.log(`  avg ${(avg / 1e6).toFixed(2)} Mbps, clip VMAF ${tv.toFixed(1)}, min segment VMAF ${Math.min(...out.segments.map((s) => trueV(s, s.bitrate))).toFixed(1)}`);
+}
+{ // oracle on the default plan: per-segment rate where the TRUE VMAF hits the target (no margin)
+  const plan = planSegments(frames, srcPk, {}), need = (s) => { let lo = 2e6, hi = 20e6; for (let k = 0; k < 40; k++) { const m = Math.sqrt(lo * hi); if (trueV(s, m) >= TARGET) hi = m; else lo = m; } return hi; };
+  const nd = plan.segments.map(need), d = plan.segments.map((s) => s.duration);
+  console.log(`oracle (true VMAF ${TARGET} per segment): ${nd.map((x) => (x / 1e6).toFixed(2)).join(' / ')} Mbps → avg ${(nd.reduce((a, x, i) => a + x * d[i], 0) / d.reduce((a, b) => a + b) / 1e6).toFixed(2)}; fixed rate with every segment ≥ ${TARGET}: ${(Math.max(...nd) / 1e6).toFixed(2)} Mbps`);
+}
+for (const r of [8e6, 10e6, 12e6]) console.log(`fixed ${r / 1e6} Mbps: clip VMAF ${mean(vm[rates.indexOf(r)]).toFixed(1)}, min 1-s segment VMAF ${Math.min(...segs.map(([a, b]) => mean(vm[rates.indexOf(r)].slice(a, b)))).toFixed(1)}`);
+
 // scene planner on the source packets (sanity)
-const series = sourceBitrateSeries(refPk.slice(0, N).map((p) => ({ size: p.size, key: p.key, dur: 1 / fps })));
-const plan = planSegments(refPk.slice(0, N).map((p) => ({ size: p.size, key: p.key, dur: 1 / fps })), {});
-console.log(`\nplanSegments on source: ${plan.map((s) => `[${s.startIdx}-${s.endIdx}] ${(s.srcBitrate / 1e6).toFixed(1)}M c=${s.complexity.toFixed(2)}`).join('  ')} (series len ${series.length})`);
+const plan0 = segmentScenes(refPk.slice(0, N).map((p) => ({ size: p.size, key: p.key, dur: 1 / fps })), {});
+console.log(`\nsegmentScenes on source: ${plan0.map((s) => `[${s.startIdx}-${s.endIdx}) ${(s.srcBitrate / 1e6).toFixed(1)}M c=${s.complexity.toFixed(2)}`).join('  ')}`);
 console.log('\nDEFAULT_CALIBRATION =', JSON.stringify({ metric: 'ssimDb', factor: 2, segmentSec: SEG, a: +F.a.toFixed(3), b: +F.b.toFixed(4), sd: +F.sd.toFixed(2), aLow: +F.aLow.toFixed(3), bLow: +F.bLow.toFixed(4), sdLow: +F.sdLow.toFixed(2), plcc: +F.plcc.toFixed(3), srocc: +F.srocc.toFixed(3) }));

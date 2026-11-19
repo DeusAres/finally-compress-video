@@ -34,26 +34,29 @@ export function sourceBitrateSeries(packets) {
 }
 
 /**
- * Candidate hard cuts (frame indices) from size spikes of NON-key packets (a scene change coded as
- * P/B costs many more bits than its neighbours) and, if given, from luma-difference spikes.
+ * Candidate hard cuts (frame indices). Source packets follow a hierarchical I/P/B pattern
+ * (IMG_7440: P ≈ 100 KB, B ≈ 10–30 KB, I ≈ 250 KB every 28 frames), so a size spike is judged
+ * against the local 90th percentile of NON-key packets (≈ a typical P): a scene change coded as a
+ * P/B costs several times a typical P. Optional luma-difference spikes (mean |ΔY|, any scale) are
+ * judged against the local median. Cuts closer than minGapSec to the previous one are dropped.
  */
-export function detectCuts(packets, { lumaDiff = null, sizeSpike = 4, diffSpike = 5, window = 15 } = {}) {
-  const cuts = new Set(), n = packets.length;
-  const localMedian = (arr, i, ok) => {
-    const v = []; for (let j = Math.max(0, i - window); j < Math.min(n, i + window + 1); j++) if (j !== i && ok(j)) v.push(arr(j));
-    v.sort((a, b) => a - b); return v.length ? v[v.length >> 1] : Infinity;
+export function detectCuts(packets, { lumaDiff = null, sizeSpike = 3, diffSpike = 5, window = 30, minGapSec = 1 } = {}) {
+  const n = packets.length, cand = [];
+  const localQ = (get, i, ok, q) => {
+    const v = []; for (let j = Math.max(0, i - window); j < Math.min(n, i + window + 1); j++) if (j !== i && ok(j)) v.push(get(j));
+    if (v.length < 4) return Infinity;
+    v.sort((x, y) => x - y); return v[Math.min(v.length - 1, Math.floor(q * (v.length - 1)))];
   };
   for (let i = 1; i < n; i++) {
-    if (!packets[i].key) {
-      const m = localMedian((j) => packets[j].size, i, (j) => !packets[j].key);
-      if (packets[i].size > sizeSpike * m) cuts.add(i);
-    }
-    if (lumaDiff && lumaDiff[i] != null) {
-      const m = localMedian((j) => lumaDiff[j] ?? 0, i, () => true);
-      if (lumaDiff[i] > diffSpike * Math.max(m, 0.5)) cuts.add(i);
-    }
+    let hit = false;
+    if (!packets[i].key) hit = packets[i].size > sizeSpike * localQ((j) => packets[j].size, i, (j) => !packets[j].key, 0.9);
+    if (!hit && lumaDiff && lumaDiff[i] != null) hit = lumaDiff[i] > diffSpike * Math.max(localQ((j) => lumaDiff[j] ?? 0, i, () => true, 0.5), 0.5);
+    if (hit) cand.push(i);
   }
-  return [...cuts].sort((a, b) => a - b);
+  const cuts = []; let t = 0, last = -Infinity; const time = [];
+  for (let i = 0; i < n; i++) { time.push(t); t += packets[i].dur; }
+  for (const c of cand) if (time[c] - last >= minGapSec) { cuts.push(c); last = time[c]; }
+  return cuts;
 }
 
 /**
@@ -115,20 +118,27 @@ export function segmentScenes(packets, opts = {}) {
 }
 
 /**
- * Pick the trial window inside a segment: the contiguous stretch of ~trialSec, starting on a source
- * key packet when possible, with the HIGHEST source bitrate (worst case → conservative choice).
+ * Pick the trial window inside a segment: a contiguous stretch of ~trialSec starting on a source key
+ * packet (so the source can be decoded from there with a VideoDecoder).
+ *   policy 'center' (default): the key-aligned window closest to the segment centre (representative).
+ *   policy 'max': the window with the HIGHEST source bitrate (worst-case guess). On IMG_7440 the
+ *   source bitrate does not predict the needed bitrate inside a clip (corr −0.03, research/12), so
+ *   'max' over-spends without a quality benefit; kept for experiments.
  * @returns {{startIdx:number,endIdx:number,srcBitrate:number}}
  */
-export function pickTrialWindow(packets, seg, trialSec = 1.0) {
-  let best = null;
-  const starts = [];
-  for (let i = seg.startIdx; i < seg.endIdx; i++) if (packets[i].key || i === seg.startIdx) starts.push(i);
-  for (const s of starts) {
+export function pickTrialWindow(packets, seg, trialSec = 1.0, policy = 'center') {
+  let best = null, bestScore = -Infinity;
+  let t = 0; const tAt = new Map();
+  for (let i = seg.startIdx; i < seg.endIdx; i++) { tAt.set(i, t); t += packets[i].dur; }
+  const segDur = t;
+  for (let s = seg.startIdx; s < seg.endIdx; s++) {
+    if (!(packets[s].key || s === seg.startIdx)) continue;
     let d = 0, b = 0, e = s;
-    while (e < seg.endIdx && d < trialSec) { d += packets[e].dur; b += packets[e].size; e++; }
-    if (d < trialSec * 0.6 && best) continue; // too short near the end, keep a full one
+    while (e < seg.endIdx && d < trialSec - 1e-6) { d += packets[e].dur; b += packets[e].size; e++; }
+    if (d < trialSec * 0.6 && best) continue; // too short near the end
     const r = b * 8 / Math.max(d, 1e-9);
-    if (!best || r > best.srcBitrate) best = { startIdx: s, endIdx: e, srcBitrate: r };
+    const score = policy === 'max' ? r : -Math.abs(tAt.get(s) + d / 2 - segDur / 2);
+    if (score > bestScore) { bestScore = score; best = { startIdx: s, endIdx: e, srcBitrate: r }; }
   }
   return best;
 }

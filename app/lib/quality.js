@@ -173,15 +173,16 @@ export function pool(dbs, pLow = 0.05) {
 /**
  * Calibration ssimDb → VMAF (vmaf_v0.6.1), fitted by tools/lab/calibrate_quality.mjs on IMG_7440
  * (real app outputs 4/6/8/10/12 Mbps, v0.13, vs original), 1.0 s segments.
+ * VMAF 88 ⇔ ssimDb 13.53 (SSIM 0.9557); with the +1 sd margin 14.14 dB (SSIM 0.9615).
  *   vmaf ≈ a + b·ssimDb   (segment means; residual sd `sd`)
  * low: same for the 5th-percentile frame (vmaf_p5 vs ssimDb p5) — used as a guard.
  * Re-run the script after adding clips and paste the printed object here.
  */
 export const DEFAULT_CALIBRATION = Object.freeze({
-  metric: 'ssimDb', factor: 2, segmentSec: 1.0, source: 'IMG_7440 (1 clip, 5 bitrates)',
-  a: -51.53, b: 9.592, sd: 1.54,          // mean:  vmaf ≈ a + b·db
-  aLow: -55.47, bLow: 9.884, sdLow: 2.9,  // p5:    vmaf_p5 ≈ aLow + bLow·db_p5
-  plcc: 0.968, srocc: 0.968,
+  metric: 'ssimDb', factor: 2, segmentSec: 1.0, source: 'IMG_7440 v0.13, 4/6/8/10/12 Mbps, 9 segments × 5 rates',
+  a: 32.713, b: 4.085, sd: 2.48,          // mean:  vmaf ≈ a + b·mean(ssimDb)          (PLCC 0.958, SROCC 0.946)
+  aLow: 10.961, bLow: 5.8475, sdLow: 3.93, // p5:    vmaf_p5 ≈ aLow + bLow·p5(ssimDb)   (PLCC 0.936)
+  plcc: 0.958, srocc: 0.946,
 });
 
 /** Estimated VMAF from a pooled score ({mean, low}) using a calibration. */

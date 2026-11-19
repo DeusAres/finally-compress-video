@@ -1,14 +1,14 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js';
-import { sprite, SPRITES } from './sprite.js';
+import { bus } from './bus.js?v=0.16';
+import { sprite, SPRITES } from './sprite.js?v=0.16';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
 const BR_INFO = {
   4: { q: 2, t: 'Molto leggero: dettagli e ombre si impastano. Solo per chat.' },
   6: { q: 3, t: 'Leggero: bene sullo schermo del telefono, qualche difetto nelle scene mosse.' },
-  8: { q: 4, t: 'Consigliato: quasi identico all\'originale, circa metà del peso.' },
+  8: { q: 4, t: 'Consigliato: quasi identico all\'originale (VMAF ~89). Il risparmio dipende dal video: vedi la stima qui accanto.' },
   10: { q: 4, t: 'Più margine per scene difficili: acqua, foglie, coriandoli, movimento.' },
   12: { q: 5, t: 'Qualità alta, risparmio moderato.' },
   14: { q: 5, t: 'Quasi trasparente: serve solo con originali molto dettagliati.' },
