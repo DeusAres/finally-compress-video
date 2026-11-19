@@ -2,7 +2,7 @@
 <html lang="it">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Anteprima UI</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -50,13 +50,11 @@ function chooseFile() {
   say('Dolby Vision sorgente: sì (dvvC)');
   say('RPU Dolby Vision letti: 5004');
 }
-const FUN = () => { const slot = document.getElementById('fun-slot'); if (!slot.firstChild) slot.innerHTML = '<div class="fake-fun">fun.js monta qui l\'intrattenimento</div>'; };
-const clearFun = () => { document.getElementById('fun-slot').innerHTML = ''; };
 
 let stop = false;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function run(s = ui.getSettings(), speed = 1) {
-  stop = false; ui.setBusy(true); FUN();
+  stop = false; ui.setBusy(true);
   const total = 5004, t0 = performance.now(), el = () => (performance.now() - t0) / 1000 * 40 / speed;
   emit('phase', { phase: 'analisi' });
   for (let i = 0; i <= 10 && !stop; i++) { emit('progress', { phase: 'analisi', done: i, total: 10, elapsedS: el() }); await sleep(40 * speed); }
@@ -67,12 +65,12 @@ async function run(s = ui.getSettings(), speed = 1) {
     if (i % 450 === 0) emit('frame', { index: i });
     await sleep(16 * speed);
   }
-  if (stop) { say('annullato'); clearFun(); ui.setBusy(false); return; }
+  if (stop) { say('annullato'); ui.setBusy(false); return; }
   emit('phase', { phase: 'audio' }); say('audio: aac');
   for (let i = 0; i <= 10; i++) { emit('progress', { phase: 'audio', done: i, total: 10, elapsedS: el() }); await sleep(30 * speed); }
   emit('phase', { phase: 'scrittura' });
   for (let i = 0; i <= 4; i++) { emit('progress', { phase: 'scrittura', done: i, total: 4, elapsedS: el() }); await sleep(30 * speed); }
-  emit('phase', { phase: 'fatto' }); clearFun();
+  emit('phase', { phase: 'fatto' });
   const out = s.bitrateMbps * 1.36 * FILE.durationS / 8 * 0.95 / 1.048576 + 2.6;
   say(`COMPRESSIONE: ${FILE.sizeMB} MB → ${out.toFixed(2)} MB`);
   emit('result', { inMB: FILE.sizeMB, outMB: out, savedPct: (1 - out / FILE.sizeMB) * 100, fileName: `IMG_7440_${s.bitrateMbps}M_k${s.keyframeS}s_aCopy_v0.15.mp4` });
@@ -81,24 +79,24 @@ async function run(s = ui.getSettings(), speed = 1) {
 
 // stati statici per screenshot
 function show(state) {
-  stop = true; clearFun(); ui.reset();
+  stop = true; ui.reset();
   if (state === 'pick') return;
   chooseFile();
   if (state === 'ready') return;
-  ui.setBusy(true); FUN();
+  ui.setBusy(true);
   emit('phase', { phase: 'analisi' }); emit('phase', { phase: 'video' });
   emit('progress', { phase: 'video', done: 2952, total: 5004, fps: 41.3, etaS: 49.7, elapsedS: 76.2 });
   emit('frame', { index: 2952 });
   if (state === 'busy') return;
   if (state === 'done') {
-    emit('phase', { phase: 'audio' }); emit('phase', { phase: 'scrittura' }); emit('phase', { phase: 'fatto' }); clearFun();
+    emit('phase', { phase: 'audio' }); emit('phase', { phase: 'scrittura' }); emit('phase', { phase: 'fatto' });
     emit('result', { inMB: 412.6, outMB: 86.9, savedPct: 78.9, fileName: 'IMG_7440_8M_k4s_aCopy_v0.15.mp4' });
     ui.setBusy(false); return;
   }
   if (state === 'error') {
     say('ERRORE: EncodingError: VideoEncoder: codec reclaimed due to inactivity');
     emit('error', { message: 'EncodingError: l\'encoder video è stato interrotto (Safari in background?)' });
-    emit('phase', { phase: 'errore' }); clearFun(); ui.setBusy(false);
+    emit('phase', { phase: 'errore' }); ui.setBusy(false);
   }
 }
 document.getElementById('dev').addEventListener('click', (e) => {

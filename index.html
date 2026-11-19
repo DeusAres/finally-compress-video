@@ -1,7 +1,8 @@
-<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.16</title>
+<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
+<title>Compressore HDR v0.17</title>
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
 <style>
+html,body{touch-action:manipulation}
 body{margin:0;background:var(--bg)}
 #app{max-width:720px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px))}
 #notice{margin:0 0 12px;padding:10px 12px;font-size:14px;line-height:1.4;background:var(--surface);color:var(--text);box-shadow:var(--px-ring)}
@@ -9,16 +10,15 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.16';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.16';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.16';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.16';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.16';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.16';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.16';
-import { mountUI } from './app/ui/ui.js?v=0.16';
-import { mountFun } from './app/ui/fun.js?v=0.16';
-import { bus, emit } from './app/ui/bus.js?v=0.16';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.17';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.17';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.17';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.17';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.17';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.17';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.17';
+import { mountUI } from './app/ui/ui.js?v=0.17';
+import { bus, emit } from './app/ui/bus.js?v=0.17';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const log = (s) => emit('log', { line: String(s) });
@@ -118,7 +118,7 @@ async function start(s) {
     log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || ''));
     try { cur.enc?.close(); } catch {} try { if (cur.video) releaseVideoElement(cur.video); } catch {} try { await cur.output?.cancel(); } catch {}
     cur = { enc: null, video: null, output: null }; try { await store?.remove(); } catch {} store = null;
-    if (e?.name === 'Cancelled') { fun?.stop(); } else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); }
+    if (e?.name === 'Cancelled') { /* annullato */ } else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); }
   }
   running = false; notice('');
   try { localStorage.removeItem('jobRunning'); } catch {}
@@ -334,12 +334,14 @@ async function saveViaArtifact() {
   catch (e) { ui.setSaveMessage( `Non salvato (${e.code || e.message}).`); }
 }
 
-let fun = null;
 ui = mountUI(document.getElementById('app'), {
   onFile, onStart: start, onCancel() { cancelled = true; log('Annullamento richiesto'); }, onSave,
   onCopyLog() { const t = ui.getLog(); const ok = () => ui.setCopyMessage('Copiato!'); const sel = () => ui.setCopyMessage('Seleziona e copia dal log'); if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(ok, sel); else sel(); },
 }, { version: document.title.match(/v[\d.]+/)?.[0] });
 ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy' });
-fun = mountFun(document.getElementById('fun-slot'), bus);
+// Niente zoom (iOS ignora user-scalable): blocco doppio tocco e pinch.
+for (const t of ['dblclick', 'gesturestart', 'gesturechange']) document.addEventListener(t, (e) => e.preventDefault(), { passive: false });
+let lastTouchEnd = 0;
+document.addEventListener('touchend', (e) => { const n = Date.now(); if (n - lastTouchEnd < 350 && !e.target.closest?.('input,select,textarea')) e.preventDefault(); lastTouchEnd = n; }, { passive: false });
 </script>
 </body></html>

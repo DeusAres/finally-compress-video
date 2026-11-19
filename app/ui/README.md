@@ -52,12 +52,15 @@ Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,
 
 Percentuale complessiva = pesi per fase (analisi 4 %, video 86 %, audio 7 %, scrittura 3 %), mai decrescente. Se `etaS` manca è stimata da `elapsedS`.
 
-## Per fun.js
+## Intrattenimento
 
-- Slot: `<div id="fun-slot">` dentro il pannello di avanzamento; è visibile solo durante l'export e nascosto quando vuoto (`:empty`). Svuotalo a fine export.
-- Il root ha `data-busy="true"` durante l'export e `data-stage` ∈ `pick|ready|busy|done|error`.
-- Usa i token (`--px-*`, `--surface`, `--text`, `--muted`, `--accent`, `--ok`, `--line`, `--px-unit`, `--px-ring`, `--px-drop`, `--font-pixel`, `--font-digits`) e `sprite()`/`SPRITES` da `sprite.js`.
-- Durante l'export: animazioni solo `steps()`, poche e piccole (l'encoder usa CPU/GPU), niente canvas a 60 fps; rispetta `prefers-reduced-motion` (il tema già azzera le durate).
+Rimosso dall'app dalla v0.17 (`fun.js` resta nel repo ma non è caricato; nessun `#fun-slot`). Il root ha `data-busy` e `data-stage` ∈ `pick|ready|busy|done|error`.
+
+## Drag & drop, zoom, previsione
+
+- Rilascio file su tutta la pagina (window: dragenter/over/leave/drop) con overlay pixel art; solo il primo video, altri tipi → messaggio; ignorato durante l'export.
+- Zoom disattivato: viewport `maximum-scale=1,user-scalable=no`, `touch-action: manipulation`, guard su `dblclick`/`gesturestart`/doppio `touchend`.
+- Al via la UI memorizza il peso stimato; il risultato mostra «Previsto ≈ X MB · Reale Y MB · scarto ±Z %» (nota se >15 %) e lo scrive nel log.
 
 ## Token principali (`theme.css`)
 

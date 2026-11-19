@@ -1,7 +1,7 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.16';
-import { sprite, SPRITES } from './sprite.js?v=0.16';
+import { bus } from './bus.js?v=0.17';
+import { sprite, SPRITES } from './sprite.js?v=0.17';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -78,6 +78,8 @@ function template(opts) {
   <li data-step="3"><span class="n">3</span>Comprimi</li>
 </ol>
 
+<div class="fcv-drop" data-ref="drop" hidden aria-hidden="true">${s('film', { scale: 8, className: 'px-bob' })}<b class="px-title">Rilascia qui il video</b><span>Solo il primo file video</span></div>
+
 <section class="px-panel fcv-card fcv-step-file" aria-labelledby="fcv-h1">
   <header><span class="num">1</span><h2 class="px-title" id="fcv-h1">Scegli il video</h2></header>
   <label class="fcv-pick" data-ref="pick">
@@ -86,6 +88,7 @@ function template(opts) {
     <span class="fcv-pick-cta">Tocca per scegliere</span>
     <small>Dalla Libreria Foto o da File. Nessun caricamento: il video non lascia l'iPhone.</small>
   </label>
+  <p class="fcv-drop-msg" data-ref="dropMsg" role="status" aria-live="polite" hidden></p>
   <div class="fcv-file" data-ref="fileBox" hidden>
     <div class="fcv-file-name">${s('film', { scale: 4 })}<div><strong data-ref="fName"></strong><div class="fcv-chips" data-ref="fChips"></div></div></div>
     <div class="fcv-stats">
@@ -144,7 +147,6 @@ function template(opts) {
     <div class="fcv-stat"><span class="px-label">Velocità</span><span class="v px-digits" data-ref="fps">—</span></div>
     <div class="fcv-stat"><span class="px-label">Fotogrammi</span><span class="v px-digits" data-ref="frames">—</span></div>
   </div>
-  <div id="fun-slot"></div>
   <p class="fcv-go-note">Tieni Safari aperto e in primo piano fino alla fine.</p>
   <button class="px-btn px-btn--danger fcv-cancel" data-ref="cancel">Annulla</button>
   <p class="px-sr" aria-live="polite" data-ref="live"></p>
@@ -162,6 +164,8 @@ function template(opts) {
     <div class="fcv-cmp-row"><span class="px-label">Dopo</span><div class="px-bar" data-ref="afterBar"><i></i></div><span class="v px-digits" data-ref="outMB"></span></div>
   </div>
   <p class="fcv-freed" data-ref="freed"></p>
+  <p class="fcv-pred" data-ref="pred" hidden></p>
+  <p class="fcv-pred-note" data-ref="predNote" hidden></p>
   <button class="px-btn px-btn--ok px-btn--xl px-btn--block" data-ref="save">${s('scrittura', { scale: 3 })}Salva nelle Foto</button>
   <p class="fcv-save-msg" data-ref="saveMsg" aria-live="polite"></p>
   <p class="fcv-outname" data-ref="outName"></p>
@@ -247,6 +251,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
   function onPicked(e) {
     const f = e.target.files?.[0]; e.target.value = '';
     if (!f) return;
+    acceptFile(f);
+  }
+  function acceptFile(f) {
+    R.dropMsg.hidden = true;
     st.file = { name: f.name, sizeMB: f.size / 1048576 };
     showFile(st.file);
     R.log.textContent = ''; st.logLines = 0; R.logCount.textContent = '0';
@@ -267,6 +275,28 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.fChips.innerHTML = chips.join('');
     updateEstimate();
   }
+  // ---------- drag & drop (pagina intera; iPad/iPhone: trascinamento da Foto in Split View / Slide Over) ----------
+  const isVideo = (f) => /^video\//.test(f.type) || /\.(mov|mp4|m4v|hevc)$/i.test(f.name || '');
+  const hasFiles = (e) => { const t = e.dataTransfer?.types; return !!t && [...t].includes('Files'); };
+  let dragDepth = 0;
+  const dropOn = (on) => { R.drop.hidden = !on; root.classList.toggle('fcv-dragging', on); };
+  const dropMessage = (t) => { R.dropMsg.textContent = t; R.dropMsg.hidden = false; };
+  const onDragEnter = (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (st.busy) return; dragDepth++; dropOn(true); };
+  const onDragOver = (e) => { if (!hasFiles(e)) return; e.preventDefault(); try { e.dataTransfer.dropEffect = st.busy ? 'none' : 'copy'; } catch {} };
+  const onDragLeave = (e) => { if (!hasFiles(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) dropOn(false); };
+  const onDrop = (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); dragDepth = 0; dropOn(false);
+    if (st.busy) { dropMessage('Compressione in corso: attendi la fine prima di cambiare video.'); return; }
+    const files = [...(e.dataTransfer.files || [])];
+    if (!files.length) for (const it of e.dataTransfer.items || []) { const f = it.kind === 'file' ? it.getAsFile() : null; if (f) files.push(f); }
+    const v = files.find(isVideo);
+    if (!v) { dropMessage(files.length ? 'Questo non è un video: trascina un file video (MOV, MP4).' : 'Nessun file ricevuto: prova col pulsante «Tocca per scegliere».'); return; }
+    acceptFile(v);
+    if (files.length > 1) dropMessage('Rilasciati più file: uso solo il primo video.');
+  };
+  const dndTargets = [['dragenter', onDragEnter], ['dragover', onDragOver], ['dragleave', onDragLeave], ['drop', onDrop]];
+  for (const [t, h] of dndTargets) window.addEventListener(t, h);
   for (const k of ['input', 'input2', 'input3']) R[k].addEventListener('change', onPicked);
 
   // ---------- passo 2: impostazioni ----------
@@ -289,11 +319,12 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}`;
     updateEstimate();
   }
+  const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? (br + 0.26) * d / 8 * (1e6 / 1048576) : null);
   function updateEstimate() {
     const d = st.file?.durationS, src = st.file?.sizeMB;
     R.warn.hidden = true;
     if (!d) { R.est.innerHTML = st.file ? '…' : '—'; return; }
-    const est = (st.settings.bitrateMbps + 0.26) * d / 8 * (1e6 / 1048576);
+    const est = predictMB();
     const pct = src ? (1 - est / src) * 100 : null;
     R.est.innerHTML = `≈${fmtMB(est)}<small style="font-size:18px">MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))}%</span>` : '');
     if (pct != null && pct < 10) {
@@ -319,7 +350,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   // ---------- avanzamento ----------
   function startProgress() {
-    st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
+    st.predMB = predictMB(); st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
     R.log.textContent = ''; st.logLines = 0; R.logCount.textContent = '0';
     const s = st.settings;
     R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span><span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
@@ -390,6 +421,14 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.afterBar.style.setProperty('--p', String(Math.max(0.02, Math.min(1, r.outMB / r.inMB))));
     const freed = r.inMB - r.outMB;
     R.freed.innerHTML = freed > 0 ? `Hai liberato <b>${fmtMB(freed)} MB</b> · ${nf1.format(r.inMB / r.outMB)}× più piccolo` : 'Il video originale era già molto compresso: prova un bitrate più basso.';
+    R.pred.hidden = R.predNote.hidden = true;
+    if (st.predMB > 0) {
+      const dev = (r.outMB / st.predMB - 1) * 100, sign = dev > 0 ? '+' : dev < 0 ? '−' : '±';
+      R.pred.textContent = `Previsto ≈ ${fmtMB(st.predMB)} MB · Reale ${fmtMB(r.outMB)} MB · scarto ${sign}${nf1.format(Math.abs(dev))} %`;
+      R.pred.hidden = false;
+      if (Math.abs(dev) > 15) { R.predNote.textContent = 'Scarto oltre il 15%: la previsione usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.'; R.predNote.hidden = false; }
+      appendLog(`PREVISIONE: previsto ≈ ${st.predMB.toFixed(2)} MB · reale ${r.outMB.toFixed(2)} MB · scarto ${dev > 0 ? '+' : ''}${dev.toFixed(1)} %`);
+    }
     R.outName.textContent = r.fileName || '';
     R.saveMsg.textContent = '';
     setStage('done');
@@ -465,6 +504,6 @@ export function mountUI(root, handlers = {}, opts = {}) {
     getLog: () => R.log.textContent,
     /** Torna al passo 1 (nessun file). */
     reset() { st.file = null; R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
-    destroy() { listeners.forEach(([t, h]) => bus.removeEventListener(t, h)); root.innerHTML = ''; },
+    destroy() { for (const [t, h] of dndTargets) window.removeEventListener(t, h); listeners.forEach(([t, h]) => bus.removeEventListener(t, h)); root.innerHTML = ''; },
   };
 }

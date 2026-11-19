@@ -120,8 +120,6 @@ details.fcv-adv[open] { display: grid; gap: 16px; padding-bottom: 6px; }
 .fcv-chain li[data-s="done"] { color: var(--ok-strong); }
 .fcv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .fcv-grid .fcv-stat .v { font-size: 34px; }
-#fun-slot:empty { display: none; }
-#fun-slot { min-height: 0; }
 .fcv-cancel { justify-self: center; }
 
 /* ---------- Risultato ---------- */
@@ -194,3 +192,19 @@ details.fcv-log > summary .count { margin-left: auto; }
   .fcv-pct { font-size: 64px; }
   .fcv-big { font-size: 96px; }
 }
+
+/* Drag & drop */
+.fcv-drop {
+  position: fixed; inset: 0; z-index: 50; display: grid; place-content: center; justify-items: center; gap: 14px; text-align: center; padding: 24px;
+  background: repeating-linear-gradient(45deg, transparent 0 8px, color-mix(in srgb, var(--accent) 14%, transparent) 8px 16px), color-mix(in srgb, var(--bg) 92%, transparent);
+  color: var(--accent); outline: calc(var(--px-unit) * 2) dashed var(--accent); outline-offset: calc(var(--px-unit) * -6); pointer-events: none;
+}
+.fcv-drop[hidden] { display: none; }
+.fcv-drop svg { width: 64px; height: 64px; }
+.fcv-drop b { font-size: 20px; text-transform: uppercase; }
+.fcv-drop span { color: var(--muted); font-size: 14px; }
+.fcv-drop-msg { margin: 0; padding: 8px 10px; font-size: 14px; color: var(--danger); box-shadow: var(--px-ring); background: var(--surface); }
+.fcv-drop-msg[hidden] { display: none; }
+.fcv-pred { margin: 0; font: 700 13px/1.4 var(--font-pixel); padding: 8px 10px; background: var(--surface); box-shadow: var(--px-ring); }
+.fcv-pred-note { margin: 0; font-size: 13px; color: var(--muted); }
+.fcv-pred[hidden], .fcv-pred-note[hidden] { display: none; }
