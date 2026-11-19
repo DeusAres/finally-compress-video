@@ -1,0 +1,197 @@
+# 12 — Ricerca a circuito chiuso del bitrate per scena
+
+Data: 2026-11-19. Moduli: `app/lib/quality.js`, `app/lib/scenes.js`, `app/lib/ratecontrol.js`; test `app/lib/ratecontrol.test.mjs` (`node --test`, 19 test, solo stub); taratura `tools/lab/calibrate_quality.mjs`.
+Legenda: ✅ misurato da noi · 🟡 stima/ragionamento · ❓ da verificare su device.
+
+## 1. Problema
+
+L'encoder di Safari 27 (VideoToolbox realtime via WebCodecs) ha una sola leva di qualità: il `bitrate` medio. Non c'è un quantizzatore e non esiste CRF (BIBBIA §8, research/02 §10). Lo stesso bitrate dà qualità molto diverse da scena a scena. Su IMG_7440, a 8 Mbps fissi, la media del clip è VMAF 88.8, ma i singoli secondi vanno da 81.7 a 95.7 ✅ (tabella §4). L'obiettivo è dare a ogni segmento il bitrate minimo che porta il VMAF stimato a ≥ 88, cioè la soglia decisa dall'utente (BIBBIA §12). La qualità si misura nel browser con una metrica leggera tarata su VMAF.
+
+Schema:
+```
+demux (metadataOnly: size/key/dur) ─► scenes.segmentScenes ─► ratecontrol.planSegments (finestre di prova, budget)
+        ─► per segmento: searchBitrate
+              encodeTrial(finestra 1 s, [b/1.3, b×1.3])   ← VideoEncoder separati, stessi frame nativi (seek)
+              measure: VideoDecoder(prova) + VideoDecoder(sorgente) ─► luma Y 8-bit ─► SSIM 540×960 ─► ssimDb
+              ssimDb ─► VMAF stimato (taratura) ─► interpolazione log-rate ─► bitrate minimo (+margine, guardia p5)
+        ─► encode finale: encodeSchedule(i) → setBitrate()+keyFrame all'inizio di ogni segmento
+```
+
+## 2. Metrica scelta: SSIM della luma a 540×960, in dB
+
+**Scelta**: SSIM in stile x264 (somme su blocchi 4×4, finestre 8×8 su una griglia di 4 px), calcolata sulla sola luma. La luma è sottocampionata 2× con un filtro box (1080×1920 → 540×960). Il valore usato è `ssimDb = −10·log10(1−SSIM)`. Per segmento si prende la media dei dB per-frame e il 5° percentile come guardia. La funzione `frameScore` è pura e gira identica in Node e nel browser.
+
+**Pipeline dei pixel (decisione HLG 10-bit → 8-bit)**. Le due luma vengono confrontate nel dominio dei code value HLG, in range limitato, senza tone mapping e senza conversione di colore.
+- Nel browser entrambe le immagini passano da `VideoDecoder` → NV12 8-bit (comportamento misurato in research/02 §10, run 4), poi `copyTo` del solo piano Y. Le immagini sono:
+  - la prova ricodificata;
+  - la sorgente, decodificata dai pacchetti originali a partire dal keyframe che precede la finestra.
+
+  Non c'è alcuna conversione YCbCr→RGB, quindi matrice e range sono identici per costruzione.
+- In Node (taratura) ffmpeg decodifica a `gray10le` (piano Y 10-bit, già ruotato). `lumaFromPlane(…, {bitDepth:10})` converte con `(Y10+2)>>2`, cioè l'arrotondamento che ci si aspetta da un decoder 10→8. In seguito applica lo stesso box 2×.
+- Fallback per i frame nativi (`format:null`, niente `copyTo`): `lumaViaCanvas` (canvas 2D → `getImageData` → Y BT.2020). Si può usare solo se **anche** l'altro lato passa dalla stessa funzione: il browser può applicare matrici o tone mapping propri ❓.
+
+**Varianti confrontate** (IMG_7440, 522 frame × 5 bitrate). La colonna "errore bitrate" (LOSO) è l'errore sul bitrate necessario per raggiungere VMAF 88, stimato lasciando fuori un segmento alla volta (leave-one-segment-out) e con segmenti da 1 s. È la grandezza che conta davvero per la ricerca.
+
+| variante | costo Node ms/frame* | PLCC/SROCC per-frame | PLCC/SROCC segmento 1 s | errore bitrate (rmse log2) |
+|---|---|---|---|---|
+| **SSIM 540×960 (scelta)** | **≈ 4** (1.6 downsample + 2.5 SSIM) | 0.911 / 0.929 | **0.958 / 0.946** | 0.236 (±18 %) |
+| SSIM 1080×1920 | 9.5 | 0.904 / 0.928 | 0.970 / 0.969 | 0.197 |
+| SSIM 270×480 | 0.6 | 0.891 / 0.905 | 0.929 / 0.917 | — |
+| MS-SSIM 3 scale, 1080p | 16.8 | 0.912 / 0.930 | 0.957 / 0.947 | 0.239 |
+| MS-SSIM 3 scale, 540×960 | 4.4 | 0.899 / 0.914 | 0.938 / 0.923 | — |
+| PSNR 540×960 | 0.6 | 0.893 / 0.937 | 0.967 / 0.978 | 0.173 |
+| SSIM su gradienti 540×960 | 3.9 | 0.909 / 0.933 | 0.967 / 0.965 | 0.203 |
+| SSIM + log(moto sorgente) | ≈ 4.5 | — | — | 0.153 (2 s: 0.158) |
+
+\* Xeon 2.3 GHz, un thread. Su iPhone 17 Pro Max (JSC) ci si aspetta lo stesso ordine di grandezza ❓.
+
+Perché SSIM a 540×960:
+1. Le varianti stanno tutte in un intervallo stretto di correlazione per segmento (0.93–0.97). Con segmenti da 2 s l'ordine delle varianti cambia: SSIM 540×960 ha rmse 0.178 contro 0.195 di quella a 1080p. Su un solo clip quindi nessuna variante vince in modo robusto.
+2. Il costo è circa 1/2–1/4 della versione full-res. Inoltre la cache della luma sorgente per una finestra di 1 s pesa ~31 MB come Uint8, contro 124 MB a 1080p: un dato rilevante dato il budget memoria di research/03.
+3. Misurare un frame su due (stride 2) non cambia la correlazione (PLCC 0.958 → 0.956; stride 4 → 0.945) ✅ e dimezza la CPU.
+
+Le varianti con il moto sorgente (VMAF ha una feature di "motion masking") sono le migliori, ma hanno 3 parametri tarati su 9 segmenti di un solo clip. Sono documentate qui e non attivate. Vanno riprese quando ci saranno più clip.
+
+## 3. Taratura metrica → VMAF ✅
+
+Dati: originale IMG_7440 e output reali dell'app v0.13 a 4/6/8/10/12 Mbps (frame verificati, GOP 4 s). VMAF `vmaf_v0.6.1` per-frame, calcolato come in `tools/lab/vmaf_score.sh`: medie 76.6 / 84.1 / 88.8 / 92.0 / 94.4, che coincidono con research/05. I campioni sono 9 segmenti da 1 s (60 frame) × 5 bitrate = 45 punti.
+
+- **Media**: `VMAF ≈ 32.71 + 4.085 · ssimDb`, residuo s.d. 2.48, PLCC 0.958 / SROCC 0.946.
+- **Guardia p5**: `VMAF_p5 ≈ 10.96 + 5.85 · ssimDb_p5`, s.d. 3.93, PLCC 0.936.
+- **Soglia equivalente a VMAF 88**: ssimDb 13.53 (SSIM 0.9557). **Con margine +1 s.d. (VMAF stimato 90.5): ssimDb 14.14 (SSIM 0.9615)**. È il bersaglio usato da `searchBitrate`.
+- Guardia: p5 stimato ≥ 72 + 3.93. Il file a 8 Mbps giudicato "quasi perfetto" ha p5 73.0.
+- Il margine di 2.48 VMAF corrisponde a circa +19 % di bitrate (pendenza misurata ~10 VMAF per raddoppio: 9.6–11.3 tra 6 e 12 Mbps).
+
+Valori in `quality.DEFAULT_CALIBRATION`. Per rifare la taratura con altri clip: `node tools/lab/calibrate_quality.mjs`, poi si incolla l'oggetto stampato.
+
+Limiti: la taratura viene da **un solo clip** (diurno, poco rumore). VMAF SDR applicato a HLG è indicativo (research/05). Le prove partono con un IDR, mentre gli output usati per la taratura sono codificati senza interruzioni: la prova è leggermente pessimista, quindi l'errore va nel verso conservativo.
+
+## 4. Segmentazione (scenes.js) e cosa predice il bitrate sorgente
+
+`segmentScenes(packets)`:
+- unità atomica = GOP sorgente, perché iPhone mette un keyframe ogni ~28 frame. La dimensione del singolo pacchetto oscilla ×10 tra I, P e B, quella del GOP no;
+- tagli di scena = pacchetto non-key più grande di 3× il 90° percentile locale dei non-key (≈ un P tipico), oppure picchi opzionali di differenza di luma. Due tagli devono distare almeno 1 s;
+- programmazione dinamica che minimizza la varianza del log-bitrate dentro ogni segmento più una penalità per segmento, con durata `minSec..maxSec` (in `ratecontrol` default 2–4 s) e confini forzati ai tagli;
+- output `[{startIdx, endIdx (escluso), complexity = bitrate segmento / bitrate clip, srcBitrate, duration, cutAtStart}]`.
+
+**Risultato importante ✅**: dentro un clip il bitrate sorgente **non** predice il bitrate necessario. Su IMG_7440, con segmenti da 1 s, la sorgente va da 17.9 a 23.3 Mbps e il bitrate necessario per VMAF 88 va da 4.8 a 11.0 Mbps (×2.3), con correlazione −0.03. Nel rapporto `necessario/sorgente`, la media 0.40 vale come prior **a livello di clip** (`priorModel: k=0.4`, ≈ 8 Mbps per una sorgente da 20 Mbps), ma solo la prova misura le differenze tra segmenti. Da qui seguono tre scelte:
+- finestra di prova **centrata** nel segmento (`trialPick:'center'`). Prendere la finestra a bitrate sorgente massimo (`'max'`) spende di più senza alcun guadagno: 9.80 contro 8.80 Mbps nella simulazione;
+- segmenti brevi (2–4 s), in modo che ogni segmento possa essere provato;
+- per un segmento non provato si usa `prior × correzione del clip (media geometrica + 1 s.d.) × 1.2`.
+
+| secondo | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|---|
+| sorgente Mbps | 23.3 | 19.3 | 20.8 | 20.5 | 21.1 | 20.5 | 17.9 | 21.3 | 18.3 |
+| VMAF a 8 Mbps | 84.8 | 94.9 | 94.8 | 93.2 | 95.7 | 84.4 | 81.7 | 83.4 | 85.4 |
+| necessario per 88 (Mbps reali) | 11.0 | 4.9 | 5.2 | 6.0 | 4.8 | 9.6 | 10.9 | 10.2 | 10.1 |
+
+## 5. Algoritmo di ricerca (ratecontrol.js)
+
+Per ogni segmento con prova:
+1. `prior` = 0.4 × bitrate sorgente della finestra, limitato a [2, 20] Mbps.
+2. **Giro 1**: una sola chiamata `encodeTrial(finestra, [prior/1.3, prior×1.3])`. I due bitrate sono pensati in parallelo: gli stessi frame nativi, letti con un solo seek, alimentano due `VideoEncoder`.
+3. `measure` → ssimDb per-frame → `pool` (media, p5) → VMAF stimato (media e p5).
+4. Interpolazione in log2(bitrate) del punto in cui la media stimata raggiunge 88 + 2.48 e il p5 stimato raggiunge 72 + 3.93. Si prende il massimo dei due. Fuori dalla forchetta si estrapola con la pendenza misurata, limitata a [5, 20] VMAF per raddoppio.
+5. **Giro 2**, solo se il risultato è oltre 1.15× fuori dalla forchetta e resta budget: una prova al valore estrapolato, poi si interpola di nuovo.
+6. Il risultato viene limitato a [2, 20] Mbps e arrotondato a 10 kbps.
+
+Encode finale: `encodeSchedule(segments, {gopFrames})(i)` restituisce `{keyFrame, bitrate}`. All'inizio di ogni segmento c'è sempre un keyframe, e `setBitrate` scatta solo se la variazione è ≥ 8 % (prior art, BIBBIA §8). Dentro un segmento restano i keyframe periodici, contati dall'inizio del segmento.
+
+**Simulazione con i dati reali ✅** (`calibrate_quality.mjs`). Le prove sono rigiocate interpolando gli output reali; la colonna "VMAF vero" è il VMAF interpolato al bitrate scelto. Piano di default su IMG_7440: 3 segmenti, cioè [0–3.27 s], [3.27–5.64 s], [5.64–8.7 s].
+
+| strategia | Mbps medi | VMAF clip | VMAF min segmento | frame di prova |
+|---|---|---|---|---|
+| fisso 8 Mbps (oggi) | 8.0 | 88.8 | 81.7 (segm. 1 s) | 0 |
+| fisso con ogni segmento ≥ 88 | 10.9 | — | 88 | — |
+| oracolo (VMAF vero = 88 per segmento, senza margine) | 7.79 | — | 88 | — |
+| **ricerca, budget 0.4 (default)** | **8.80** | 90.2 | **88.7** | 180/522 (34 %) |
+| ricerca, budget 0.2 (1 segmento provato) | 8.85 | 90.2 | 85.3 | 60/522 |
+| ricerca, finestra 'max' | 9.80 | 91.6 | 88.9 | 180/522 |
+
+Bitrate scelti con il default: 7.63 / 7.10 / 11.35 Mbps, con VMAF veri 90.5 / 91.9 / 88.7.
+
+## 6. Tempi su iPhone (stima 🟡, da misurare ❓) e risparmio atteso
+
+Costi unitari:
+- seek + rVFC ≈ 60 fps, misurato (≈ tempo reale per un clip a 60 fps);
+- `VideoDecoder` HW ❓ ≥ 240 fps a 1080p;
+- metrica ≈ 4–5 ms per frame per bitrate (copyTo Y + downsample + SSIM). Con stride 2 si scende a ~2.5 ms.
+
+Per una finestra di 1 s (60 frame) con 2 bitrate in parallelo:
+- seek 1.0 s;
+- decodifica di 2 prove + sorgente ≈ 0.75 s;
+- metrica ≈ 60 × (2 × 2.5 + 1.5) ms ≈ 0.4 s.
+
+In totale ≈ **2–2.2 s per segmento provato**. Con segmenti da ~3 s e budget 0.4 (tutti provati) l'overhead è ≈ 0.7× la durata del clip, quindi **tempo totale ≈ 1.7× quello attuale**. Esempi: IMG_7440 (8.7 s) ≈ 15 s contro 9 s; 1 minuto di video ≈ 1 min 45 s. Le prove possono girare in pipeline (metrica del segmento k mentre si fa il seek del k+1), con un obiettivo di ~1.5×. Con `budget` 0.2 si scende a ~1.3×, ma i segmenti non provati sono rischiosi (simulazione: 85.3).
+
+Risparmio (IMG_7440, rispetto all'originale da 21.6 MB): la ricerca sta a 8.8 Mbps, cioè ≈ −56 %, con **ogni** segmento ≥ 88. A pari garanzia ("nessun segmento sotto 88") un bitrate fisso richiederebbe 10.9 Mbps: **−19 % di bit**. Rispetto agli 8 Mbps fissi di oggi il file cresce del +10 %, ma i 3–4 s difficili passano da VMAF ~82–85 a ≥ 88.7.
+
+Il guadagno grosso è atteso **tra clip diversi**. Un clip facile (statico, poco dettaglio) scende verso i 3–5 Mbps invece di 8. Un clip difficile come IMG_2147 (VMAF 87.7 a 4.3 Mbps con il proxy x265) riceve ciò che serve invece di un valore fisso. Il risparmio medio su una libreria reale va misurato ❓: servono più clip e la taratura con più contenuti, anche low-light.
+
+## 7. Integrazione in index.html, passo per passo
+
+Le funzioni dipendenti dal browser vengono iniettate. Lo schizzo segue le variabili di `run()` (v0.14).
+
+1. **Import**
+   ```js
+   import { planSegments, runSearch, encodeSchedule, expectedBitrate, DEFAULTS } from './app/lib/ratecontrol.js?v=0.15';
+   import { lumaFromDecodedFrame, frameScore, rotateLuma, decodeChunks } from './app/lib/quality.js?v=0.15';
+   ```
+2. **Demux**: nel loop `metadataOnly` esistente, salvare anche `size: p.byteLength, key: p.type === 'key'` in `pk`. Dopo il filtro `ts ≥ 0`, `frames[i]` porta già `size`/`key`. Poi:
+   ```js
+   const plan = planSegments(frames, frames /* {size,key} */, { targetVmaf: 88 });
+   ```
+   UI: un selettore "Bitrate: automatico (per scena)" accanto ai valori fissi. In modalità fissa il flusso resta quello di oggi.
+3. **encodeTrial(w, rates)**:
+   - creare `rates.length` encoder con `createHevcEncoder({width:W, height:H, bitrate:r, onChunk})` (moduli esistenti);
+   - per ogni frame di `seekFrames(video, frames.slice(w.startIdx, w.endIdx)…, vstats)`: `enc_k.encode(vf, j === 0)` su **tutti** gli encoder, poi `vf.close()`, poi `drain`;
+   - raccogliere i chunk e `meta.decoderConfig`;
+   - restituire `[{bitrate:r, bytes, encoded:{chunks, config}}]`.
+
+   Va alimentato **a tempo reale come l'encode finale** (rVFC obbligatorio): il rate control VT dipende dal ritmo di alimentazione (BIBBIA §11, v0.7). Se il device non regge due sessioni VT in parallelo ❓, eseguirle in serie (stesso API, costo doppio di seek).
+4. **Luma della sorgente per la finestra**, una volta per segmento, in cache come `Uint8Array` 540×960:
+   ```js
+   const vsink = new MB.EncodedPacketSink(vt); const cfg = await vt.getDecoderConfig();
+   let p = await vsink.getKeyPacket(frames[w.startIdx].ts);   // keyframe ≤ inizio finestra
+   ```
+   - iterare `vsink.packets(p)` in ordine di decodifica fino a coprire `frames[w.endIdx-1].ts` (più 3–4 pacchetti di riordino B), convertendo con `p.toEncodedVideoChunk()`, e passarli a `decodeChunks(cfg, chunks, onFrame)`;
+   - in `onFrame` tenere solo i frame con timestamp nella finestra (match con `frames[i].ts·1e6 ± 1 ms`) e calcolare `rotateLuma(await lumaFromDecodedFrame(f, {factor:2}), rotation)`, dove `rotation = await vt.getRotation()`. I frame del `VideoDecoder` **non** sono ruotati, quelli del `<video>` sì: verso da verificare con l'autotest al punto 8.
+5. **measure(w, encoded)**: `decodeChunks(encoded.config, encoded.chunks, async (f, i) => { if (i % 2) return; dbs.push(frameScore(srcLuma[i], await lumaFromDecodedFrame(f, {factor:2})).db); })`. Stride 2: un frame su due.
+6. **Ricerca**: `const res = await runSearch(plan, { encodeTrial, measure }, {}, (i, s, r) => log(...))`. Nel log: per segmento i punti `{bitrate, q, qLow}`, il bitrate scelto e la stima. `expectedBitrate(res.segments)` serve per la UI.
+7. **Encode finale**:
+   - `const ctl = encodeSchedule(res.segments, { gopFrames: keyEvery })`;
+   - nel loop: `const c = ctl(i); if (c.bitrate) enc.setBitrate(c.bitrate); enc.encode(vf, c.keyFrame);`;
+   - `setBitrate` deve precedere l'`encode` del keyframe;
+   - aggiungere il bitrate medio reale per segmento al log (dai chunk);
+   - nome file: `_autoQ88_`.
+8. **Autotest di allineamento** (da fare una volta in diagnostica e poi in debug): una prova a 20 Mbps deve dare ssimDb medio ≥ ~20 (SSIM ≥ 0.99). Se si ottiene SSIM ~0.3, la rotazione o l'allineamento dei frame sono sbagliati: provare la rotazione opposta e controllare l'offset di indice (`vstats`).
+9. **Memoria**: luma sorgente 0.5 MB/frame × 60 = 31 MB per finestra. Al massimo 2 encoder di prova più l'encoder finale vivi: chiudere sempre gli encoder di prova prima dell'encode finale (non devono mai essere aperti insieme a lui).
+
+## 8. Test su device prima di fidarsi (❓)
+
+1. Due `VideoEncoder` HEVC in parallelo dallo stesso `VideoFrame` nativo: entrambi Main10? fps complessivi? Il bitrate prodotto è ≈ target?
+2. `VideoDecoder` su pacchetti sorgente (HEVC Main10 + NAL 62 DV): esce NV12 8-bit? fps? Il piano Y coincide con quello della ricodifica a 20 Mbps (autotest al punto 8)?
+3. Le prove (IDR + 1 s) predicono la qualità del segmento nell'encode finale con `configure()` al volo? Confronto: VMAF in laboratorio del file finale per segmento contro la stima registrata nel log.
+4. Tempo reale per segmento (seek, decode, metrica) e throttling su clip da 1–3 min.
+5. Convergenza del rate control dopo `configure()` (BIBBIA §8: cambio efficace ma non istantaneo): byte reali per segmento nel log.
+
+## 9. Alternativa da valutare: "ladder parallela + splice"
+
+Codificare **l'intero clip** a 2–3 bitrate in parallelo, con un solo seek per frame e keyframe forzati agli stessi indici (inizi di segmento) su tutti gli encoder. Si misura ogni segmento sul bitstream vero (decode + metrica in pipeline) e per ogni segmento si tengono i chunk del bitrate più basso che passa la soglia. Pregi:
+- nessun tempo di seek extra;
+- misura esatta, non su una finestra.
+
+Rischi ❓:
+- i parameter set (SPS/PPS) devono essere identici tra gli encoder, perché l'app ne usa uno solo in `hvcC`;
+- throughput VT con 3 sessioni;
+- la decodifica e la metrica di K flussi completi devono reggere ≥ 60 fps (con stride 2–4).
+
+L'API `searchBitrate` resta valida come fallback.
+
+## 10. Riproduzione
+
+```
+node --test app/lib/ratecontrol.test.mjs
+TMPDIR=/tmp/claude-0/lab/tmp node tools/lab/calibrate_quality.mjs     # salta se mancano i file privati
+```
+Variabili d'ambiente: `CALIB_REF`, `CALIB_DIST` (directory con `*-<base>_<N>M_k4s_aCopy_v0.13`), `VMAF`, `MODELS`, `CALIB_CACHE`. Il VMAF per-frame viene messo in cache. La prima esecuzione richiede ~10 min (VMAF ~1 min/file, metriche ~3 min).

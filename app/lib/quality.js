@@ -31,6 +31,13 @@ export function lumaFromPlane(plane, width, height, stride = width, o = {}) {
   const f = o.factor ?? 2, off = o.offset ?? 0, bd = o.bitDepth ?? 8;
   const w = Math.floor(width / f), h = Math.floor(height / f), out = new Float32Array(w * h);
   const sh = bd - 8, rnd = sh > 0 ? 1 << (sh - 1) : 0, inv = 1 / (f * f);
+  if (f === 2 && sh === 0) { // fast path: 8-bit decoder plane, 2× (the in-app case)
+    for (let y = 0; y < h; y++) {
+      let p = off + 2 * y * stride, q = p + stride, o = y * w;
+      for (let x = 0; x < w; x++, p += 2, q += 2) out[o + x] = (plane[p] + plane[p + 1] + plane[q] + plane[q + 1]) * 0.25;
+    }
+    return { data: out, width: w, height: h };
+  }
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       let s = 0;
