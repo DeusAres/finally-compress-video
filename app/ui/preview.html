@@ -25,8 +25,8 @@
 </nav>
 <main id="app"></main>
 <script type="module">
-import { mountUI } from './ui.js';
-import { emit } from './bus.js';
+import { mountUI } from './ui.js?v=0.17';
+import { emit } from './bus.js?v=0.17';
 
 const q = new URLSearchParams(location.search);
 if (q.get('theme')) document.documentElement.dataset.theme = q.get('theme');
@@ -38,7 +38,7 @@ const ui = mountUI(document.getElementById('app'), {
   onStart: (s) => { say(`avvio: ${JSON.stringify(s)}`); run(s); },
   onCancel: () => { stop = true; },
   onSave: () => ui.setSaveMessage('Anteprima: qui si aprirebbe la share sheet → «Salva video».'),
-}, { version: 'v0.15' });
+}, { version: "v0.17" });
 
 const FILE = { name: 'IMG_7440.MOV', sizeMB: 412.6, durationS: 83.4, width: 3840, height: 2160, hdr: true, dolbyVision: true, fps: 60 };
 function fakeFile(name = FILE.name, sizeMB = FILE.sizeMB) { emit('file', { ...FILE, name, sizeMB }); }
