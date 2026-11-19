@@ -1,0 +1,64 @@
+<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Test packet store</title></head><body><pre id="out"></pre>
+<script type="module">
+// Test browser (Chromium) del packet store riprendibile: H.264 sintetico (HEVC non c'è in Chromium) → segmenti OPFS →
+// "kill" a metà segmento → ripresa (anche dopo reload) → assemblaggio Mediabunny su OPFS. Pilotato da segstore_test.mjs.
+import { peekJob, discardJob, openJob, planSegments, segEnd, bytesEqual } from '../../app/lib/jobstore.js';
+import { openOpfsStore } from '../../app/lib/opfs.js';
+import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
+const W = 320, H = 240, FPS = 60, NF = 900, KEY = 240;
+const out = (s) => { document.getElementById('out').textContent += s + '\n'; };
+const frames = Array.from({ length: NF }, (_, k) => ({ ts: 0.5 + k / FPS, dur: 1 / FPS })); // primo ts ≠ 0 come nei .mov
+const segStarts = planSegments(NF, FPS, KEY);
+const manifest0 = () => ({ v: 1, app: 'test', file: { name: 'synt.mov', size: 1, lastModified: 1 }, settings: { bitrateMbps: 1, keyframeS: 4, audioMode: 'copy' },
+  video: { W, H, nFrames: NF, firstTs: frames[0].ts, lastTs: frames[NF - 1].ts, keyEvery: KEY, dv: false }, segStarts, doneCount: 0, config: null });
+const canvas = new OffscreenCanvas(W, H), g = canvas.getContext('2d');
+function frame(k) {
+  g.fillStyle = `hsl(${k % 360},70%,50%)`; g.fillRect(0, 0, W, H); g.fillStyle = '#fff'; g.font = '64px sans-serif'; g.fillText(String(k), 20, 140);
+  return new VideoFrame(canvas, { timestamp: Math.round(frames[k].ts * 1e6), duration: Math.round(1e6 / FPS) });
+}
+// Same structure as index.html: one encoder per run, ordered write queue, segment finished on its last chunk.
+async function encodeRun(job, stopAt = NF) {
+  const done = job.doneCount, runStart = segStarts[done]; let n = 0, first = true, err = null, segW = null, wq = Promise.resolve(), wqN = 0, wSeg = done;
+  const enqueue = (fn) => { wqN++; wq = wq.then(async () => { try { if (!err) await fn(); } catch (e) { err ||= e; } finally { wqN--; } }); };
+  const enc = new VideoEncoder({ error: (e) => { err ||= e; }, output: (chunk, meta) => {
+    const k = runStart + n++; const data = new Uint8Array(chunk.byteLength); chunk.copyTo(data);
+    if (first) { first = false; const d = new Uint8Array(meta.decoderConfig.description); const cfg = { codec: meta.decoderConfig.codec, codedWidth: W, codedHeight: H, description: d };
+      const old = job.getConfig(); if (old) { if (!bytesEqual(old.description, d)) err = new Error('avcC diverso'); else out('avcC identico al salvato'); } else enqueue(() => job.setConfig(cfg)); }
+    while (k >= segEnd(segStarts, wSeg, NF)) wSeg++;
+    const s = wSeg;
+    if (k === segStarts[s]) { if (chunk.type !== 'key') err = new Error('segmento senza keyframe'); enqueue(async () => { segW = await job.beginSegment(s); }); }
+    enqueue(() => segW.add(data, { ts: frames[k].ts - frames[0].ts, dur: frames[k].dur, type: chunk.type }));
+    if (k === segEnd(segStarts, s, NF) - 1) enqueue(async () => { const r = await segW.finish(); segW = null; out(`segmento ${s + 1}/${segStarts.length}: ${r.n} pacchetti, ${r.bytes} B`); });
+  } });
+  enc.configure({ codec: 'avc1.42001f', width: W, height: H, bitrate: 1e6, framerate: FPS, avc: { format: 'avc' } });
+  let s = done;
+  for (let k = runStart; k < stopAt; k++) {
+    while (k >= segEnd(segStarts, s, NF)) s++;
+    const f = frame(k); enc.encode(f, { keyFrame: (k - segStarts[s]) % KEY === 0 }); f.close();
+    if (wqN > 8) await wq;
+    while (enc.encodeQueueSize > 4) await new Promise((r) => enc.addEventListener('dequeue', r, { once: true }));
+  }
+  await enc.flush(); enc.close(); await wq; if (err) throw err;
+}
+window.run1 = async () => { // fresh job, "killed" in the middle of segment 3: the partial segment is never finished
+  await discardJob(); const job = await openJob(manifest0(), { fresh: true });
+  await encodeRun(job, segStarts[2] + 100); job.close();
+  const pj = await peekJob(); out(`dopo kill: ${pj.done}/${pj.total} segmenti verificati`); return { done: pj.done, total: pj.total, segStarts };
+};
+window.run2 = async () => { // new page: resume from the first incomplete segment, then assemble
+  const pj = await peekJob(); if (!pj) throw new Error('nessun job salvato');
+  const job = await openJob(pj.manifest, { done: pj.done }); out(`ripresa da segmento ${pj.done + 1}`);
+  await encodeRun(job); if (job.doneCount !== segStarts.length) throw new Error('segmenti incompleti ' + job.doneCount);
+  const store = await openOpfsStore('segstore-test.mp4');
+  const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart: false }), target: new MB.StreamTarget(new WritableStream({ write: (c) => store.write(c.position, c.data) }), { chunked: true, chunkSize: 1 << 20 }) });
+  const vsrc = new MB.EncodedVideoPacketSource('avc'); output.addVideoTrack(vsrc); await output.start();
+  const cfg = job.getConfig(); let nV = 0;
+  for (let k = 0; k < job.total; k++) for await (const p of job.packets(k, 64 * 1024)) { await vsrc.add(new MB.EncodedPacket(p.data, p.type, p.ts, p.dur), nV++ ? undefined : { decoderConfig: cfg }); }
+  vsrc.close(); await output.finalize(); await store.flush(); await store.close();
+  const f = await store.getFile(); const b = new Uint8Array(await f.arrayBuffer());
+  await job.remove(); const left = await peekJob();
+  let bin = ''; for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return { nV, size: b.length, jobLeft: !!left, b64: btoa(bin) };
+};
+out('pronto');
+</script></body></html>

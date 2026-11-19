@@ -30,8 +30,13 @@ export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentat
     const target = (f.ts + f.dur / 2) / 1e6;
     const pr = stats ? new Promise((res) => { const t = setTimeout(() => res(null), 250); video.requestVideoFrameCallback((_, md) => { clearTimeout(t); res(md.mediaTime); }); }) : null;
     video.currentTime = target;
-    const ev = await waitEvent(video, 'seeked', 3000);
-    if (ev === 'timeout') throw new Error(`seek timeout @${target.toFixed(3)}s`);
+    let ev = await waitEvent(video, 'seeked', 3000);
+    if (ev === 'timeout') { // page suspended in background mid-seek: wait to be visible, then seek again once
+      while (document.hidden) await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true }));
+      video.currentTime = target + 1e-6; ev = await waitEvent(video, 'seeked', 5000);
+      if (ev === 'timeout') throw new Error(`seek timeout @${target.toFixed(3)}s`);
+      if (stats) stats.retried = (stats.retried || 0) + 1;
+    }
     if (stats) {
       const mt = await pr; stats.n++;
       if (mt == null) stats.noCallback++;

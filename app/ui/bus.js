@@ -16,4 +16,4 @@ export function on(type, fn) {
 
 /** Elenco dei tipi di evento ufficiali (utile per debug/preview). */
 export const EVENTS = Object.freeze(['file', 'phase', 'progress', 'frame', 'result', 'log', 'error']);
-export const PHASES = Object.freeze(['analisi', 'video', 'audio', 'scrittura', 'fatto', 'errore']);
+export const PHASES = Object.freeze(['analisi', 'video', 'assemblaggio', 'audio', 'scrittura', 'fatto', 'errore']);

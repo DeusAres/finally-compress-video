@@ -102,6 +102,10 @@ details.fcv-adv[open] { display: grid; gap: 16px; padding-bottom: 6px; }
 /* Comprimi */
 .fcv-go-note { font-size: 14px; color: var(--muted); text-align: center; }
 .fcv-go svg { width: 16px; height: 28px; }
+.fcv-resume { display: grid; gap: 8px; margin-top: 10px; }
+.fcv-resume[hidden] { display: none; }
+.fcv-keep { margin: 10px 0 0; text-align: center; font-weight: 700; }
+.fcv-keep[data-kind="bad"] { background: var(--danger); color: var(--px-white); }
 .fcv-summary { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 14px; }
 
 /* ---------- Avanzamento ---------- */
@@ -113,8 +117,8 @@ details.fcv-adv[open] { display: grid; gap: 16px; padding-bottom: 6px; }
 .fcv-phase span { font-size: 14px; color: var(--muted); }
 .fcv-pct { font-size: 84px; text-align: right; color: var(--text); }
 .fcv-pct small { font-size: 40px; }
-.fcv-chain { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0; padding: 0; list-style: none; }
-.fcv-chain li { display: grid; justify-items: center; gap: 4px; padding: 6px 2px; background: var(--surface-2); color: var(--muted); font: 700 9px/1 var(--font-pixel); text-transform: uppercase; letter-spacing: .02em; }
+.fcv-chain { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.fcv-chain li { display: grid; justify-items: center; gap: 4px; padding: 6px 1px; overflow-wrap: anywhere; background: var(--surface-2); color: var(--muted); font: 700 9px/1 var(--font-pixel); text-transform: uppercase; letter-spacing: 0; }
 .fcv-chain li svg { width: 16px; height: 16px; }
 .fcv-chain li[data-s="now"] { background: var(--accent); color: var(--accent-text); }
 .fcv-chain li[data-s="done"] { color: var(--ok-strong); }

@@ -1,12 +1,13 @@
 // OPFS output store: sequential/random writes through a Worker holding a SyncAccessHandle (no RAM accumulation),
 // then getFile() gives a disk-backed File for share/download. Also: stale-file cleanup and space estimate.
 
-/** Remove every file left in the OPFS root by previous runs (call at startup / before a new run). */
-export async function cleanOpfs() {
+/** Remove every entry left in the OPFS root by previous runs (call at startup / before a new run), except names in `keep`
+ * (default: the resumable-job directory, see jobstore.js). */
+export async function cleanOpfs(keep = ['jobs']) {
   try {
     const root = await navigator.storage.getDirectory(); const names = [];
-    for await (const [name] of root.entries()) names.push(name);
-    let n = 0; for (const name of names) { try { await root.removeEntry(name); n++; } catch { /* locked by another tab */ } }
+    for await (const [name] of root.entries()) if (!keep.includes(name)) names.push(name);
+    let n = 0; for (const name of names) { try { await root.removeEntry(name, { recursive: true }); n++; } catch { /* locked by another tab */ } }
     return n;
   } catch { return 0; }
 }
@@ -18,15 +19,21 @@ export async function opfsSpace() {
   try { const e = await navigator.storage.estimate(); if (!e?.quota) return null; return { usage: e.usage || 0, quota: e.quota, free: e.quota - (e.usage || 0) }; } catch { return null; }
 }
 
-const safeName = (s) => s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
+export const safeName = (s) => s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
 
-export async function openOpfsStore(rawName) {
-  const name = safeName(rawName);
-  const worker = new Worker(new URL('./opfs-worker.js?v=0.17', import.meta.url));
-  let seq = 0; const waiting = new Map(); let dead = null; let bytesWritten = 0;
+/** Worker holding SyncAccessHandles (opfs-worker.js). Returns {call(msg, transfer) -> Promise, terminate()}. */
+export function opfsWorker() {
+  const worker = new Worker(new URL('./opfs-worker.js?v=0.18', import.meta.url));
+  let seq = 0; const waiting = new Map(); let dead = null;
   worker.onmessage = (e) => { const w = waiting.get(e.data.id); if (!w) return; waiting.delete(e.data.id); if (e.data.ok) w.res(e.data); else { const er = new Error(e.data.message); er.name = e.data.name; w.rej(er); } };
   worker.onerror = (e) => { dead = new Error('worker OPFS: ' + (e.message || 'errore')); for (const w of waiting.values()) w.rej(dead); waiting.clear(); };
   const call = (msg, transfer) => dead ? Promise.reject(dead) : new Promise((res, rej) => { const id = ++seq; waiting.set(id, { res, rej }); worker.postMessage({ id, ...msg }, transfer || []); });
+  return { call, terminate() { dead ||= new Error('worker OPFS chiuso'); worker.terminate(); for (const w of waiting.values()) w.rej(dead); waiting.clear(); } };
+}
+
+export async function openOpfsStore(rawName) {
+  const name = safeName(rawName);
+  const wk = opfsWorker(), call = wk.call, worker = wk; let bytesWritten = 0;
   await call({ op: 'open', name });
   let closed = false;
   return {

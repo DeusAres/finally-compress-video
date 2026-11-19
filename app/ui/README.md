@@ -18,7 +18,7 @@ import { mountUI } from './app/ui/ui.js';
 import { emit } from './app/ui/bus.js';
 const ui = mountUI(document.getElementById('app'), {
   onFile(file) {},            // File scelto (l'app poi emette 'file' con i metadati)
-  onStart(settings) {},       // {bitrateMbps, keyframeS, audioMode}
+  onStart(settings) {},       // {bitrateMbps, keyframeS, audioMode, bgAudio} (+ resume:true dal pulsante «Riprendi»); chiamato SINCRONO nel tap
   onCancel() {},              // l'app interrompe e chiama ui.setBusy(false)
   onSave() {},                // chiamato SINCRONO nel tap → navigator.share() funziona
   onCopyLog() {},             // facoltativo: se assente la UI copia da sola il log mostrato
@@ -29,12 +29,14 @@ ui.setBusy(true); /* … export … */ ui.setBusy(false);
 
 `index.html` può linkare `theme.css` e `ui.css` nel `<head>` per evitare il flash; altrimenti `mountUI` li aggiunge.
 
-Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,10 · `audioMode` ∈ `copy`,`v4`,`v3`,`v2`,`v1`,`reenc`.
+Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,10 · `audioMode` ∈ `copy`,`v4`,`v3`,`v2`,`v1`,`reenc` · `bgAudio` (bool, opzioni avanzate → Sperimentale, default false: test background con audio keep-alive).
 
 ### Ritorno di `mountUI`
 - `setBusy(bool)` — contratto. `true` mostra il pannello di avanzamento e blocca i controlli; `false` senza `result`/`error` ⇒ torna al passo 2 ("annullato").
 - `setDefaults(settings)` — contratto (accetta anche un oggetto parziale).
 - Estensioni: `getSettings()`, `setSaveMessage(text)` (sotto "Salva nelle Foto"), `setCopyMessage(text)`, `getLog()`, `reset()`, `destroy()`.
+- `setResume({name, done, total, settings} | null)` (v0.18): nel passo 3 mostra «Riprendi export di <nome> (segmenti x/y)»; il tap applica `settings` e chiama `onStart({...settings, resume: true})`. Nascosto durante l'export e quando si sceglie un altro file.
+- `setProgNote(text, kind)` (v0.18): riquadro nel pannello di avanzamento; testo vuoto = «Tieni l'app aperta e lo schermo acceso finché finisce.»; `kind` `warn`/`bad`. Usato per «pausa di N s / ripreso / interrotto, riprendo dal segmento x».
 
 ## Eventi del bus (`bus.js`)
 
@@ -43,14 +45,14 @@ Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,
 | tipo | detail | effetto nella UI |
 |---|---|---|
 | `file` | `{name, sizeMB, durationS, width, height, hdr, dolbyVision}` (+ `fps` facoltativo) | scheda file, badge HDR/Dolby Vision, peso stimato |
-| `phase` | `{phase: 'analisi'\|'video'\|'audio'\|'scrittura'\|'fatto'\|'errore'}` | fase corrente, catena delle fasi |
+| `phase` | `{phase: 'analisi'\|'video'\|'assemblaggio'\|'audio'\|'scrittura'\|'fatto'\|'errore'}` | fase corrente, catena delle fasi |
 | `progress` | `{phase, done, total, fps, etaS, elapsedS}` (campi mancanti tollerati) | %, barra, restante, trascorso, fps, fotogrammi. Coalescente con rAF: si può emettere spesso |
 | `frame` | `{index}` | ignorato dalla UI (per fun.js) |
 | `result` | `{inMB, outMB, savedPct, fileName}` | schermata "Fatto!" con −%, MB prima→dopo, coriandoli una volta |
 | `log` | `{line}` | aggiunge una riga al log tecnico |
 | `error` | `{message}` | pannello errore + log aperto + Riprova |
 
-Percentuale complessiva = pesi per fase (analisi 4 %, video 86 %, audio 7 %, scrittura 3 %), mai decrescente. Se `etaS` manca è stimata da `elapsedS`.
+Percentuale complessiva = pesi per fase (analisi 4 %, video 82 %, assemblaggio 4 % — etichetta «Unione» —, audio 7 %, scrittura 3 % — etichetta «File»), mai decrescente. Se `etaS` manca è stimata da `elapsedS`.
 
 ## Intrattenimento
 

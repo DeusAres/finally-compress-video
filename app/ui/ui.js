@@ -1,7 +1,7 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.17';
-import { sprite, SPRITES } from './sprite.js?v=0.17';
+import { bus } from './bus.js?v=0.18';
+import { sprite, SPRITES } from './sprite.js?v=0.18';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -26,15 +26,17 @@ const AUDIO = [
   { v: 'v1', b: 'Ripara eco v1', t: 'Prima versione, la più semplice.', dev: true },
   { v: 'reenc', b: 'Solo ricodifica', t: 'Diagnostica: ricodifica AAC senza filtri.', dev: true },
 ];
+const KEEP_OPEN = 'Tieni l\'app aperta e lo schermo acceso finché finisce.';
 const AUDIO_SHORT = { copy: 'audio originale', v4: 'eco v4', v3: 'eco v3', v2: 'eco v2', v1: 'eco v1', reenc: 'audio ricodificato' };
 const PHASES = [
   { id: 'analisi', label: 'Analisi', sub: 'Leggo tracce, colori e Dolby Vision' },
-  { id: 'video', label: 'Video', sub: 'Ricodifico i fotogrammi in HEVC 10-bit' },
+  { id: 'video', label: 'Video', sub: 'Ricodifico i fotogrammi in HEVC 10-bit, a segmenti riprendibili' },
+  { id: 'assemblaggio', label: 'Unione', sub: 'Assemblaggio: unisco i segmenti video nel file', icon: 'film' },
   { id: 'audio', label: 'Audio', sub: 'Preparo la traccia audio' },
-  { id: 'scrittura', label: 'Scrittura', sub: 'Assemblo il file e i metadati' },
+  { id: 'scrittura', label: 'File', sub: 'Assemblo il file e i metadati' },
 ];
-const WEIGHT = { analisi: 0.04, video: 0.86, audio: 0.07, scrittura: 0.03 };
-const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy' };
+const WEIGHT = { analisi: 0.04, video: 0.82, assemblaggio: 0.04, audio: 0.07, scrittura: 0.03 };
+const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false };
 
 const nf1 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 });
@@ -62,7 +64,7 @@ function template(opts) {
   const brSeg = BITRATES.map((b) => `<label><input type="radio" name="fcv-br" value="${b}"><span>${b}${b === 8 ? `<i class="star">${s('star', { scale: 2 })}</i>` : '<small>Mbps</small>'}</span></label>`).join('');
   const kfSeg = KEYFRAMES.map((k) => `<label><input type="radio" name="fcv-kf" value="${k}"><span>${k}<small>sec</small></span></label>`).join('');
   const audio = AUDIO.map((a) => `<label class="fcv-radio"${a.dev ? ' data-dev' : ''}><input type="radio" name="fcv-audio" value="${a.v}"><div><b>${a.b}</b><span>${a.t}</span></div></label>`).join('');
-  const chain = PHASES.map((p) => `<li data-p="${p.id}">${s(p.id, { scale: 2 })}${p.label}</li>`).join('');
+  const chain = PHASES.map((p) => `<li data-p="${p.id}">${s(p.icon || p.id, { scale: 2 })}${p.label}</li>`).join('');
   return `
 <header class="fcv-head">
   ${s('logo', { scale: 4, className: 'fcv-logo px-bob', title: 'Logo' })}
@@ -124,6 +126,10 @@ function template(opts) {
       <div class="fcv-radios" data-ref="audio">${audio}</div>
       <p class="fcv-subtle">Le voci "versione precedente" e "diagnostica" servono per confronti tecnici.</p>
     </fieldset>
+    <fieldset class="fcv-field">
+      <legend class="px-label">Sperimentale</legend>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
+    </fieldset>
   </details>
 </section>
 
@@ -131,6 +137,10 @@ function template(opts) {
   <header><span class="num">3</span><h2 class="px-title" id="fcv-h3">Comprimi</h2></header>
   <button class="px-btn px-btn--primary px-btn--xl px-btn--block fcv-go" data-ref="go" disabled>Comprimi ${sprite(['c...', 'cc..', 'ccc.', 'cccc', 'ccc.', 'cc..', 'c...'], { scale: 4 })}</button>
   <p class="fcv-go-note" data-ref="goNote">Scegli prima un video.</p>
+  <div class="fcv-resume" data-ref="resume" hidden>
+    <p class="fcv-warn" data-ref="resumeText"></p>
+    <button class="px-btn px-btn--ok px-btn--block" data-ref="resumeBtn">Riprendi export</button>
+  </div>
 </section>
 
 <section class="px-panel fcv-prog" data-ref="prog" hidden aria-labelledby="fcv-hp">
@@ -147,7 +157,7 @@ function template(opts) {
     <div class="fcv-stat"><span class="px-label">Velocità</span><span class="v px-digits" data-ref="fps">—</span></div>
     <div class="fcv-stat"><span class="px-label">Fotogrammi</span><span class="v px-digits" data-ref="frames">—</span></div>
   </div>
-  <p class="fcv-go-note">Tieni Safari aperto e in primo piano fino alla fine.</p>
+  <p class="fcv-warn fcv-keep" data-ref="progNote" role="status" aria-live="polite">${KEEP_OPEN}</p>
   <button class="px-btn px-btn--danger fcv-cancel" data-ref="cancel">Annulla</button>
   <p class="px-sr" aria-live="polite" data-ref="live"></p>
 </section>
@@ -237,10 +247,12 @@ export function mountUI(root, handlers = {}, opts = {}) {
     root.querySelectorAll('.fcv-step-set input, [data-ref^="input"]').forEach((i) => { i.disabled = st.busy; });
     R.go.disabled = !st.file || st.busy;
     if (st.busy) {
+      R.resume.hidden = true;
       if (st.stage !== 'busy') startProgress();
     } else if (st.stage === 'busy') {
       // finito senza 'result' né 'error' → annullato
       setStage(st.file ? 'ready' : 'pick');
+      R.resume.hidden = !st.resume;
       if (st.cancelling) R.goNote.textContent = 'Compressione annullata.';
     }
     st.cancelling = false;
@@ -254,7 +266,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     acceptFile(f);
   }
   function acceptFile(f) {
-    R.dropMsg.hidden = true;
+    R.dropMsg.hidden = true; setResume(null);
     st.file = { name: f.name, sizeMB: f.size / 1048576 };
     showFile(st.file);
     R.log.textContent = ''; st.logLines = 0; R.logCount.textContent = '0';
@@ -302,11 +314,12 @@ export function mountUI(root, handlers = {}, opts = {}) {
   // ---------- passo 2: impostazioni ----------
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode };
+    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio') };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
     set('fcv-br', s.bitrateMbps); set('fcv-kf', s.keyframeS); set('fcv-audio', s.audioMode);
+    if (s.bgAudio != null) { const c = root.querySelector('input[name="fcv-bgaudio"]'); if (c) c.checked = !!s.bgAudio; }
     syncSettings();
   }
   function syncSettings() {
@@ -316,7 +329,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.brHint.textContent = info.t;
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
-    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}`;
+    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}`;
     updateEstimate();
   }
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? (br + 0.26) * d / 8 * (1e6 / 1048576) : null);
@@ -342,6 +355,22 @@ export function mountUI(root, handlers = {}, opts = {}) {
     handlers.onStart?.({ ...st.settings });
   });
   R.retry.addEventListener('click', () => { startProgress(); handlers.onStart?.({ ...st.settings }); });
+  // Riprendi: impostazioni del job salvato (devono coincidere per riusare i segmenti), poi via come «Comprimi».
+  R.resumeBtn.addEventListener('click', () => {
+    if (!st.file || st.busy || !st.resume) return;
+    writeSettings({ ...readSettings(), ...st.resume.settings });
+    st.settings = readSettings();
+    startProgress();
+    handlers.onStart?.({ ...st.settings, resume: true });
+  });
+  function setResume(r) {
+    st.resume = r || null;
+    R.resume.hidden = !st.resume;
+    if (!st.resume) return;
+    const s = st.resume.settings || {};
+    R.resumeText.textContent = `Trovato un export interrotto di questo video (${s.bitrateMbps} Mbps, key ${s.keyframeS}s): ${st.resume.done} segmenti su ${st.resume.total} già pronti.`;
+    R.resumeBtn.textContent = `Riprendi export di ${st.resume.name} (segmenti ${st.resume.done}/${st.resume.total})`;
+  }
   R.again.addEventListener('click', () => { setStage('ready'); root.querySelector('.fcv-step-set').scrollIntoView({ block: 'start' }); });
   R.cancel.addEventListener('click', () => {
     st.cancelling = true; R.cancel.disabled = true; R.cancel.textContent = 'Annullo…';
@@ -356,6 +385,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span><span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
     R.elapsed.textContent = '0:00';
+    R.progNote.textContent = KEEP_OPEN; R.progNote.dataset.kind = '';
     renderPct(0);
     setPhase('analisi');
     setStage('busy');
@@ -370,7 +400,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     st.overall = Math.max(st.overall, PHASES.slice(0, idx).reduce((a, x) => a + WEIGHT[x.id], 0));
     st.phase = p;
     const ph = PHASES[idx];
-    R.phIcon.innerHTML = sprite(SPRITES[p], { scale: 4 });
+    R.phIcon.innerHTML = sprite(SPRITES[ph.icon || p], { scale: 4 });
     R.phName.textContent = ph.label;
     R.phSub.textContent = ph.sub;
     R.chain.querySelectorAll('li').forEach((li, i) => { li.dataset.s = i < idx ? 'done' : i === idx ? 'now' : ''; });
@@ -496,6 +526,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
     setDefaults(s = {}) { Object.assign(DEFAULTS, s); writeSettings({ ...readSettings(), ...s }); },
     // --- estensioni ---
     getSettings: () => readSettings(),
+    /** Offerta di ripresa per il file scelto: {name, done, total, settings} oppure null (nasconde). */
+    setResume,
+    /** Messaggio nel pannello di avanzamento (default «Tieni l'app aperta…»); kind '' | 'warn' | 'bad'. Testo vuoto = default. */
+    setProgNote(text, kind = '') { R.progNote.textContent = text || KEEP_OPEN; R.progNote.dataset.kind = text ? kind : ''; },
     /** Messaggio sotto "Salva nelle Foto" (es. esito della share sheet). */
     setSaveMessage(text) { R.saveMsg.textContent = text || ''; },
     /** Messaggio accanto a "Copia log" (utile se onCopyLog è gestito dall'app). */
@@ -503,7 +537,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     /** Testo completo del log mostrato. */
     getLog: () => R.log.textContent,
     /** Torna al passo 1 (nessun file). */
-    reset() { st.file = null; R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
+    reset() { st.file = null; setResume(null); R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
     destroy() { for (const [t, h] of dndTargets) window.removeEventListener(t, h); listeners.forEach(([t, h]) => bus.removeEventListener(t, h)); root.innerHTML = ''; },
   };
 }
