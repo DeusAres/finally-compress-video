@@ -1,0 +1,249 @@
+/* finally-compress-video — tema "Pressa a 16 colori"
+   Design tokens pixel art + classi base riutilizzabili (.px-*).
+   Palette: Sweetie 16 (GrafxKid, CC0). Contratto documentato in app/ui/README.md. */
+@import url("https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=VT323&family=Atkinson+Hyperlegible:wght@400;700&display=swap");
+
+:root {
+  /* ---- Palette (16 colori, mai usare altri valori grezzi) ---- */
+  --px-ink:    #1a1c2c;
+  --px-plum:   #5d275d;
+  --px-red:    #b13e53;
+  --px-orange: #ef7d57;
+  --px-yellow: #ffcd75;
+  --px-lime:   #a7f070;
+  --px-green:  #38b764;
+  --px-teal:   #257179;
+  --px-navy:   #29366f;
+  --px-blue:   #3b5dc9;
+  --px-sky:    #41a6f6;
+  --px-cyan:   #73eff7;
+  --px-white:  #f4f4f4;
+  --px-silver: #94b0c2;
+  --px-slate:  #566c86;
+  --px-steel:  #333c57;
+  --px-paper:  #f3ecdc; /* fondo chiaro "carta", unico colore extra */
+
+  /* ---- Font ---- */
+  --font-pixel: "Silkscreen", "Press Start 2P", ui-monospace, "SF Mono", Menlo, monospace; /* titoli, etichette */
+  --font-digits: "VT323", ui-monospace, "SF Mono", Menlo, monospace;                       /* cifre grandi, log */
+  --font-body: "Atkinson Hyperlegible", -apple-system, system-ui, "Helvetica Neue", sans-serif; /* testo lungo */
+
+  /* ---- Griglia e forme ---- */
+  --px-unit: 4px;                         /* 1 "pixel" logico */
+  --px-border: var(--px-unit);            /* spessore bordo pixel */
+  --px-gap: calc(var(--px-unit) * 4);     /* 16px */
+  --px-touch: 48px;                       /* target tocco (≥44) */
+  --px-step: steps(4, end);               /* timing per animazioni a scatti */
+
+  /* ---- Ruoli semantici: CHIARO ---- */
+  --bg: var(--px-paper);
+  --bg-dot: #e6dcc6;
+  --surface: #fffaf0;
+  --surface-2: #efe5cf;
+  --text: var(--px-ink);
+  --muted: var(--px-slate);
+  --line: var(--px-ink);
+  --shadow: var(--px-steel);
+  --accent: var(--px-blue);
+  --accent-text: var(--px-white);
+  --accent-hi: var(--px-sky);
+  --accent-lo: var(--px-navy);
+  --ok: var(--px-green);
+  --ok-text: var(--px-ink);
+  --ok-strong: #1f7a44;          /* testo verde leggibile su carta */
+  --warn: var(--px-yellow);
+  --danger: var(--px-red);
+  --danger-text: var(--px-white);
+  --highlight: var(--px-yellow);
+  --log-bg: var(--px-ink);
+  --log-text: var(--px-lime);
+  color-scheme: light;
+
+  /* ---- Bordi pixel (angoli smussati di 1 px) + ombra a gradini ---- */
+  --px-ring: 0 calc(-1 * var(--px-border)) 0 0 var(--line), 0 var(--px-border) 0 0 var(--line),
+             calc(-1 * var(--px-border)) 0 0 0 var(--line), var(--px-border) 0 0 0 var(--line);
+  --px-drop: calc(var(--px-unit) * 1) calc(var(--px-unit) * 2) 0 0 var(--shadow),
+             calc(var(--px-unit) * 2) calc(var(--px-unit) * 1) 0 0 var(--shadow);
+  --px-drop-sm: var(--px-unit) var(--px-unit) 0 0 var(--shadow);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: var(--px-ink);
+    --bg-dot: #22253a;
+    --surface: #262b44;
+    --surface-2: var(--px-steel);
+    --text: var(--px-white);
+    --muted: var(--px-silver);
+    --line: #0e0f18;
+    --shadow: #0b0c14;
+    --accent: var(--px-sky);
+    --accent-text: var(--px-ink);
+    --accent-hi: var(--px-cyan);
+    --accent-lo: var(--px-blue);
+    --ok: var(--px-lime);
+    --ok-text: var(--px-ink);
+    --ok-strong: var(--px-lime);
+    --danger: var(--px-orange);
+    --danger-text: var(--px-ink);
+    --log-bg: #0e0f18;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: var(--px-ink);
+  --bg-dot: #22253a;
+  --surface: #262b44;
+  --surface-2: var(--px-steel);
+  --text: var(--px-white);
+  --muted: var(--px-silver);
+  --line: #0e0f18;
+  --shadow: #0b0c14;
+  --accent: var(--px-sky);
+  --accent-text: var(--px-ink);
+  --accent-hi: var(--px-cyan);
+  --accent-lo: var(--px-blue);
+  --ok: var(--px-lime);
+  --ok-text: var(--px-ink);
+  --ok-strong: var(--px-lime);
+  --danger: var(--px-orange);
+  --danger-text: var(--px-ink);
+  --log-bg: #0e0f18;
+  color-scheme: dark;
+}
+
+/* ================= Base ================= */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; background: var(--bg); }
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background-color: var(--bg);
+  /* trama a puntini 1 px ogni 8: leggerissima, statica */
+  background-image: radial-gradient(var(--bg-dot) 1px, transparent 1.5px);
+  background-size: calc(var(--px-unit) * 2) calc(var(--px-unit) * 2);
+  color: var(--text);
+  font: 17px/1.45 var(--font-body);
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+img, svg { display: block; max-width: 100%; }
+.px-sprite { image-rendering: pixelated; shape-rendering: crispEdges; }
+.px-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ================= Tipografia ================= */
+.px-title { font-family: var(--font-pixel); font-weight: 700; letter-spacing: .02em; line-height: 1.1; margin: 0; }
+.px-label { font-family: var(--font-pixel); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.px-digits { font-family: var(--font-digits); font-variant-numeric: tabular-nums; line-height: .9; }
+.px-muted { color: var(--muted); }
+
+/* ================= Pannello ================= */
+.px-panel {
+  position: relative;
+  background: var(--surface);
+  color: var(--text);
+  margin: var(--px-border);                       /* spazio per il bordo disegnato con ombre */
+  padding: calc(var(--px-unit) * 4);
+  box-shadow: var(--px-ring), var(--px-drop);
+  min-width: 0;
+}
+.px-panel--inset { background: var(--surface-2); box-shadow: var(--px-ring); }
+.px-panel--accent { background: var(--accent); color: var(--accent-text); }
+
+/* ================= Pulsanti ================= */
+.px-btn {
+  --b-bg: var(--surface);
+  --b-fg: var(--text);
+  --b-hi: rgba(255, 255, 255, .55);
+  --b-lo: rgba(0, 0, 0, .18);
+  appearance: none; border: 0; cursor: pointer;
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  min-height: var(--px-touch); min-width: var(--px-touch);
+  margin: var(--px-border);
+  padding: 0 calc(var(--px-unit) * 4);
+  font: 700 14px/1 var(--font-pixel);
+  letter-spacing: .04em; text-transform: uppercase;
+  color: var(--b-fg); background: var(--b-bg);
+  box-shadow:
+    inset calc(-1 * var(--px-unit)) calc(-1 * var(--px-unit)) 0 0 var(--b-lo),
+    inset var(--px-unit) var(--px-unit) 0 0 var(--b-hi),
+    var(--px-ring), var(--px-drop-sm);
+  transition: transform 60ms steps(1);
+  user-select: none; -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.px-btn:active:not(:disabled) {
+  transform: translate(var(--px-unit), var(--px-unit));
+  box-shadow: inset var(--px-unit) var(--px-unit) 0 0 var(--b-lo), var(--px-ring);
+}
+.px-btn:focus-visible { outline: var(--px-unit) dashed var(--accent); outline-offset: calc(var(--px-unit) * 2); }
+.px-btn:disabled { cursor: not-allowed; --b-bg: var(--surface-2); --b-fg: var(--muted); --b-hi: transparent; box-shadow: var(--px-ring); }
+.px-btn--primary { --b-bg: var(--accent); --b-fg: var(--accent-text); }
+.px-btn--ok      { --b-bg: var(--ok); --b-fg: var(--ok-text); }
+.px-btn--danger  { --b-bg: var(--danger); --b-fg: var(--danger-text); }
+.px-btn--ghost   { --b-bg: transparent; --b-hi: transparent; --b-lo: transparent; box-shadow: none; text-decoration: underline; text-underline-offset: 4px; }
+.px-btn--ghost:active:not(:disabled) { box-shadow: none; }
+.px-btn--xl { min-height: 64px; font-size: 18px; padding: 0 calc(var(--px-unit) * 6); }
+.px-btn--block { display: flex; width: calc(100% - var(--px-border) * 2); }
+
+/* ================= Barra di avanzamento a segmenti ================= */
+.px-bar {
+  --fill: var(--ok);
+  --seg: calc(var(--px-unit) * 3);  /* larghezza segmento */
+  position: relative; height: calc(var(--px-unit) * 7);
+  margin: var(--px-border);
+  background: var(--surface-2);
+  box-shadow: var(--px-ring);
+  overflow: hidden;
+}
+.px-bar > i {
+  position: absolute; inset: var(--px-unit);
+  background: var(--fill);
+  transform-origin: 0 50%; transform: scaleX(var(--p, 0));
+  will-change: transform;
+}
+.px-bar::after { /* fessure tra i segmenti: statiche, nessun repaint */
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(90deg, transparent 0 var(--seg), var(--surface-2) var(--seg) calc(var(--seg) + var(--px-unit)));
+}
+
+/* ================= Chip / badge ================= */
+.px-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 24px; padding: 2px 8px; margin: 2px;
+  font: 700 11px/1 var(--font-pixel); letter-spacing: .05em; text-transform: uppercase;
+  background: var(--surface-2); color: var(--text);
+  box-shadow: 0 -2px 0 0 var(--line), 0 2px 0 0 var(--line), -2px 0 0 0 var(--line), 2px 0 0 0 var(--line);
+}
+.px-chip--hdr { background: var(--px-yellow); color: var(--px-ink); }
+.px-chip--dv  { background: var(--px-plum); color: var(--px-white); }
+.px-chip--ok  { background: var(--ok); color: var(--ok-text); }
+
+/* ================= Segmentato (radio) ================= */
+.px-seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; margin: var(--px-border); box-shadow: var(--px-ring); background: var(--line); gap: var(--px-unit); }
+.px-seg label { position: relative; display: block; min-width: 0; }
+.px-seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.px-seg span {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 52px; padding: 4px 2px;
+  background: var(--surface); color: var(--text);
+  font: 700 18px/1 var(--font-pixel); text-align: center;
+}
+.px-seg input:checked + span { background: var(--accent); color: var(--accent-text); box-shadow: inset 0 calc(-1 * var(--px-unit)) 0 0 var(--accent-lo); }
+.px-seg input:focus-visible + span { outline: var(--px-unit) dashed var(--highlight); outline-offset: calc(-2 * var(--px-unit)); }
+.px-seg input:disabled + span { opacity: .55; }
+
+/* ================= Animazioni pixel (sempre steps) ================= */
+@keyframes px-blink { 50% { opacity: 0; } }
+@keyframes px-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(calc(-1 * var(--px-unit))); } }
+@keyframes px-pop { 0% { transform: scale(.6); } 60% { transform: scale(1.12); } 100% { transform: scale(1); } }
+.px-blink { animation: px-blink 1s steps(1) infinite; }
+.px-bob { animation: px-bob 1.2s steps(2) infinite; }
+
+/* durante l'export: niente animazioni decorative (l'encoder usa CPU/GPU) */
+[data-busy="true"] .px-blink, [data-busy="true"] .px-bob { animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition: none !important; scroll-behavior: auto !important; }
+}
