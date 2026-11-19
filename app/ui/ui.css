@@ -1,0 +1,196 @@
+/* Layout dell'app (dipende da theme.css). Prefisso .fcv- per non urtare il CSS di index.html. */
+.fcv {
+  max-width: 560px; margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: grid; gap: 22px;
+  overflow-wrap: anywhere;
+}
+.fcv[hidden], .fcv [hidden] { display: none !important; }
+.fcv p { margin: 0; }
+
+/* ---------- Testata ---------- */
+.fcv-head { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: center; padding-top: 4px; }
+.fcv-logo { width: 64px; height: 44px; }
+.fcv-head h1 { font-size: 22px; }
+.fcv-head h1 b { color: var(--accent); }
+.fcv-head p { color: var(--muted); font-size: 14px; margin-top: 4px; line-height: 1.35; }
+.fcv-cursor { display: inline-block; width: .55em; height: .16em; background: currentColor; vertical-align: baseline; margin-left: 2px; }
+
+/* ---------- Mappa dei 3 passi ---------- */
+.fcv-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.fcv-steps li {
+  display: grid; grid-template-columns: auto 1fr; gap: 6px; align-items: center;
+  min-height: 44px; padding: 6px 8px; margin: var(--px-border);
+  background: var(--surface-2); color: var(--muted);
+  box-shadow: var(--px-ring);
+  font: 400 10px/1.1 var(--font-pixel); text-transform: uppercase; letter-spacing: 0;
+}
+.fcv-steps .n { display: grid; place-items: center; width: 22px; height: 22px; background: var(--muted); color: var(--surface); font-size: 12px; }
+.fcv-steps li[data-s="now"] { background: var(--highlight); color: var(--px-ink); box-shadow: var(--px-ring), var(--px-drop-sm); }
+.fcv-steps li[data-s="now"] .n { background: var(--px-ink); color: var(--px-yellow); }
+.fcv-steps li[data-s="done"] { background: var(--surface); color: var(--text); }
+.fcv-steps li[data-s="done"] .n { background: var(--ok); color: var(--ok-text); }
+.fcv-steps .n svg { width: 14px; height: 12px; }
+
+/* ---------- Card dei passi ---------- */
+.fcv-card { display: grid; gap: 14px; }
+.fcv-card > header { display: flex; align-items: center; gap: 10px; }
+.fcv-card > header h2 { font-size: 15px; text-transform: uppercase; }
+.fcv-card > header .num { display: grid; place-items: center; width: 28px; height: 28px; flex: none; background: var(--text); color: var(--surface); font: 700 14px/1 var(--font-pixel); }
+.fcv-help { color: var(--muted); font-size: 15px; }
+
+/* Scelta file */
+.fcv-pick {
+  position: relative; display: grid; justify-items: center; gap: 10px; text-align: center;
+  padding: 26px 16px; cursor: pointer; color: var(--accent);
+  background: repeating-linear-gradient(45deg, transparent 0 8px, color-mix(in srgb, var(--accent) 8%, transparent) 8px 16px), var(--surface);
+  outline: var(--px-unit) dashed var(--accent); outline-offset: calc(-1 * var(--px-unit) * 2);
+}
+.fcv-pick input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.fcv-pick input:focus-visible ~ .fcv-pick-cta { outline: var(--px-unit) dashed var(--highlight); outline-offset: 4px; }
+.fcv-pick svg { width: 56px; height: 56px; }
+.fcv-pick-cta { font: 700 16px/1.2 var(--font-pixel); text-transform: uppercase; }
+.fcv-pick small { color: var(--muted); font-size: 14px; }
+
+.fcv-file { display: grid; gap: 12px; }
+.fcv-file-name { display: flex; gap: 10px; align-items: flex-start; }
+.fcv-file-name svg { width: 32px; height: 32px; flex: none; color: var(--accent); }
+.fcv-file-name strong { font: 700 17px/1.25 var(--font-body); word-break: break-all; }
+.fcv-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.fcv-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.fcv-stat { display: grid; gap: 2px; padding: 8px 10px; background: var(--surface-2); min-width: 0; }
+.fcv-stat .v { font-size: 30px; }
+.fcv-stat .v small { font-size: 18px; margin-left: 2px; }
+.fcv-file-actions { display: flex; justify-content: flex-end; }
+.fcv-file-actions .px-btn { font-size: 12px; min-height: 44px; }
+.fcv-relabel { position: relative; overflow: hidden; }
+.fcv-relabel input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+
+/* Impostazioni */
+.fcv-field { display: grid; gap: 8px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.fcv-field legend { padding: 0; margin-bottom: 8px; }
+.fcv .px-seg span small { font: 400 10px/1 var(--font-pixel); margin-top: 4px; opacity: .85; }
+.fcv-seg-br span .star svg { width: 14px; height: 14px; margin-top: 3px; }
+.fcv-hint { min-height: 44px; font-size: 15px; }
+.fcv-meters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fcv-meter { display: grid; gap: 6px; padding: 10px; background: var(--surface-2); min-width: 0; }
+.fcv-hearts { display: flex; gap: 3px; }
+.fcv-hearts svg { width: 21px; height: 18px; }
+.fcv-est { font-size: 30px; }
+.fcv-est .save { font-size: 22px; color: var(--ok-strong); }
+.fcv-est .bad { color: var(--danger); }
+.fcv-warn { padding: 8px 10px; background: var(--warn); color: var(--px-ink); font-size: 14px; }
+
+details.fcv-adv > summary, details.fcv-log > summary {
+  display: flex; align-items: center; gap: 10px; min-height: 48px; cursor: pointer; list-style: none;
+  font: 700 13px/1 var(--font-pixel); text-transform: uppercase; letter-spacing: .04em;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary .chev { width: 8px; height: 14px; transition: transform 80ms steps(1); }
+details[open] > summary .chev { transform: rotate(90deg); }
+details.fcv-adv[open] { display: grid; gap: 16px; padding-bottom: 6px; }
+.fcv-radios { display: grid; gap: 8px; }
+.fcv-radio { position: relative; display: grid; grid-template-columns: 24px 1fr; gap: 10px; align-items: start; padding: 10px; min-height: 48px; background: var(--surface-2); cursor: pointer; }
+.fcv-radio input { appearance: none; -webkit-appearance: none; width: 20px; height: 20px; margin: 2px 0 0; background: var(--surface); box-shadow: 0 0 0 3px var(--line); cursor: pointer; }
+.fcv-radio input:checked { background: var(--accent); box-shadow: 0 0 0 3px var(--line), inset 0 0 0 4px var(--surface); }
+.fcv-radio input:focus-visible { outline: 3px dashed var(--highlight); outline-offset: 4px; }
+.fcv-radio b { font-family: var(--font-pixel); font-size: 13px; text-transform: uppercase; display: block; margin-bottom: 2px; }
+.fcv-radio span { font-size: 14px; color: var(--muted); }
+.fcv-radio:has(input:checked) { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
+.fcv-subtle { font-size: 13px; color: var(--muted); }
+
+/* Comprimi */
+.fcv-go-note { font-size: 14px; color: var(--muted); text-align: center; }
+.fcv-go svg { width: 16px; height: 28px; }
+.fcv-summary { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 14px; }
+
+/* ---------- Avanzamento ---------- */
+.fcv-prog { display: grid; gap: 14px; }
+.fcv-prog-top { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 8px; }
+.fcv-phase { display: flex; align-items: center; gap: 10px; }
+.fcv-phase svg { width: 32px; height: 32px; color: var(--accent); }
+.fcv-phase b { display: block; font: 700 18px/1.1 var(--font-pixel); text-transform: uppercase; }
+.fcv-phase span { font-size: 14px; color: var(--muted); }
+.fcv-pct { font-size: 84px; text-align: right; color: var(--text); }
+.fcv-pct small { font-size: 40px; }
+.fcv-chain { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.fcv-chain li { display: grid; justify-items: center; gap: 4px; padding: 6px 2px; background: var(--surface-2); color: var(--muted); font: 700 9px/1 var(--font-pixel); text-transform: uppercase; letter-spacing: .02em; }
+.fcv-chain li svg { width: 16px; height: 16px; }
+.fcv-chain li[data-s="now"] { background: var(--accent); color: var(--accent-text); }
+.fcv-chain li[data-s="done"] { color: var(--ok-strong); }
+.fcv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fcv-grid .fcv-stat .v { font-size: 34px; }
+#fun-slot:empty { display: none; }
+#fun-slot { min-height: 0; }
+.fcv-cancel { justify-self: center; }
+
+/* ---------- Risultato ---------- */
+.fcv-done { display: grid; gap: 16px; overflow: hidden; text-align: center; }
+.fcv-done-title { display: flex; justify-content: center; align-items: center; gap: 12px; }
+.fcv-done-title h2 { font-size: 24px; }
+.fcv-done-title svg { width: 28px; height: 28px; }
+.fcv-big { font-size: 128px; color: var(--ok-strong); line-height: .8; }
+.fcv-big.neg { color: var(--danger); }
+.fcv-big-sub { font: 700 13px/1.2 var(--font-pixel); text-transform: uppercase; color: var(--muted); }
+.fcv-cmp { display: grid; gap: 8px; text-align: left; }
+.fcv-cmp-row { display: grid; grid-template-columns: 56px 1fr 92px; gap: 10px; align-items: center; }
+.fcv-cmp-row .px-label { font-size: 10px; }
+.fcv-cmp-row .px-bar { height: 22px; margin: var(--px-border); }
+.fcv-cmp-row .px-bar.before { --fill: var(--px-slate); }
+.fcv-cmp-row .v { font-size: 26px; min-width: 6ch; text-align: right; }
+.fcv-freed { font-size: 16px; }
+.fcv-freed b { font-family: var(--font-pixel); color: var(--ok-strong); }
+.fcv-outname { font-size: 13px; color: var(--muted); word-break: break-all; }
+.fcv-save-msg { font-size: 14px; }
+.fcv-save-msg:empty { display: none; }
+.fcv-done-more { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.fcv-done-more .px-btn { font-size: 11px; line-height: 1.3; padding: 0 6px; }
+.fcv-done[data-pop] .fcv-big { animation: px-pop 360ms steps(3) both; }
+
+/* coriandoli pixel: solo una volta, poi spariscono */
+.fcv-confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.fcv-confetti i { position: absolute; top: -12px; width: 8px; height: 8px; opacity: 0; animation: fcv-fall 1.6s steps(10) forwards; }
+@keyframes fcv-fall {
+  0% { opacity: 1; transform: translate(0, 0); }
+  90% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--dx), 420px); }
+}
+
+/* ---------- Errore ---------- */
+.fcv-err { display: grid; gap: 12px; }
+.fcv-err header { display: flex; align-items: center; gap: 10px; color: var(--danger); }
+.fcv-err header svg { width: 32px; height: 32px; }
+.fcv-err h2 { font-size: 18px; }
+.fcv-err-msg { font-family: var(--font-digits); font-size: 20px; line-height: 1.15; padding: 10px; background: var(--surface-2); }
+.fcv-err ul { margin: 0; padding-left: 20px; font-size: 15px; color: var(--muted); }
+.fcv-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.fcv-row .px-btn { flex: 1 1 140px; }
+
+/* ---------- Log ---------- */
+details.fcv-log { padding-top: 6px; padding-bottom: 6px; }
+details.fcv-log > summary .count { margin-left: auto; }
+.fcv-log pre {
+  margin: 8px 0 12px; padding: 12px; max-height: 320px; overflow: auto;
+  background: var(--log-bg); color: var(--log-text);
+  font: 17px/1.15 var(--font-digits); white-space: pre-wrap; word-break: break-word;
+  box-shadow: var(--px-ring);
+}
+.fcv-log-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fcv-copy-msg { font-size: 14px; color: var(--ok-strong); }
+
+.fcv-foot { text-align: center; font-size: 12px; color: var(--muted); font-family: var(--font-pixel); }
+
+/* ---------- Stati ---------- */
+.fcv[data-stage="busy"] .fcv-step-file,
+.fcv[data-stage="busy"] .fcv-step-set,
+.fcv[data-stage="done"] .fcv-step-set,
+.fcv[data-stage="done"] .fcv-step-go,
+.fcv[data-stage="busy"] .fcv-step-go,
+.fcv[data-stage="error"] .fcv-step-go { display: none; }
+.fcv[data-stage="done"] .fcv-step-file { display: none; }
+
+@media (max-width: 360px) {
+  .fcv-steps li { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .fcv-pct { font-size: 64px; }
+  .fcv-big { font-size: 96px; }
+}

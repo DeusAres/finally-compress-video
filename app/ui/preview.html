@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Anteprima UI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="theme.css">
+<link rel="stylesheet" href="ui.css">
+<style>
+  .dev { position: sticky; top: 0; z-index: 9; display: flex; flex-wrap: wrap; gap: 4px; padding: 6px max(8px, env(safe-area-inset-left)); background: var(--px-ink); color: var(--px-white); font: 12px var(--font-pixel); }
+  .dev[hidden] { display: none; }
+  .dev button { font: inherit; min-height: 36px; padding: 0 8px; background: var(--px-steel); color: inherit; border: 0; cursor: pointer; }
+  .dev button:hover { background: var(--px-blue); }
+  .fake-fun { display: grid; place-items: center; min-height: 72px; padding: 8px; background: var(--surface-2); color: var(--muted); font: 12px var(--font-pixel); text-align: center; box-shadow: var(--px-ring); margin: var(--px-border); }
+</style>
+</head>
+<body>
+<nav class="dev" id="dev" aria-label="Simulatore">
+  <button data-s="pick">Vuota</button><button data-s="ready">File</button><button data-s="busy">Export</button>
+  <button data-s="done">Risultato</button><button data-s="error">Errore</button><button data-s="run">▶ Simula</button>
+  <button data-t>Tema</button>
+</nav>
+<main id="app"></main>
+<script type="module">
+import { mountUI } from './ui.js';
+import { emit } from './bus.js';
+
+const q = new URLSearchParams(location.search);
+if (q.get('theme')) document.documentElement.dataset.theme = q.get('theme');
+if (q.has('shot')) document.getElementById('dev').hidden = true;
+
+const say = (line) => emit('log', { line });
+const ui = mountUI(document.getElementById('app'), {
+  onFile: (f) => { say(`${f.name} — ${(f.size / 1048576).toFixed(1)} MB`); fakeFile(f.name, f.size / 1048576); },
+  onStart: (s) => { say(`avvio: ${JSON.stringify(s)}`); run(s); },
+  onCancel: () => { stop = true; },
+  onSave: () => ui.setSaveMessage('Anteprima: qui si aprirebbe la share sheet → «Salva video».'),
+}, { version: 'v0.15' });
+
+const FILE = { name: 'IMG_7440.MOV', sizeMB: 412.6, durationS: 83.4, width: 3840, height: 2160, hdr: true, dolbyVision: true, fps: 60 };
+function fakeFile(name = FILE.name, sizeMB = FILE.sizeMB) { emit('file', { ...FILE, name, sizeMB }); }
+function chooseFile() {
+  // simula la scelta: l'input file non è scriptabile, quindi emettiamo direttamente l'evento
+  emit('file', FILE);
+  say('IMG_7440.MOV — 412.6 MB');
+  say('video hevc 3840×2160 rot 0 cs {"primaries":"bt2020","transfer":"hlg","matrix":"bt2020-ncl","fullRange":false}');
+  say('Dolby Vision sorgente: sì (dvvC)');
+  say('RPU Dolby Vision letti: 5004');
+}
+const FUN = () => { const slot = document.getElementById('fun-slot'); if (!slot.firstChild) slot.innerHTML = '<div class="fake-fun">fun.js monta qui l\'intrattenimento</div>'; };
+const clearFun = () => { document.getElementById('fun-slot').innerHTML = ''; };
+
+let stop = false;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function run(s = ui.getSettings(), speed = 1) {
+  stop = false; ui.setBusy(true); FUN();
+  const total = 5004, t0 = performance.now(), el = () => (performance.now() - t0) / 1000 * 40 / speed;
+  emit('phase', { phase: 'analisi' });
+  for (let i = 0; i <= 10 && !stop; i++) { emit('progress', { phase: 'analisi', done: i, total: 10, elapsedS: el() }); await sleep(40 * speed); }
+  emit('phase', { phase: 'video' }); say('frame nativi 3840×2160');
+  for (let i = 0; i <= total && !stop; i += 45) {
+    const e = el(), fps = 38 + Math.sin(i / 400) * 4;
+    emit('progress', { phase: 'video', done: i, total, fps, etaS: (total - i) / fps, elapsedS: e });
+    if (i % 450 === 0) emit('frame', { index: i });
+    await sleep(16 * speed);
+  }
+  if (stop) { say('annullato'); clearFun(); ui.setBusy(false); return; }
+  emit('phase', { phase: 'audio' }); say('audio: aac');
+  for (let i = 0; i <= 10; i++) { emit('progress', { phase: 'audio', done: i, total: 10, elapsedS: el() }); await sleep(30 * speed); }
+  emit('phase', { phase: 'scrittura' });
+  for (let i = 0; i <= 4; i++) { emit('progress', { phase: 'scrittura', done: i, total: 4, elapsedS: el() }); await sleep(30 * speed); }
+  emit('phase', { phase: 'fatto' }); clearFun();
+  const out = s.bitrateMbps * 1.36 * FILE.durationS / 8 * 0.95 / 1.048576 + 2.6;
+  say(`COMPRESSIONE: ${FILE.sizeMB} MB → ${out.toFixed(2)} MB`);
+  emit('result', { inMB: FILE.sizeMB, outMB: out, savedPct: (1 - out / FILE.sizeMB) * 100, fileName: `IMG_7440_${s.bitrateMbps}M_k${s.keyframeS}s_aCopy_v0.15.mp4` });
+  ui.setBusy(false);
+}
+
+// stati statici per screenshot
+function show(state) {
+  stop = true; clearFun(); ui.reset();
+  if (state === 'pick') return;
+  chooseFile();
+  if (state === 'ready') return;
+  ui.setBusy(true); FUN();
+  emit('phase', { phase: 'analisi' }); emit('phase', { phase: 'video' });
+  emit('progress', { phase: 'video', done: 2952, total: 5004, fps: 41.3, etaS: 49.7, elapsedS: 76.2 });
+  emit('frame', { index: 2952 });
+  if (state === 'busy') return;
+  if (state === 'done') {
+    emit('phase', { phase: 'audio' }); emit('phase', { phase: 'scrittura' }); emit('phase', { phase: 'fatto' }); clearFun();
+    emit('result', { inMB: 412.6, outMB: 86.9, savedPct: 78.9, fileName: 'IMG_7440_8M_k4s_aCopy_v0.15.mp4' });
+    ui.setBusy(false); return;
+  }
+  if (state === 'error') {
+    say('ERRORE: EncodingError: VideoEncoder: codec reclaimed due to inactivity');
+    emit('error', { message: 'EncodingError: l\'encoder video è stato interrotto (Safari in background?)' });
+    emit('phase', { phase: 'errore' }); clearFun(); ui.setBusy(false);
+  }
+}
+document.getElementById('dev').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.hasAttribute('data-t')) { const r = document.documentElement; r.dataset.theme = (r.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')) === 'dark' ? 'light' : 'dark'; return; }
+  if (b.dataset.s === 'run') { show('ready'); run(); } else show(b.dataset.s);
+});
+show(q.get('state') || 'ready');
+requestAnimationFrame(() => scrollTo(0, 0));
+</script>
+</body>
+</html>

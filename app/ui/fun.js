@@ -177,7 +177,7 @@ export function mountFun(slotEl, bus) {
     // celebrazione
     if (S.celebrate && S.saved != null) {
       const s = '-' + Math.round(S.saved) + '%';
-      const w = s.length * 12 - 4;
+      const w = s.length * 16 - 4;
       R(((W - w) >> 1) - 5, 40, w + 10, 26, C.dark);
       R(((W - w) >> 1) - 4, 41, w + 8, 24, C.bg2);
       text(s, (W - w) >> 1, 46, 4, C.acc);

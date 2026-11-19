@@ -216,6 +216,7 @@ img, svg { display: block; max-width: 100%; }
   background: var(--surface-2); color: var(--text);
   box-shadow: 0 -2px 0 0 var(--line), 0 2px 0 0 var(--line), -2px 0 0 0 var(--line), 2px 0 0 0 var(--line);
 }
+.px-chip--num { font: 400 17px/1 var(--font-digits); letter-spacing: 0; text-transform: none; }
 .px-chip--hdr { background: var(--px-yellow); color: var(--px-ink); }
 .px-chip--dv  { background: var(--px-plum); color: var(--px-white); }
 .px-chip--ok  { background: var(--ok); color: var(--ok-text); }
@@ -228,7 +229,7 @@ img, svg { display: block; max-width: 100%; }
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   min-height: 52px; padding: 4px 2px;
   background: var(--surface); color: var(--text);
-  font: 700 18px/1 var(--font-pixel); text-align: center;
+  font: 400 30px/.9 var(--font-digits); text-align: center;
 }
 .px-seg input:checked + span { background: var(--accent); color: var(--accent-text); box-shadow: inset 0 calc(-1 * var(--px-unit)) 0 0 var(--accent-lo); }
 .px-seg input:focus-visible + span { outline: var(--px-unit) dashed var(--highlight); outline-offset: calc(-2 * var(--px-unit)); }

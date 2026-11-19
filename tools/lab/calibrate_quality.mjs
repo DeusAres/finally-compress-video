@@ -22,7 +22,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lumaFromPlane, ssim, msssim, psnr, toDb, half } from '../../app/lib/quality.js';
-import { planSegments, sourceBitrateSeries } from '../../app/lib/scenes.js';
+import { segmentScenes as planSegments, sourceBitrateSeries } from '../../app/lib/scenes.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
 const args = process.argv.slice(2);
