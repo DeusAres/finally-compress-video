@@ -6,5 +6,6 @@ set -euo pipefail
 V=$1; cd "$(dirname "$0")/.."
 sed -i -E "s#(\./app/lib/[a-z0-9-]+\.js)(\?v=[^']*)?'#\1?v=$V'#g" index.html
 sed -i -E "s#(from '\./[a-z0-9-]+\.js)(\?v=[^']*)?'#\1?v=$V'#g" app/lib/*.js
+sed -i -E "s#(opfs-worker\.js)\?v=[^']*'#\1?v=$V'#g" app/lib/opfs.js
 sed -i -E "s#Compressore HDR v[0-9.]+#Compressore HDR v$V#g" index.html
 grep -c "?v=$V" index.html

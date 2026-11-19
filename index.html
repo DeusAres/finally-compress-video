@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>
-<title>Compressore HDR v0.14</title>
+<title>Compressore HDR v0.15</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
 /* Layout: single-column tool — file in, settings, progress log, result card */
@@ -16,8 +16,11 @@ button:focus-visible{outline:3px solid var(--fg)}
 pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;margin:0;max-height:300px}
 .big{font-size:1.6rem;font-variant-numeric:tabular-nums;font-weight:600}.ok{color:var(--ok)}.ko{color:var(--ko)}
 progress{width:100%}
+.mut{color:var(--mut);font-size:.88rem;font-variant-numeric:tabular-nums}.phase{font-weight:600}
+.warn{border:1px solid var(--ko);color:var(--ko);border-radius:8px;padding:9px 12px;font-size:.92rem;line-height:1.4}
+.sec{background:transparent;color:var(--fg);border:1px solid var(--line)}
 </style>
-<h1>Compressore HDR v0.14</h1>
+<h1>Compressore HDR v0.15</h1>
 <p>Prototipo: ricodifica HEVC 10-bit HLG frame per frame a bitrate fisso, con Dolby Vision e metadati originali trapiantati.</p>
 
 <div class="card">
@@ -27,8 +30,15 @@ progress{width:100%}
     <label>Keyframe ogni<select id="gop"><option value="1">1 s</option><option value="4" selected>4 s</option><option value="10">10 s</option></select></label>
         <label>Audio<select id="amode"><option value="copy" selected>copia originale</option><option value="reenc">solo ricodifica (diagnostica)</option><option value="v1">ripara eco v1</option><option value="v2">ripara eco v2 (filtro per frequenza)</option><option value="v3">ripara eco v3 (adattivo, L+R)</option><option value="v4">ripara eco v4 (intero file, consigliato)</option></select></label>
   </div>
-  <button id="go" disabled>Comprimi</button>
-  <progress id="prog" max="1" value="0"></progress>
+  <div class="mut" id="est" aria-live="polite"></div>
+  <div class="row"><button id="go" disabled>Comprimi</button><button id="cancel" class="sec" hidden>Annulla</button></div>
+  <div id="pbox" hidden style="display:grid;gap:6px">
+    <div class="phase" id="phase"></div>
+    <progress id="prog" max="1" value="0"></progress>
+    <div class="mut" id="stats"></div>
+    <div class="warn" id="warn" hidden></div>
+  </div>
+  <div class="warn" id="err" hidden role="alert"></div>
 </div>
 <div class="card" id="res" hidden>
   <div class="big" id="ratio"></div>
@@ -38,28 +48,108 @@ progress{width:100%}
 <div class="card"><div class="row"><button id="copy">Copia log</button><span id="copyMsg"></span></div><pre id="log">Scegli un video.</pre></div>
 
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.14';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.14';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.14';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.14';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.14';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.14';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.15';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.15';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.15';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.15';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.15';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.15';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.15';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const logEl = $('log'); const log = (s) => { logEl.textContent += '\n' + s; logEl.scrollTop = 1e9; };
-let file = null, outBlob = null, outName = '';
-$('file').onchange = (e) => { file = e.target.files[0] || null; $('go').disabled = !file; logEl.textContent = file ? `${file.name} — ${(file.size / 1048576).toFixed(1)} MB` : 'Scegli un video.'; };
+let file = null, outFile = null, outName = '', info = null, running = false, cancelled = false, wake = null, store = null, cur = { enc: null, video: null, output: null };
+const MB_ = 1048576, AUDIO_BPS = 256000;
+const fmtT = (s) => { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m ? `${m}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`; };
+const fmtMB = (b) => b >= 1024 * MB_ ? `${(b / 1024 / MB_).toFixed(2)} GB` : `${(b / MB_).toFixed(1)} MB`;
+const cancelErr = () => Object.assign(new Error('Elaborazione annullata'), { name: 'Cancelled' });
+const checkCancel = () => { if (cancelled) throw cancelErr(); };
+// Pagina in background → iOS sospende JS/seek: attendi il ritorno in primo piano prima di proseguire.
+const whenVisible = async () => { while (document.hidden) { await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true })); } checkCancel(); };
+const acquireWake = async () => { try { if (!wake || wake.released) { wake = await navigator.wakeLock?.request('screen'); } } catch { wake = null; } };
+document.addEventListener('visibilitychange', () => {
+  if (!running) return;
+  if (document.hidden) { $('warn').textContent = 'Pagina in background: l\'elaborazione è sospesa finché non torni qui. Tieni l\'app aperta e lo schermo acceso.'; $('warn').hidden = false; }
+  else { $('warn').hidden = true; acquireWake(); }
+});
+
+// Stima preventiva: durata, risoluzione, dimensione in uscita (bitrate × durata) e spazio OPFS disponibile.
+async function updateEstimate() {
+  const est = $('est'); $('go').disabled = true; $('err').hidden = true;
+  if (!file) { est.textContent = ''; return; }
+  if (!info) { est.textContent = 'Lettura del file…'; return; }
+  if (info.error) { est.textContent = 'Impossibile leggere il video: ' + info.error; return; }
+  const br = +$('br').value * 1e6, outBytes = (br + AUDIO_BPS) * info.dur / 8 * 1.01;
+  const sp = await opfsSpace(); const need = outBytes * 1.15 + 32 * MB_;
+  let msg = `${info.W}×${info.H} · ${fmtT(info.dur)} · sorgente ${fmtMB(file.size)} (${(file.size * 8 / info.dur / 1e6).toFixed(0)} Mbps)\nUscita stimata ≈ ${fmtMB(outBytes)}`;
+  est.style.whiteSpace = 'pre-line';
+  if (!opfsSupported()) { est.textContent = msg + '\nArchiviazione OPFS non disponibile in questo browser: impossibile elaborare in streaming.'; return; }
+  let ok = true;
+  if (sp) { msg += ` · spazio libero ${fmtMB(sp.free)}`; if (sp.free < need) { ok = false; msg += `\nSpazio insufficiente: servono almeno ${fmtMB(need)}. Libera spazio sul telefono o scegli un bitrate più basso.`; } }
+  else msg += ' · spazio libero non determinabile';
+  if (info.dur > 600) msg += '\nVideo lungo: tieni l\'app in primo piano e lo schermo acceso per tutta l\'elaborazione.';
+  est.textContent = msg; $('go').disabled = !ok || running;
+}
+async function inspectFile(f) {
+  const input = new MB.Input({ source: new MB.BlobSource(f), formats: MB.ALL_FORMATS });
+  try {
+    const vt = await input.getPrimaryVideoTrack(); if (!vt) throw new Error('nessuna traccia video');
+    return { W: await vt.getDisplayWidth(), H: await vt.getDisplayHeight(), dur: await input.computeDuration() };
+  } catch (e) { return { error: e?.message || String(e) }; } finally { try { input.dispose?.(); } catch {} }
+}
+$('file').onchange = async (e) => {
+  file = e.target.files[0] || null; info = null; $('res').hidden = true;
+  logEl.textContent = file ? `${file.name} — ${(file.size / MB_).toFixed(1)} MB` : 'Scegli un video.';
+  await updateEstimate(); if (!file) return;
+  const f = file; const r = await inspectFile(f); if (f !== file) return; info = r; await updateEstimate();
+};
+$('br').onchange = updateEstimate; $('amode').onchange = updateEstimate;
+
+// Avvio: pulizia file OPFS di run precedenti; avviso se la sessione precedente è stata uccisa (jetsam/background).
+(async () => {
+  try { if (localStorage.getItem('jobRunning')) { localStorage.removeItem('jobRunning'); $('err').textContent = 'La sessione precedente è stata interrotta (probabile memoria esaurita o app chiusa in background). Riprova tenendo l\'app in primo piano e lo schermo acceso; per video molto lunghi scegli un bitrate più basso.'; $('err').hidden = false; } } catch {}
+  const n = await cleanOpfs(); if (n) console.log('OPFS: rimossi', n, 'file vecchi');
+  try { await navigator.storage?.persist?.(); } catch {}
+})();
+
+// Progress UI: fasi pesate (analisi / video / audio / scrittura) → barra complessiva; frame x/y, fps, trascorso e residuo.
+const PH = { analisi: [0, .05, 'Fase 1/4 · analisi'], video: [.05, .80, 'Fase 2/4 · video'], audio: [.85, .12, 'Fase 3/4 · audio'], scrittura: [.97, .03, 'Fase 4/4 · scrittura'] };
+let TSTART = 0;
+function setProg(phase, frac, text, etaSec) {
+  const [base, w, label] = PH[phase]; $('phase').textContent = label;
+  $('prog').value = Math.min(1, base + w * Math.max(0, Math.min(1, frac)));
+  $('stats').textContent = `${text ? text + ' · ' : ''}trascorso ${fmtT((performance.now() - TSTART) / 1000)}${etaSec != null && isFinite(etaSec) ? ' · residuo ~' + fmtT(etaSec) : ''}`;
+}
+$('cancel').onclick = () => { cancelled = true; $('cancel').disabled = true; $('cancel').textContent = 'Annullamento…'; };
+
+function friendlyError(e) {
+  const n = e?.name || '';
+  if (n === 'Cancelled') return 'Elaborazione annullata.';
+  if (n === 'QuotaExceededError' || /quota|no space|spazio/i.test(e?.message || '')) return 'Spazio di archiviazione esaurito durante la scrittura. Libera spazio sul telefono e riprova (o scegli un bitrate più basso).';
+  return 'Errore: ' + (n ? n + ': ' : '') + (e?.message || e) + '. Se la pagina si è ricaricata da sola, la memoria è finita: riprova con l\'app in primo piano.';
+}
 
 $('go').onclick = async () => {
-  $('go').disabled = true; $('res').hidden = true; logEl.textContent = '';
-  let wake = null; try { wake = await navigator.wakeLock?.request('screen'); } catch {}
-  try { await run(); } catch (e) { log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || '')); }
-  try { await wake?.release(); } catch {}
-  $('go').disabled = false;
+  $('go').disabled = true; $('res').hidden = true; $('err').hidden = true; $('warn').hidden = true; logEl.textContent = '';
+  running = true; cancelled = false; $('cancel').hidden = false; $('cancel').disabled = false; $('cancel').textContent = 'Annulla'; $('pbox').hidden = false;
+  TSTART = performance.now(); try { localStorage.setItem('jobRunning', '1'); } catch {}
+  if (outFile) { outFile = null; await cleanOpfs(); }
+  await acquireWake();
+  try { await run(); }
+  catch (e) {
+    log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || ''));
+    $('err').textContent = friendlyError(e); $('err').hidden = false; $('res').hidden = true;
+    try { cur.enc?.close(); } catch {} try { if (cur.video) releaseVideoElement(cur.video); } catch {} try { await cur.output?.cancel(); } catch {}
+    cur = { enc: null, video: null, output: null }; try { await store?.remove(); } catch {} store = null;
+  }
+  running = false; $('cancel').hidden = true; $('pbox').hidden = true; $('warn').hidden = true;
+  try { localStorage.removeItem('jobRunning'); } catch {}
+  try { await wake?.release(); } catch {} wake = null;
+  updateEstimate();
 };
 
 async function run() {
-  const T0 = performance.now();
+  const T0 = performance.now(); setProg('analisi', 0, 'lettura pacchetti');
   const bitrate = +$('br').value * 1e6, gopSec = +$('gop').value, fastStart = false; // moov in coda: necessario per riscrivere il moov
   // 1. Demux
   const input = new MB.Input({ source: new MB.BlobSource(file), formats: MB.ALL_FORMATS });
@@ -73,23 +163,22 @@ async function run() {
   const pk = []; const rpuByTs = new Map(); let rpuCount = 0;
   for await (const p of new MB.EncodedPacketSink(vt).packets(undefined, undefined, dvBox ? {} : { metadataOnly: true })) {
     const e = { ts: p.timestamp, dur: p.duration, rpu: null }; pk.push(e);
-    if (dvBox) { const r = extractNals(p.data, [62]); if (r.length) { e.rpu = r; rpuCount++; } }
+    // slice(): extractNals returns views into the packet buffer; keeping them would retain every full 4K packet in RAM.
+    if (dvBox) { const r = extractNals(p.data, [62]); if (r.length) { e.rpu = r.map((n) => n.slice()); rpuCount++; } }
+    if (pk.length % 256 === 0) { checkCancel(); await whenVisible(); setProg('analisi', info?.dur ? Math.min(1, p.timestamp / info.dur) : 0, `pacchetti ${pk.length}`); await new Promise((r) => setTimeout(r)); }
   }
   if (dvBox) log(`RPU Dolby Vision letti: ${rpuCount}`);
   pk.sort((a, b) => a.ts - b.ts);
   const neg = pk.filter((p) => p.ts < 0).length; const frames = pk.filter((p) => p.ts >= 0);
   log(`pacchetti ${pk.length}, presentabili ${frames.length} (scartati ts<0: ${neg}), primo ts ${frames[0]?.ts.toFixed(4)} s`);
+  const durS = frames.reduce((a, f) => a + f.dur, 0);
   const audios = await input.getAudioTracks(); let aac = null;
   for (const a of audios) { const c = await a.getCodec(); log(`audio: ${c ?? 'sconosciuto (es. apac, scartato)'}`); if (c === 'aac' && !aac) aac = a; }
 
   // 2. Frame source (native 10-bit via seek)
   const video = await openVideoElement(file);
-  const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}`);
+  cur.video = video; const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}`);
 
-  // 3. Output
-  const target = new MB.BufferTarget();
-  const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart, metadataFormat: 'mdta' }), target });
-  const vsrc = new MB.EncodedVideoPacketSource('hevc'); output.addVideoTrack(vsrc);
   // Audio: passthrough, unless an echo (copy summed with a delay, e.g. iOS "Encode Media" shortcut) is detected
   let asrc = null, echoFix = null;
   const amode = $('amode').value;
@@ -115,6 +204,23 @@ async function run() {
       }
     } catch (e) { log('analisi eco fallita: ' + e.message + ' → audio copiato'); }
   }
+  // v4 decodes the whole audio in RAM (~115 MB/min measured): beyond V4_MAX_SEC fall back to the streaming v3 filter.
+  if (echoFix?.v4) {
+    const V4_MAX_SEC = 300; log(`v4: RAM audio stimata ~${(durS / 60 * 115).toFixed(0)} MB per ${fmtT(durS)} di video`);
+    if (durS > V4_MAX_SEC) { log(`⚠️ video più lungo di ${V4_MAX_SEC / 60} min: v4 (intero file in RAM) rischia di far uccidere la pagina → uso v3 (streaming, stesso rilevamento)`); echoFix = { v3: true, delaySamples: echoFix.delaySamples, sr: echoFix.sr, nch: echoFix.nch }; }
+  }
+  checkCancel();
+  // 3. Output: STREAMING su OPFS (Worker + SyncAccessHandle), moov in coda (fastStart:false) → riscritto a fine job senza caricare mdat in RAM.
+  const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
+  const aTag = { copy: 'aCopy', reenc: 'aReenc', v1: 'eco1', v2: 'eco2', v3: 'eco3', v4: 'eco4' }[echoFix ? (echoFix.v4 ? 'v4' : echoFix.v3 ? 'v3' : echoFix.v2 ? 'v2' : echoFix.reencOnly ? 'reenc' : 'v1') : 'copy'];
+  const base = file.name.replace(/\.[^.]+$/, ''), brTag = `${bitrate / 1e6}M`;
+  outName = `${base}_${brTag}_k${gopSec}s_${aTag}_${VER}.mp4`;
+  const label = `${base} · ${bitrate / 1e6} Mbps · key ${gopSec}s · ${aTag} · ${VER}`;
+  if (!opfsSupported()) throw new Error('OPFS non disponibile in questo browser');
+  store = await openOpfsStore(outName);
+  const target = new MB.StreamTarget(new WritableStream({ write: (c) => store.write(c.position, c.data) }), { chunked: true, chunkSize: 4 * MB_ });
+  const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart, metadataFormat: 'mdta' }), target });
+  cur.output = output; const vsrc = new MB.EncodedVideoPacketSource('hevc'); output.addVideoTrack(vsrc);
   if (aac) { asrc = echoFix ? new MB.AudioSampleSource({ codec: 'aac', bitrate: 256000 }) : new MB.EncodedAudioPacketSource('aac'); output.addAudioTrack(asrc); }
   const raw = {}; for (const k of ['com.apple.quicktime.creationdate', 'com.apple.quicktime.location.ISO6709', 'com.apple.quicktime.make', 'com.apple.quicktime.model', 'com.apple.quicktime.software']) { const v = tags?.raw?.[k]; if (typeof v === 'string') raw[k] = v; }
   log(`metadati copiati: ${Object.keys(raw).map((k) => k.split('.').pop()).join(', ') || 'nessuno'}`);
@@ -123,8 +229,7 @@ async function run() {
 
   // 4. Encode
   const hlg = srcCs?.transfer === 'hlg';
-  const durByTs = new Map(frames.map((f) => [Math.round(f.ts * 1e6), f.dur]));
-  let first = true, encErr = null, nChunks = 0, firstKeyNal = null, rpuUsed = 0, tsDrift = 0; const pending = [];
+  let first = true, encErr = null, nChunks = 0, firstKeyNal = null, rpuUsed = 0, tsDrift = 0; const inflight = new Set(); // vsrc.add() in volo, limitato nel loop (≤8)
   const enc = createHevcEncoder({ width: W, height: H, bitrate,
     onError: (e) => { encErr = e; },
     onChunk: (chunk, meta) => {
@@ -143,25 +248,35 @@ async function run() {
           description: hlg ? patchHvcC(desc, { primaries: 9, transfer: 18, matrix: 9, fullRange: false }) : desc,
           colorSpace: hlg ? { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false } : srcCs } };
       }
-      nChunks++; pending.push(vsrc.add(pkt, m));
+      nChunks++;
+      const pr = vsrc.add(pkt, m).catch((e) => { encErr ||= e; }).finally(() => inflight.delete(pr)); inflight.add(pr);
     } });
-  const keyEvery = Math.max(1, Math.round(gopSec * 60)); let i = 0; const tE = performance.now();
+  cur.enc = enc; const keyEvery = Math.max(1, Math.round(gopSec * 60)); let i = 0; const tE = performance.now(); const NF = frames.length;
+  setProg('video', 0, `frame 0/${NF}`);
   // frame confirmation is MANDATORY: without waiting for the presented frame (rVFC) after 'seeked',
   // Safari often returns the previous frame (measured: alternating 33/22 dB PSNR, VMAF 43–53). v0.13.
   const vstats = { n: 0, dup: 0, off: 0, noCallback: 0, samples: [] };
   for await (const vf of seekFrames(video, frames.map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), vstats)) {
-    if (encErr) { vf.close(); throw encErr; }
-    enc.encode(vf, i % keyEvery === 0); vf.close(); i++;
-    await enc.drain(4);
-    if (i % 15 === 0) { $('prog').value = i / frames.length; await new Promise((r) => setTimeout(r)); }
+    try { if (encErr || cancelled) throw encErr || cancelErr(); enc.encode(vf, i % keyEvery === 0); } finally { vf.close(); } // sempre chiuso
+    i++;
+    await enc.drain(4); // encodeQueue ≤ 4
+    while (inflight.size > 8) await Promise.race(inflight); // packet → muxer → OPFS: mai accumulo
+    if (i % 15 === 0) {
+      const el = (performance.now() - tE) / 1000;
+      setProg('video', i / NF, `frame ${i}/${NF} · ${(i / el).toFixed(0)} fps`, (NF - i) / (i / el)); await new Promise((r) => setTimeout(r));
+    }
+    await whenVisible(); // app in background: iOS sospende seek/codec → aspetta (checkCancel incluso)
   }
-  await enc.flush(); enc.close(); releaseVideoElement(video); await Promise.all(pending);
+  if (encErr) throw encErr;
+  setProg('video', 1, 'chiusura encoder');
+  await enc.flush(); enc.close(); releaseVideoElement(video); await Promise.all(inflight); if (encErr) throw encErr;
   const encSec = (performance.now() - tE) / 1000;
   if (vstats) log(`verifica frame: ${vstats.n} seek, doppioni ${vstats.dup}, fuori posto ${vstats.off}, senza callback ${vstats.noCallback} ${vstats.samples.length ? 'es. ' + JSON.stringify(vstats.samples) : ''}`);
   { const d = frames.map((f) => Math.round(f.dur * 1000)); const h = {}; d.forEach((x) => h[x] = (h[x] || 0) + 1); log(`durate frame sorgente (ms→n): ${JSON.stringify(h)}`); }
   log(`codificati ${i} frame → ${nChunks} chunk in ${encSec.toFixed(1)} s (${(i / encSec).toFixed(0)} fps). NAL nel primo frame: ${firstKeyNal} (19/20 = IDR, 21 = CRA, 39 = SEI, 32-34 = parametri)`);
 
   // 5. Audio passthrough
+  setProg('audio', 0, asrc ? 'audio' : 'nessun audio');
   if (asrc && echoFix) {
     const rm = echoFix.v4 ? null : echoFix.v3 ? createEchoRemoverV3({ delaySamples: echoFix.delaySamples, sampleRate: echoFix.sr, channels: echoFix.nch }) : echoFix.v2 ? createEchoRemoverV2({ delaySamples: echoFix.delaySamples, h: echoFix.h, mode: 'iir', channels: echoFix.nch }) : createEchoRemover({ delaySamples: echoFix.delaySamples, gain: echoFix.gain, gainHigh: echoFix.gainHigh, crossoverHz: echoFix.crossoverHz, sampleRate: echoFix.sr, channels: echoFix.nch });
     let nS = 0, t0In = null, emitted = 0; const sr = echoFix.sr;
@@ -173,6 +288,7 @@ async function run() {
       const data = new Float32Array(m * nch); out.forEach((o, c) => data.set(o.subarray(skip), c * m));
       const as = new MB.AudioSample({ data, format: 'f32-planar', numberOfChannels: nch, sampleRate: sr, timestamp: start });
       await asrc.add(as); as.close(); nS++;
+      if (nS % 32 === 0) { checkCancel(); await whenVisible(); setProg('audio', (start) / durS, 'audio ' + fmtT(start) + '/' + fmtT(durS)); }
     };
     if (echoFix.v4) { // whole-file, non-causal: decode everything, process once, emit in slices
       const parts = []; let total = 0;
@@ -181,9 +297,10 @@ async function run() {
         const n = s.numberOfFrames, inp = [];
         for (let c = 0; c < s.numberOfChannels; c++) { const b = new Float32Array(n); s.copyTo(b, { planeIndex: c, format: 'f32-planar' }); inp.push(b); }
         s.close(); parts.push(inp); total += n;
+        if (parts.length % 64 === 0) { checkCancel(); await whenVisible(); setProg('audio', .4 * (s.timestamp / durS || 0), 'decodifica audio (v4, intero file)'); await new Promise((r) => setTimeout(r)); }
       }
       const ch = Array.from({ length: echoFix.nch }, (_, c) => { const o = new Float32Array(total); let k = 0; for (const p of parts) { o.set(p[c], k); k += p[c].length; } return o; });
-      parts.length = 0; const tv = performance.now();
+      parts.length = 0; const tv = performance.now(); setProg('audio', .45, 'filtro v4 in corso (può richiedere minuti)'); await new Promise((r) => setTimeout(r, 30));
       const out = removeEchoV4(ch, sr, { delaySamples: echoFix.delaySamples });
       log(`v4 elaborato in ${((performance.now() - tv) / 1000).toFixed(1)} s`);
       for (let k = 0; k < total; k += 4096) await emit(out.map((o) => o.subarray(k, Math.min(total, k + 4096))));
@@ -198,24 +315,27 @@ async function run() {
     }
     asrc.close(); log(`audio ${echoFix.reencOnly ? 'SOLO ricodificato (nessun filtro)' : 'corretto e ricodificato'} AAC 256 kbps (${nS} blocchi)`);
   } else if (asrc) { let first = true; const cfg = await aac.getDecoderConfig();
-    for await (const p of new MB.EncodedPacketSink(aac).packets()) { if (p.timestamp < 0) continue; await asrc.add(p.clone({ timestamp: p.timestamp - frames[0].ts }), first ? { decoderConfig: cfg } : undefined); first = false; }
+    let nA = 0;
+    for await (const p of new MB.EncodedPacketSink(aac).packets()) { if (p.timestamp < 0) continue; await asrc.add(p.clone({ timestamp: p.timestamp - frames[0].ts }), first ? { decoderConfig: cfg } : undefined); first = false;
+      if (++nA % 256 === 0) { checkCancel(); await whenVisible(); setProg('audio', p.timestamp / durS, 'audio ' + fmtT(p.timestamp) + '/' + fmtT(durS)); await new Promise((r) => setTimeout(r)); } }
     asrc.close(); }
-  vsrc.close(); await output.finalize();
-  const outU8 = new Uint8Array(target.buffer);
-  const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
-  const aTag = { copy: 'aCopy', reenc: 'aReenc', v1: 'eco1', v2: 'eco2', v3: 'eco3', v4: 'eco4' }[echoFix ? (echoFix.v4 ? 'v4' : echoFix.v3 ? 'v3' : echoFix.v2 ? 'v2' : echoFix.reencOnly ? 'reenc' : 'v1') : 'copy'];
-  const base = file.name.replace(/\.[^.]+$/, ''), brTag = `${bitrate / 1e6}M`;
-  outName = `${base}_${brTag}_k${gopSec}s_${aTag}_${VER}.mp4`;
-  const label = `${base} · ${bitrate / 1e6} Mbps · key ${gopSec}s · ${aTag} · ${VER}`;
-  const { prefixLength, moov } = await rewriteMoov(outU8, (m) => { let x = srcMoov ? copySourceMetadata(srcMoov, m) : m; if (dvBox) x = insertIntoVideoSampleEntry(x, dvBox);
+  checkCancel(); setProg('scrittura', 0, 'chiusura file');
+  vsrc.close(); await output.finalize(); cur.output = null; await store.flush();
+  // moov in coda: lo riscrivo SENZA caricare mdat: leggo solo header + moov dal file OPFS, tronco a prefixLength e appendo il nuovo moov.
+  const outSize = await store.size();
+  const { prefixLength, moov } = await rewriteMoov({ size: outSize, read: (o, l) => store.read(o, l) }, (m) => { let x = srcMoov ? copySourceMetadata(srcMoov, m) : m; if (dvBox) x = insertIntoVideoSampleEntry(x, dvBox);
     x = setMetaString(x, 'com.apple.quicktime.displayname', label); x = setMetaString(x, 'com.apple.quicktime.description', `finally-compress-video ${VER} · target ${bitrate / 1e6} Mbps · keyframe ${gopSec}s · audio ${aTag}`); return x; });
-  outBlob = new Blob([outU8.subarray(0, prefixLength), moov], { type: 'video/mp4' });
+  setProg('scrittura', .5, 'riscrittura moov');
+  await store.truncate(prefixLength); await store.write(prefixLength, moov); await store.flush(); await store.close();
+  const f0 = await store.getFile(); store = null;
+  outFile = f0.type === 'video/mp4' && f0.name === outName ? f0 : new File([f0], outName, { type: 'video/mp4' }); // File su disco (OPFS), nessuna copia in RAM
+  setProg('scrittura', 1, 'completato');
   log(`RPU trapiantati: ${rpuUsed}/${nChunks}${dvBox && rpuUsed !== nChunks ? ' ⚠️ INCOMPLETO' : ''}. Timestamp encoder spostati >2 ms: ${tsDrift}. Metadati originali copiati: ${srcMoov ? 'sì' : 'no'}.`);
-  const pct = (1 - outBlob.size / file.size) * 100;
-  $('ratio').innerHTML = `${(file.size / 1048576).toFixed(1)} MB → ${(outBlob.size / 1048576).toFixed(1)} MB <span class="${pct > 0 ? 'ok' : 'ko'}">(${pct > 0 ? '−' : '+'}${Math.abs(pct).toFixed(0)}%)</span>`;
-  $('res').hidden = false; $('saveMsg').textContent = ''; $('prog').value = 1;
-  const durS = frames.reduce((a, f) => a + f.dur, 0), mb = (b) => (b / 1048576).toFixed(2);
-  log(`COMPRESSIONE: ${mb(file.size)} MB → ${mb(outBlob.size)} MB (−${pct.toFixed(1)}%, ${(file.size / outBlob.size).toFixed(2)}×). Bitrate medio ${(file.size * 8 / durS / 1e6).toFixed(1)} → ${(outBlob.size * 8 / durS / 1e6).toFixed(1)} Mbps (target video ${bitrate / 1e6} Mbps, keyframe ogni ${gopSec} s), durata ${durS.toFixed(2)} s.`);
+  const pct = (1 - outFile.size / file.size) * 100;
+  $('ratio').innerHTML = `${(file.size / 1048576).toFixed(1)} MB → ${(outFile.size / 1048576).toFixed(1)} MB <span class="${pct > 0 ? 'ok' : 'ko'}">(${pct > 0 ? '−' : '+'}${Math.abs(pct).toFixed(0)}%)</span>`;
+  $('res').hidden = false; $('saveMsg').textContent = '';
+  const mb = (b) => (b / 1048576).toFixed(2);
+  log(`COMPRESSIONE: ${mb(file.size)} MB → ${mb(outFile.size)} MB (−${pct.toFixed(1)}%, ${(file.size / outFile.size).toFixed(2)}×). Bitrate medio ${(file.size * 8 / durS / 1e6).toFixed(1)} → ${(outFile.size * 8 / durS / 1e6).toFixed(1)} Mbps (target video ${bitrate / 1e6} Mbps, keyframe ogni ${gopSec} s), durata ${durS.toFixed(2)} s.`);
   log(`file: ${outName}`);
   log(`fatto in ${((performance.now() - T0) / 1000).toFixed(1)} s.`);
 }
@@ -225,16 +345,16 @@ $('save').onclick = () => {
   // Fuori dall'artifact (GitHub Pages): share sheet con SOLO il file → iOS offre «Salva video» (diretto in Foto).
   // share() va chiamato subito nel tap (user activation ~5 s), senza await prima; promise non attesa per la UI.
   if (!window.claude?.use) {
-    const f = new File([outBlob], outName, { type: 'video/mp4' });
+    const f = outFile; // File OPFS: niente copie in RAM
     if (navigator.canShare?.({ files: [f] })) { navigator.share({ files: [f] }).catch((e) => { if (e?.name !== 'AbortError') $('saveMsg').textContent = 'Condivisione non riuscita: ' + e.message; }); return; }
-    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(outBlob), download: outName }); document.body.appendChild(a); a.click(); a.remove(); return;
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(outFile), download: outName }); document.body.appendChild(a); a.click(); a.remove(); return;
   }
   saveViaArtifact();
 };
 async function saveViaArtifact() {
   const dl = await window.claude.use('downloads');
   if (!dl) { $('saveMsg').textContent = 'Il salvataggio non è disponibile in questa vista.'; return; }
-  try { const r = await dl.save({ filename: outName, data: outBlob }); $('saveMsg').textContent = r.status === 'saved' ? 'Salvato. Aprilo da File e scegli «Salva video» per metterlo in Foto.' : ''; }
+  try { const r = await dl.save({ filename: outName, data: outFile }); $('saveMsg').textContent = r.status === 'saved' ? 'Salvato. Aprilo da File e scegli «Salva video» per metterlo in Foto.' : ''; }
   catch (e) { $('saveMsg').textContent = `Non salvato (${e.code || e.message}).`; }
 }
 </script>
