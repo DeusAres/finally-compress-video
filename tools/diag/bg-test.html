@@ -209,10 +209,12 @@ async function startF() {
   const mc = new MessageChannel();
   while (!finished) {
     const time = (k++ * step) % Math.max(d - step, step);
-    const p = wait('seeked', 400);
+    // rVFC must be requested BEFORE the seek (as the app does): requested after 'seeked' the frame was
+    // already presented and the callback never fires on a paused video (bug of the first version of this test).
+    const p = wait('seeked', 1000), pr = rv(1000);
     v.currentTime = time;
     const ok = await p;
-    const ok2 = ok && await rv(250);
+    const ok2 = ok && await pr;
     if (ok && ok2) {
       try { const f = new VideoFrame(v); f.close(); rec('f'); } catch (e) { rec('f_to'); errs.push('VideoFrame(vf): ' + e.message); await new Promise(r => setTimeout(r, 200)); }
     } else rec('f_to');
