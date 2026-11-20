@@ -29,7 +29,7 @@ video{width:160px;max-width:45%;background:#000;border-radius:6px}
 </style>
 </head>
 <body>
-<h1>Test background Safari iOS</h1>
+<h1>Test background Safari iOS <small style="font-size:.55em;opacity:.75">v2 · seek corretto · 20/11 13:11</small></h1>
 <p>Misura quali sottosistemi restano vivi con l'app in background. Procedura: scegli un video, premi <b>Avvia</b>, resta in primo piano ~10 s, poi vai alla Home (o blocca lo schermo) per ~30-40 s, torna alla pagina e attendi la fine dei 60 s. Per il PiP: tocca «Attiva PiP» prima di uscire.</p>
 
 <div class="card">
@@ -358,7 +358,7 @@ function summarize() {
   html += '</table>';
   if (errs.length) html += '<p class="ko">Errori: ' + errs.slice(0, 10).map(e => String(e).replace(/</g, '&lt;')).join(' | ') + '</p>';
   $('sum').innerHTML = html;
-  const txt = ['Test background', JSON.stringify(cfgUsed), 'fg ' + f1(fgS) + ' s, bg ' + f1(bgS) + ' s',
+  const txt = ['Test background v2 (seek corretto)', JSON.stringify(cfgUsed), 'fg ' + f1(fgS) + ' s, bg ' + f1(bgS) + ' s',
     'sottotest | fg_s fg_n fg/s | bg_s bg_n bg/s | bg/fg | gapBg_ms | esito',
     ...rows.map(r => [r.name, f1(r.fgS), r.nF, f1(r.rF), f1(r.bgS), r.nB, f1(r.rB), Number.isFinite(r.ratio) ? Math.round(r.ratio * 100) + '%' : '-', r.gapB, r.verdict].join(' | ')),
     'visibilita: ' + vis.map(v => ((v.t - tStart) / 1000).toFixed(1) + 's=' + v.s).join(', '),
