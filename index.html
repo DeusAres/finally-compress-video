@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.22.1</title>
+<title>Compressore HDR v0.23</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -14,19 +14,20 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.22.1';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.22.1';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.22.1';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.22.1';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.22.1';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.22.1';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.22.1';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.22.1';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.22.1';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.22.1';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.22.1';
-import { mountUI } from './app/ui/ui.js?v=0.22.1';
-import { bus, emit } from './app/ui/bus.js?v=0.22.1';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.23';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.23';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.23';
+import { nextBitrate, realBitrate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.23';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.23';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.23';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.23';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.23';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.23';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.23';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.23';
+import { createPip, pipSupported } from './app/lib/pip.js?v=0.23';
+import { mountUI } from './app/ui/ui.js?v=0.23';
+import { bus, emit } from './app/ui/bus.js?v=0.23';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const log = (s) => emit('log', { line: String(s) });
@@ -34,8 +35,8 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.22.1-20261120T172622Z';
-const BUILD_LABEL = 'v0.22.1 · 20/11 18:26';
+const BUILD_ID = '0.23-20261120T172921Z';
+const BUILD_LABEL = 'v0.23 · 20/11 18:29';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false }, NFtot = 0;
 let parOff = false; // fallback a 1 player scattato in questo job (vale anche per le riprese successive)
@@ -339,7 +340,7 @@ async function run({ forceFresh = false } = {}) {
     if (!frames.length) throw new Error('nessun fotogramma presentabile');
     A = analysis = { file, srcCs, tags, srcMoov, dvBox, frames, durS: frames.reduce((a, f) => a + f.dur, 0) };
   }
-  const { srcCs, tags, srcMoov, dvBox, frames, durS } = A;
+  const { srcCs, tags, srcMoov, dvBox, frames, durS } = A; let job0Br = 0;
   const audios = await input.getAudioTracks(); let aac = null;
   for (const a of audios) { const c = await a.getCodec(); log(`audio: ${c ?? 'sconosciuto (es. apac, scartato)'}`); if (c === 'aac' && !aac) aac = a; }
   if (!opfsSupported()) throw new Error('OPFS non disponibile in questo browser');
@@ -378,11 +379,16 @@ async function run({ forceFresh = false } = {}) {
     const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}${video2 ? ' · estrazione parallela: 2 player (pari/dispari)' : ''}`);
     if (!job.manifest.video.W) Object.assign(job.manifest.video, { W, H });
     else if (job.manifest.video.W !== W || job.manifest.video.H !== H) throw Object.assign(new Error(`dimensioni ${W}×${H} ≠ job ${job.manifest.video.W}×${job.manifest.video.H}`), { name: 'JobMismatch' });
+    // Controllo a circuito chiuso del bitrate (app/lib/brctl.js): il rate control VT segue il tempo reale, non i timestamp.
+    const bt = bitrate, savedBr = job.manifest.encBitrate; let curBr = resume && savedBr > 0 ? Math.min(bt * 2.5, Math.max(bt * 0.5, savedBr)) : bt;
+    if (resume && curBr !== bt) log(`ripresa: encoder riparte da ${(curBr / 1e6).toFixed(2)} Mbps (target ${bt / 1e6})`);
+    job.manifest.encBitrate = curBr;
+    let wBytes = 0, wDur = 0, wN = 0, sBytes = 0, sDur = 0; // finestra di misura (~120 frame) e segmento corrente
     let first = true, encErr = null, nChunks = 0, firstKeyNal = null, tsDrift = 0, notKey = 0;
     let wSeg = doneSeg, segW = null, wq = Promise.resolve(), wqN = 0;
     // coda di scrittura seriale: segmento → OPFS (worker). Mai più di ~8 pacchetti in RAM.
     const enqueue = (fn) => { wqN++; wq = wq.then(async () => { try { if (!encErr) await fn(); } catch (e) { encErr ||= e; } finally { wqN--; } }); };
-    const enc = createHevcEncoder({ width: W, height: H, bitrate,
+    const enc = createHevcEncoder({ width: W, height: H, bitrate: curBr,
       onError: (e) => { encErr ||= e; },
       onChunk: (chunk, meta) => {
         if (encErr) return;
@@ -413,6 +419,11 @@ async function run({ forceFresh = false } = {}) {
         enqueue(() => segW.add(body, pkt));
         if (isEnd) enqueue(async () => { const r = await segW.finish(); segW = null; segsSaved++; log(`[${clock()}] segmento ${s + 1}/${nSeg} salvato: ${r.n} fotogrammi, ${fmtMB(r.bytes)}${dvBox ? `, RPU ${r.rpu}` : ''}`); });
         nChunks++;
+        wBytes += data.length; wDur += src.dur; wN++; sBytes += data.length; sDur += src.dur;
+        if (isEnd || wN >= BR_WINDOW) { // misura sul tratto (durate dei frame, non wall clock) e correzione al confine
+          if (wN >= BR_MIN_FRAMES) { curBr = nextBitrate(curBr, realBitrate(wBytes, wDur), bt); job.manifest.encBitrate = curBr; enc.setBitrate(curBr); wBytes = 0; wDur = 0; wN = 0; }
+          if (isEnd) { const real = realBitrate(sBytes, sDur); sBytes = 0; sDur = 0; enqueue(async () => log(`segmento ${s + 1}: reale ${(real / 1e6).toFixed(1)} Mbps (target ${bt / 1e6}) → encoder ora ${(curBr / 1e6).toFixed(1)} Mbps`)); }
+        }
       } });
     cur.enc = enc; let i = 0, s = doneSeg; const tE = performance.now();
     setProg('video', runStart / NF, `frame ${runStart}/${NF}`);
@@ -439,6 +450,7 @@ async function run({ forceFresh = false } = {}) {
     if (encErr) throw encErr;
     setProg('video', 1, 'chiusura encoder');
     await enc.flush(); enc.close(); cur.enc = null; releaseVideoElement(video); cur.video = null; if (video2) { releaseVideoElement(video2); cur.video2 = null; } vidRun = null; await wq; if (encErr) throw encErr;
+    job0Br = curBr;
     if (job.doneCount !== nSeg) throw new Error(`segmenti completati ${job.doneCount}/${nSeg} (pacchetti ${nChunks}/${NF - runStart})`);
     const encSec = (performance.now() - tE) / 1000;
     if (video2) { const fps = (x) => (x.n / encSec).toFixed(0); vstats.players.forEach((q, p) => log(`verifica player ${p + 1}: ${q.n} seek (${fps(q)} fps), doppioni ${q.dup}, fuori posto ${q.off}, senza callback ${q.noCallback}${q.retried ? `, seek ripetuti ${q.retried}` : ''}`)); log(`estrazione parallela: ${i} frame in ${encSec.toFixed(1)} s = ${(i / encSec).toFixed(0)} fps${vstats.fellBack ? ` · FALLBACK a 1 player (${vstats.fallbackReason})` : ''}`); }
@@ -573,6 +585,7 @@ async function run({ forceFresh = false } = {}) {
   const pct = (1 - outFile.size / file.size) * 100;
   const mb = (b) => (b / 1048576).toFixed(2);
   log(`COMPRESSIONE: ${mb(file.size)} MB → ${mb(outFile.size)} MB (−${pct.toFixed(1)}%, ${(file.size / outFile.size).toFixed(2)}×). Bitrate medio ${(file.size * 8 / durS / 1e6).toFixed(1)} → ${(outFile.size * 8 / durS / 1e6).toFixed(1)} Mbps (target video ${bitrate / 1e6} Mbps, keyframe ogni ${gopSec} s), durata ${durS.toFixed(2)} s.`);
+  log(`bitrate video reale medio ${(segBytes * 8 / durS / 1e6).toFixed(2)} Mbps vs target ${bitrate / 1e6} Mbps (${((segBytes * 8 / durS / bitrate - 1) * 100).toFixed(1)}%)${job0Br ? `, encoder finale ${(job0Br / 1e6).toFixed(2)} Mbps` : ''}.`);
   log(`file: ${outName}`);
   log(`fatto in ${((performance.now() - T0) / 1000).toFixed(1)} s.`);
   emit('phase', { phase: 'fatto' }); emit('result', { inMB: file.size / MB_, outMB: outFile.size / MB_, savedPct: pct, fileName: outName });
