@@ -30,12 +30,13 @@ function wavOf(notes, sr = 22050) {
   return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
 }
 const DONE_NOTES = [[523, 0.09], [659, 0.09], [784, 0.09], [1047, 0.22]], FAIL_NOTES = [[392, 0.16], [262, 0.3]];
-let urlDone = null, urlFail = null;
+let urlDone = null, urlFail = null, urlSilent = null;
 function unlockElement() {
   try {
-    urlDone = urlDone || wavOf(DONE_NOTES); urlFail = urlFail || wavOf(FAIL_NOTES);
+    urlDone = urlDone || wavOf(DONE_NOTES); urlFail = urlFail || wavOf(FAIL_NOTES); urlSilent = urlSilent || wavOf([]);
     el = el || Object.assign(document.createElement('audio'), { preload: 'auto' });
-    el.setAttribute('playsinline', ''); el.src = urlDone; el.muted = true;
+    // v0.25.3: lo sblocco suona un WAV di SILENZIO (iOS ignorava muted e il jingle si sentiva anche all'avvio)
+    el.setAttribute('playsinline', ''); el.src = urlSilent; el.muted = true;
     const p = el.play(); if (p) p.then(() => { el.pause(); el.currentTime = 0; el.muted = false; }).catch(() => { el.muted = false; });
   } catch {}
 }

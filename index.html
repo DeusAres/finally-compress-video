@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.25.2</title>
+<title>Compressore HDR v0.25.3</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -14,21 +14,21 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.25.2';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.25.2';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.25.2';
-import { nextBitrate, realBitrate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.25.2';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.25.2';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.25.2';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.25.2';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.25.2';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.25.2';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.25.2';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.25.2';
-import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.25.2';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.25.2';
-import { mountUI } from './app/ui/ui.js?v=0.25.2';
-import { bus, emit } from './app/ui/bus.js?v=0.25.2';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.25.3';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.25.3';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.25.3';
+import { nextBitrate, realBitrate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.25.3';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.25.3';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.25.3';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.25.3';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.25.3';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.25.3';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.25.3';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.25.3';
+import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.25.3';
+import { createPip, pipSupported } from './app/lib/pip.js?v=0.25.3';
+import { mountUI } from './app/ui/ui.js?v=0.25.3';
+import { bus, emit } from './app/ui/bus.js?v=0.25.3';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const log = (s) => emit('log', { line: String(s) });
@@ -36,8 +36,8 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.25.2-20261120T181915Z';
-const BUILD_LABEL = 'v0.25.2 · 20/11 19:19';
+const BUILD_ID = '0.25.3-20261120T182450Z';
+const BUILD_LABEL = 'v0.25.3 · 20/11 19:24';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false }, NFtot = 0;
 let parOff = false; // fallback a 1 player scattato in questo job (vale anche per le riprese successive)
