@@ -80,8 +80,8 @@ const ORDER = ['a','b','c','d','e','f','f_to'];
 function codecBody(emit, o) {
   let stop = false, dcfg = null, enc = null, dec = null, waiterE = null, waiterD = null;
   const chunks = []; let started = false, readyRes; const ready = new Promise(r => readyRes = r);
-  const mc = new MessageChannel(); let mcRes = null; mc.port1.onmessage = () => { const r = mcRes; mcRes = null; r && r(); };
-  const yieldMC = () => new Promise(r => { mcRes = r; mc.port2.postMessage(0); });
+  const mc = new MessageChannel(), mcQ = []; mc.port1.onmessage = () => { const r = mcQ.shift(); r && r(); };
+  const yieldMC = () => new Promise(r => { mcQ.push(r); mc.port2.postMessage(0); });
   const W = 640, H = 360;
   async function run() {
     const cfg = {codec: o.codec, width: W, height: H, bitrate: 2e6, framerate: 30, latencyMode: 'realtime'};

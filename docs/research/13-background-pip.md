@@ -136,3 +136,51 @@ Test su iPhone (Safari iOS 27) con il «test background con audio» (keep-alive 
 - **JS vivo in background con l'audio**: il battito del log continua da `hidden` (heartbeat ogni ~2 s, throttled rispetto al secondo richiesto), nessuna sospensione del processo.
 - **Decodifica/seek del `<video>` sospesa**: nello stesso intervallo il lavoro reale avanza di 2 fotogrammi in 12.4 s di background. Il `seeked` non arriva finché la pagina non torna `visible`; al ritorno il `<video>` non rispondeva più ai seek e l'app restava ferma ~8 s fino a «seek timeout», poi ripartiva (da capo se nessun segmento era completo).
 - **Conclusione**: con l'architettura seek-`<video>` + VideoEncoder il background non è ottenibile: l'audio tiene vivo il JS, non la pipeline di decodifica media. Il test resta disponibile ma marcato sperimentale. La **ripresa è la mitigazione**: su `hidden` la run video viene interrotta subito (AbortController, nessuna attesa del timeout di seek, che resta a ~4 s solo per guasti reali), su `visible` si ricrea l'elemento `<video>` dal File e si riparte dall'ultimo segmento completato, senza consumare i 3 tentativi automatici (log «ripreso dopo X s in background dal segmento n»).
+
+## Round 2: workaround (dopo la misura su iPhone 17 Pro Max, iOS 27)
+
+Fatto misurato: con `<audio>` loop quasi muto + AudioContext il JS resta vivo (timer ~2 s) ma seek + rVFC + `new VideoFrame(video)` NON avanzano (2 frame/12 s) e al ritorno il `<video>` non risponde ai seek finche' non viene ricreato. Legenda: ✅ fonte primaria / 🟡 secondaria / ❓ da testare (pannello `tools/diag/bg-test.html`).
+
+### R2.1 GPU process / VideoToolbox in background (domanda 1)
+- ✅ Il GPU process ha asserzioni di processo proprie, separate dal WebContent: il bug 208250 (2020) dice che "il GPU process non va mai in foreground" ed e' richiesto per la riproduzione media su iOS; 259219 (2023) lo fa rilasciare l'asserzione media con timer per evitare che il GPU process si sospenda mentre chiude lo stack media; 239815: il GPU process non riceveva la notifica di sospensione imminente. https://bugs.webkit.org/show_bug.cgi?id=208250 , https://bugs.webkit.org/show_bug.cgi?id=259219 , https://bugs.webkit.org/show_bug.cgi?id=239815
+  Lettura: l'asserzione del GPU process e' legata ad attivita' *media* (playback/capture), non a "WebContent e' vivo". Con un `<audio>` che suona il GPU process puo' restare attivo, ma cio' non implica che il compositing/rendering dei `<video>` sia attivo.
+- ✅ Nessun documento Apple/WebKit afferma che VideoToolbox (encode/decode HW) sia vietato o consentito per le pagine web in bg. Il divieto "no GPU in background" di Apple riguarda i comandi Metal/OpenGL delle app (tipicamente `kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted`); VT usa media engine dedicato e le app con audio in bg lo usano (registrazione/transcode). ❓ Se il processo GPU di WebKit rallenti/neghi VT: da misurare (test c/d).
+- 🟡 Spec: w3c/webcodecs #889: l'unico modo per evitare che un VideoDecoder attivo in bg sia "reclaimed" e' avere un VideoEncoder/AudioEncoder attivo sullo stesso global. Indizio di design (non WebKit-specifico) che un encoder attivo tiene vivo il codec stack. https://github.com/w3c/webcodecs/issues/889
+- 🟡 Feature request Apple forum (2025): "WebRTC e Web Audio vengono sospesi appena lo schermo si blocca o Safari va in bg", nessuna risposta Apple, nessun workaround documentato. https://developer.apple.com/forums/thread/774239 ; thread webkit-dev apr 2025 chiede se WebCodecs+canvas o VideoTrackGenerator+`createMediaStreamDestination` aggirino i limiti (domanda, nessuna risposta verificata) https://lists.webkit.org/pipermail/webkit-dev/2025-April/032748.html
+- Ipotesi coerente con la misura: il JS vive per l'audio; encoder/decoder WebCodecs (pure GPU-process, senza DOM) plausibilmente girano ❓ (probabilita' stimata media-alta); cio' che muore e' la parte *legata al rendering* del `<video>` (media player "non visibile": seek/frame presentati richiedono il layer/compositing).
+
+### R2.2 `<video>` in riproduzione / PiP e rVFC (domanda 2)
+- ✅ rVFC e' implementato sopra `copyDisplayedPixelBuffer`: bug 282797 "rVFC non chiama mai la callback se la finestra e' nascosta" (causa: nessun pixel buffer quando il video non e' realmente renderizzato), FIXED in 286853@main (nov 2024). https://bugs.webkit.org/show_bug.cgi?id=282797 ; correlato: callback non chiamata con video in pausa/non visibile (bug 282782, dic 2024). Il fix riguarda il caso "nascosto" nei test; ❓ non conferma il comportamento in app-background iOS.
+- ✅ PiP: il layer tree viene congelato in bg salvo video in PiP (fix 220660 / commit "Video freezes in PiP mode", nov 2023) -> in PiP il video continua a essere *presentato* dal sistema. https://bugs.webkit.org/show_bug.cgi?id=220660 , https://lists.webkit.org/pipermail/webkit-changes/2023-November/294040.html
+- ❓ Che la pagina (JS + rVFC + `new VideoFrame(video)`) giri in PiP: nessuna evidenza; e' il test (e) con pulsante PiP. Se in PiP rVFC scatta, `new VideoFrame(video)` ha buone chance (pixel buffer realmente presentato). PWA standalone: niente PiP (bug 303885).
+- Plausibilita': in PiP la riproduzione e' reale (decoder HW attivo, frame presentati) quindi rVFC e' la strada piu' promettente; il seek in bg no (misurato).
+- Frame-exact in riproduzione (~89 % a 0.5x): idea a "passate multiple": 1) passata play a 0.5x con rVFC, registra `mediaTime` (metadata.mediaTime) e salva per ogni timestamp il frame (encode subito, ordine per mediaTime); 2) i timestamp mancanti rispetto al demuxer (Mediabunny) = lista M; 3) ripetere la riproduzione con `currentTime` posizionato ~0.5 s prima di ciascun cluster di mancanti (seek in fg/PiP o a inizio passata) e catturare solo quelli di M; 3-4 passate convergono (~10 % -> ~1 % -> ~0.1 %). Costo: tempo reale 2x-4x la durata del clip (a 0.5x); alternativa: encoder fuori ordine impossibile (VT vuole ordine) -> bufferizzare frame decodificati e' vietato (memoria): quindi 1a passata = solo *scansione* (raccogli mediaTime catturati), le passate successive = encode, oppure encodare frame-per-frame con "buchi riempiti" ripetendo il frame precedente (qualita' degradata, ma frame-count esatto, VFR). ❓ Test (e) misura il tasso rVFC; ❓ `mediaTime` iOS impreciso (bug 260798 https://bugs.webkit.org/show_bug.cgi?id=260798) -> serve confronto con PTS del demuxer a tolleranza.
+- Realismo: reale in teoria, ma vincolato al tempo reale (clip 10 min = 20+ min a 0.5x) e a PiP attivo (UX fragile: l'utente deve avviare PiP; il sistema chiude PiP con chiamate ecc.).
+
+### R2.3 Decodifica/codifica fuori da `<video>` (domanda 3)
+- ✅ Safari WebCodecs `VideoDecoder` HEVC restituisce NV12 8-bit (doc 02 §3) -> perde 10-bit; usabile solo come fallback "8-bit in bg" (HDR degradato a 8-bit HLG con banding) 🟡.
+- 🟡 Decoder HEVC WASM single-thread: ~61 fps 1080p su Apple Silicon Mac (Chrome), 4K ~21 fps (https://dev.to/privaloops/playing-hevc-in-a-browser-without-plugin-an-h265-decoder-in-webassembly-4ag0 , https://github.com/privaloops/hevc.js); libde265.js piu' lento/uguale. Su iPhone ❓ stima 20-40 fps 1080p, 5-10 fps 4K; ma output I420P10 non costruibile in VideoFrame (doc 02 §10 run 6) -> non alimenta l'encoder 10-bit: escluso per HDR. Per SDR 8-bit sarebbe fattibile ma gia' coperto da VideoDecoder.
+- ❓ Worker in bg con audio: i Worker appartengono al WebContent process (stesso ProcessThrottler) -> vivi se il processo e' vivo; test (b),(c),(d) in Worker vs main.
+- Encoder SW (x265 wasm / openh264): 🟡 CPU-bound su iPhone, 1080p ~1-5 fps x265 medium; openh264 ~15-30 fps; thermal throttling in bg; scarsa convenienza rispetto al VT. Non realistica per export lungo; ok solo emergenza/anteprima.
+
+### R2.4 Altre idee (domanda 4)
+- Web Locks ❓/🟡: non tiene vivo il processo (nessuna fonte che lo preveda). SharedWorker: stesso processo (iOS 16+) -> nessun beneficio. Service Worker: vita a eventi, no WebCodecs garantito (v. §4) -> ❌ probabile.
+- WebRTC: ✅ la regola WebKit: capture attivo (getUserMedia mic) *tiene il processo vivo* in bg (bug 255869 e altri: "when capturing microphone the page will not be suspended"); ma richiede indicatore microfono arancione + permesso mic: invasivo, UX inaccettabile per un compressore video. Loopback RTCPeerConnection senza capture: 🟡 sospeso (thread Apple 774239). ❓ Non raccomandato.
+- Media Session + `<video>` muto: ❓ la policy WebKit (MediaSessionManagerCocoa / `canPlayToWirelessPlaybackTarget`/ PlatformMediaSessionManager) riconosce "background playable" solo con audio realmente udibile/non muted; video muto -> viene fermato in bg (comportamento Safari noto) 🟡. Test (e) muto vs (g) audio.
+- Tab vs PWA: PWA niente PiP (303885); audio in bg in PWA piu' fragile 🟡. Tab Safari = unica via.
+- ✅ Esperienza prodotto reale: Wake Lock + resumable + avviso restano la base.
+
+### R2.5 Valutazione onesta
+| Strada | Probabilita' | Note |
+|---|---|---|
+| Wake Lock + resume OPFS (nessun bg) | ✅ alta | gia' misurato fattibile; e' il percorso principale |
+| Audio keep-alive + encoder WebCodecs (decode altrove) | 🟡 media | JS vive (misurato); encoder ❓ test c/d |
+| Riproduzione `<video>` in PiP + rVFC (+ passate di recupero) | 🟡 bassa-media | richiede PiP manuale, tempo reale; test (e) |
+| Seek `<video>` in bg | ❌ misurato non funziona | |
+| VideoDecoder 8-bit in bg | 🟡 media (se (d) ok) | perde 10-bit/HDR (NV12 8-bit) |
+| WASM HEVC decoder | ❌ per HDR | niente I420P10 -> encoder |
+| Encoder SW wasm | ❌ | troppo lento/termico |
+| getUserMedia mic come keep-alive | 🟡 funziona forse, ❌ UX | permesso + indicatore |
+| Web Locks / SharedWorker / SW / Background Fetch | ❌ | nessun meccanismo supportato |
+
+Raccomandazione: eseguire il pannello `bg-test.html` (60 s, 10 s fg + 40 s bg) in 4 combinazioni: {nessun keep-alive, audio} x {Worker, main} e una con PiP attivato; poi decidere. Se (c)+(d) sono VIVI e (e) in PiP e' VIVO si puo' progettare un export "foreground-first con degradazione": fg = seek 10-bit, bg = switch automatico a playback PiP/VideoDecoder 8-bit (mixed quality da dichiarare) -- altrimenti restare su Wake Lock + resume.
