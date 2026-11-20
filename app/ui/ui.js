@@ -1,8 +1,8 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.25.3';
-import { sprite, SPRITES } from './sprite.js?v=0.25.3';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.25.3';
+import { bus } from './bus.js?v=0.26';
+import { sprite, SPRITES } from './sprite.js?v=0.26';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.26';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -62,23 +62,21 @@ function ensureStyles() {
 
 function template(opts) {
   const s = (k, o) => sprite(SPRITES[k], o);
-  const brSeg = BITRATES.map((b) => `<label><input type="radio" name="fcv-br" value="${b}"><span>${b}${b === 8 ? `<i class="star">${s('star', { scale: 2 })}</i>` : '<small>Mbps</small>'}</span></label>`).join('');
+  const brSeg = BITRATES.map((b) => `<label><input type="radio" name="fcv-br" value="${b}"${b === 8 ? ' aria-label="8 Mbps, consigliato"' : ''}><span>${b === 8 ? `<i class="star">${s('star', { scale: 2 })}</i>` : ''}${b}<small>Mbps</small></span></label>`).join('');
   const kfSeg = KEYFRAMES.map((k) => `<label><input type="radio" name="fcv-kf" value="${k}"><span>${k}<small>sec</small></span></label>`).join('');
   const audio = AUDIO.map((a) => `<label class="fcv-radio"${a.dev ? ' data-dev' : ''}><input type="radio" name="fcv-audio" value="${a.v}"><div><b>${a.b}</b><span>${a.t}</span></div></label>`).join('');
-  const chain = PHASES.map((p) => `<li data-p="${p.id}">${s(p.icon || p.id, { scale: 2 })}${p.label}</li>`).join('');
+  const chain = PHASES.map((p) => `<li data-p="${p.id}">${s(p.icon || p.id, { scale: 2 })}<span>${p.label}</span></li>`).join('');
   return `
 <header class="fcv-head">
   ${s('logo', { scale: 4, className: 'fcv-logo px-bob', title: 'Logo' })}
-  <div>
-    <h1 class="px-title">Finally <b>Compress</b><span class="fcv-cursor px-blink"></span></h1>
-    <p>Video HDR e Dolby Vision dell'iPhone, più leggeri. Tutto resta sul telefono.${opts.version ? ` <span class="px-chip px-chip--num">${esc(opts.version)}</span>` : ''}</p>
-  </div>
+  <h1 class="px-title">Finally <b>Compress<span class="fcv-cursor px-blink"></span></b></h1>
+  <p>Video HDR e Dolby Vision dell'iPhone, più leggeri. Tutto resta sul telefono.${opts.version ? ` <span class="px-chip px-chip--num">${esc(opts.version)}</span>` : ''}</p>
 </header>
 
 <ol class="fcv-steps" aria-label="Passi">
-  <li data-step="1"><span class="n">1</span>Scegli</li>
-  <li data-step="2"><span class="n">2</span>Regola</li>
-  <li data-step="3"><span class="n">3</span>Comprimi</li>
+  <li data-step="1"><span class="n">1</span><span class="t">Scegli</span></li>
+  <li data-step="2"><span class="n">2</span><span class="t">Regola</span></li>
+  <li data-step="3"><span class="n">3</span><span class="t">Comprimi</span></li>
 </ol>
 
 <div class="fcv-drop" data-ref="drop" hidden aria-hidden="true">${s('film', { scale: 8, className: 'px-bob' })}<b class="px-title">Rilascia qui il video</b><span>Solo il primo file video</span></div>
@@ -106,7 +104,7 @@ function template(opts) {
 <section class="px-panel fcv-card fcv-step-set" aria-labelledby="fcv-h2">
   <header><span class="num">2</span><h2 class="px-title" id="fcv-h2">Regola la qualità</h2></header>
   <fieldset class="fcv-field">
-    <legend class="px-label">Bitrate video · Mbps</legend>
+    <legend class="px-label">Bitrate video</legend>
     <div class="px-seg fcv-seg-br" data-ref="br">${brSeg}</div>
     <p class="fcv-hint" data-ref="brHint" aria-live="polite"></p>
   </fieldset>
@@ -114,13 +112,13 @@ function template(opts) {
     <div class="fcv-meter fcv-meter--wide"><span class="px-label">Qualità</span><div class="fcv-hearts" data-ref="hearts"></div></div>
   </div>
   <table class="fcv-tbl fcv-est-tbl" aria-live="polite"><caption class="px-label">Previsione</caption><tbody>
-    <tr><th scope="row">Peso</th><td class="px-digits" data-ref="est">—</td></tr>
-    <tr><th scope="row">Tempo</th><td class="px-digits" data-ref="estT">—</td></tr>
+    <tr><th scope="row">Peso</th><td data-ref="est">—</td></tr>
+    <tr><th scope="row">Tempo</th><td data-ref="estT">—</td></tr>
   </tbody></table>
   <p class="fcv-subtle" data-ref="estSrc" hidden></p>
   <p class="fcv-warn" data-ref="warn" hidden></p>
   <details class="fcv-adv">
-    <summary>${s('chevron', { scale: 2, className: 'chev' })}Opzioni avanzate<span class="px-chip px-chip--num" data-ref="advSum"></span></summary>
+    <summary>${s('chevron', { scale: 2, className: 'chev' })}<span class="fcv-sum-txt"><b>Opzioni avanzate</b><span class="fcv-adv-sum" data-ref="advSum"></span></span></summary>
     <fieldset class="fcv-field">
       <legend class="px-label">Fotogramma chiave ogni</legend>
       <div class="px-seg" data-ref="kf">${kfSeg}</div>
@@ -133,15 +131,15 @@ function template(opts) {
     </fieldset>
     <fieldset class="fcv-field">
       <legend class="px-label">Sperimentale</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b> <i>(sperimentale: su iOS 27 non mantiene la decodifica in background)</i><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-par2" value="1"><div><b>Estrazione parallela (2 player)</b> <i>(~1,7× più veloce; se un player si blocca torna a 1 da solo)</i></div></label>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b><i>(sperimentale: su iOS 27 non mantiene la decodifica in background)</i><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-par2" value="1"><div><b>Estrazione parallela (2 player)</b><i>(~1,7× più veloce; se un player si blocca torna a 1 da solo)</i></div></label>
     </fieldset>
   </details>
 </section>
 
 <section class="px-panel fcv-card fcv-step-go" aria-labelledby="fcv-h3">
   <header><span class="num">3</span><h2 class="px-title" id="fcv-h3">Comprimi</h2></header>
-  <button class="px-btn px-btn--primary px-btn--xl px-btn--block fcv-go" data-ref="go" disabled>Comprimi ${sprite(['c...', 'cc..', 'ccc.', 'cccc', 'ccc.', 'cc..', 'c...'], { scale: 4 })}</button>
+  <button class="px-btn px-btn--primary px-btn--xl px-btn--block fcv-go" data-ref="go" disabled>Comprimi ${sprite(['c...', 'cc..', 'ccc.', 'cccc', 'ccc.', 'cc..', 'c...'], { scale: 3 })}</button>
   <p class="fcv-go-note" data-ref="goNote">Scegli prima un video.</p>
   <div class="fcv-resume" data-ref="resume" hidden>
     <p class="fcv-warn" data-ref="resumeText"></p>
@@ -181,26 +179,26 @@ function template(opts) {
     <div class="fcv-big-sub" data-ref="bigSub">più leggero</div>
   </div>
   <div class="fcv-cmp">
-    <div class="fcv-cmp-row"><span class="px-label">Prima</span><div class="px-bar before" style="--p:1"><i></i></div><span class="v px-digits" data-ref="inMB"></span></div>
-    <div class="fcv-cmp-row"><span class="px-label">Dopo</span><div class="px-bar" data-ref="afterBar"><i></i></div><span class="v px-digits" data-ref="outMB"></span></div>
+    <div class="fcv-cmp-row"><span class="px-label">Prima</span><div class="px-bar before" style="--p:1"><i></i></div><span class="v" data-ref="inMB"></span></div>
+    <div class="fcv-cmp-row"><span class="px-label">Dopo</span><div class="px-bar" data-ref="afterBar"><i></i></div><span class="v" data-ref="outMB"></span></div>
   </div>
   <p class="fcv-freed" data-ref="freed"></p>
   <table class="fcv-tbl fcv-pred-tbl" data-ref="pred" hidden><thead><tr><th></th><th scope="col">Previsto</th><th scope="col">Reale</th><th scope="col">Scarto</th></tr></thead><tbody>
-    <tr><th scope="row">Peso<br>(MB)</th><td data-ref="pW1"></td><td data-ref="pW2"></td><td data-ref="pW3"></td></tr>
-    <tr><th scope="row">Tempo<br>(m:ss)</th><td data-ref="pT1"></td><td data-ref="pT2"></td><td data-ref="pT3"></td></tr>
+    <tr><th scope="row">Peso <small>MB</small></th><td data-ref="pW1"></td><td data-ref="pW2"></td><td data-ref="pW3"></td></tr>
+    <tr><th scope="row">Tempo <small>m:ss</small></th><td data-ref="pT1"></td><td data-ref="pT2"></td><td data-ref="pT3"></td></tr>
   </tbody></table>
   <p class="fcv-pred-note" data-ref="predNote" hidden></p>
   <button class="px-btn px-btn--ok px-btn--xl px-btn--block" data-ref="save">${s('scrittura', { scale: 3 })}Salva nelle Foto</button>
   <p class="fcv-save-msg" data-ref="saveMsg" aria-live="polite"></p>
   <p class="fcv-outname" data-ref="outName"></p>
   <div class="fcv-done-more">
-    <button class="px-btn px-btn--ghost" data-ref="again">Prova altre impostazioni</button>
+    <button class="px-btn px-btn--ghost" data-ref="again">Altre impostazioni</button>
     <label class="px-btn px-btn--ghost fcv-relabel">Nuovo video<input type="file" accept="video/*,.mov,.mp4" data-ref="input3" aria-label="Scegli un nuovo video"></label>
   </div>
 </section>
 
 <section class="px-panel fcv-err" data-ref="err" hidden role="alert">
-  <header>${s('errore', { scale: 4 })}<h2 class="px-title">Ops! Qualcosa si è inceppato</h2></header>
+  <header>${s('errore', { scale: 4 })}<h2 class="px-title">Si è inceppato!</h2></header>
   <p class="fcv-err-msg" data-ref="errMsg"></p>
   <ul>
     <li>Tieni Safari in primo piano e lo schermo acceso durante la compressione.</li>
@@ -214,7 +212,7 @@ function template(opts) {
 </section>
 
 <details class="px-panel fcv-log" data-ref="logBox">
-  <summary>${s('chevron', { scale: 2, className: 'chev' })}Log tecnico<span class="px-chip count" data-ref="logCount">0</span></summary>
+  <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Log tecnico</b><span class="px-chip count" data-ref="logCount">0</span></summary>
   <pre data-ref="log" tabindex="0"></pre>
   <div class="fcv-log-actions"><button class="px-btn" data-ref="copy">Copia log</button><span class="fcv-copy-msg" data-ref="copyMsg" aria-live="polite"></span></div>
 </details>
@@ -486,7 +484,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.outMB.textContent = `${fmtMB(r.outMB)} MB`;
     R.afterBar.style.setProperty('--p', String(Math.max(0.02, Math.min(1, r.outMB / r.inMB))));
     const freed = r.inMB - r.outMB;
-    R.freed.innerHTML = freed > 0 ? `Hai liberato <b>${fmtMB(freed)} MB</b> · ${nf1.format(r.inMB / r.outMB)}× più piccolo` : 'Il video originale era già molto compresso: prova un bitrate più basso.';
+    R.freed.innerHTML = freed > 0 ? `Hai liberato <b>${fmtMB(freed)} MB</b> <span class="sep">·</span> <span class="nw">${nf1.format(r.inMB / r.outMB)}× più piccolo</span>` : 'Il video originale era già molto compresso: prova un bitrate più basso.';
     R.pred.hidden = R.predNote.hidden = true;
     const realT = st.lastElapsed || (performance.now() - st.t0) / 1000, devOf = (a, b) => (b / a - 1) * 100;
     const fmtDev = (v) => `${v > 0 ? '+' : v < 0 ? '−' : '±'}${nf1.format(Math.abs(v))}%`;

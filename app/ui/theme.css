@@ -1,7 +1,7 @@
 /* finally-compress-video — tema "Pressa a 16 colori"
    Design tokens pixel art + classi base riutilizzabili (.px-*).
    Palette: Sweetie 16 (GrafxKid, CC0). Contratto documentato in app/ui/README.md. */
-@import url("https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=VT323&family=Atkinson+Hyperlegible:wght@400;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Atkinson+Hyperlegible+Next:wght@400;700&display=swap");
 
 :root {
   /* ---- Palette (16 colori, mai usare altri valori grezzi) ---- */
@@ -23,16 +23,40 @@
   --px-steel:  #333c57;
   --px-paper:  #f3ecdc; /* fondo chiaro "carta", unico colore extra */
 
-  /* ---- Font ---- */
-  --font-pixel: "Silkscreen", "Press Start 2P", ui-monospace, "SF Mono", Menlo, monospace; /* titoli, etichette */
-  --font-digits: "VT323", ui-monospace, "SF Mono", Menlo, monospace;                       /* cifre grandi, log */
-  --font-body: "Atkinson Hyperlegible", -apple-system, system-ui, "Helvetica Neue", sans-serif; /* testo lungo */
+  /* ---- Font: 2 famiglie ----
+     pixel (Silkscreen) SOLO per brand, titoli e cifre grandi; Atkinson Hyperlegible Next per tutto il resto
+     (etichette, bottoni, tabelle con tabular-nums, testo). Il log usa il monospace di sistema (SF Mono su iPhone). */
+  --font-pixel: "Silkscreen", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", -apple-system, system-ui, "Helvetica Neue", sans-serif;
+  --font-digits: var(--font-pixel);                      /* compat: cifre grandi = font pixel */
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* ---- Scala tipografica unica (min 13 px; testo corrente 17) ---- */
+  /* testo (Atkinson) */
+  --fs-xs: 13px;    /* etichette, chip, note, piè di pagina */
+  --fs-sm: 15px;    /* testo secondario, celle di tabella */
+  --fs-md: 17px;    /* testo corrente, bottoni */
+  --fs-lg: 20px;    /* bottoni grandi, valori in tabella, titoli di fase */
+  /* font pixel: solo multipli di 8 (glifi nitidi) */
+  --fs-px: 16px;    /* titoli delle card, numeri dei passi */
+  --fs-xl: 24px;    /* brand, cifre delle statistiche */
+  --fs-2xl: 32px;   /* titolo risultato */
+  --fs-3xl: 48px;   /* percentuale di avanzamento */
+  --fs-4xl: 64px;   /* risparmio finale */
+  --lh-tight: 1.15;
+  --lh-text: 1.45;
 
   /* ---- Griglia e forme ---- */
-  --px-unit: 4px;                         /* 1 "pixel" logico */
+  --px-unit: 4px;                         /* 1 "pixel" logico: TUTTE le spaziature sono multipli */
+  --sp-1: var(--px-unit);                 /* 4 */
+  --sp-2: calc(var(--px-unit) * 2);       /* 8 */
+  --sp-3: calc(var(--px-unit) * 3);       /* 12 */
+  --sp-4: calc(var(--px-unit) * 4);       /* 16 */
+  --sp-6: calc(var(--px-unit) * 6);       /* 24 */
   --px-border: var(--px-unit);            /* spessore bordo pixel */
-  --px-gap: calc(var(--px-unit) * 4);     /* 16px */
-  --px-touch: 48px;                       /* target tocco (≥44) */
+  --px-gap: var(--sp-4);                  /* 16px */
+  --px-touch: 48px;                       /* target tocco (≥44): bottoni normali */
+  --px-touch-xl: 64px;                    /* bottoni principali */
   --px-step: steps(4, end);               /* timing per animazioni a scatti */
 
   /* ---- Ruoli semantici: CHIARO ---- */
@@ -41,7 +65,7 @@
   --surface: #fffaf0;
   --surface-2: #efe5cf;
   --text: var(--px-ink);
-  --muted: var(--px-slate);
+  --muted: #4b5d75;              /* slate scurito: AA anche su --surface-2 */
   --line: var(--px-ink);
   --shadow: var(--px-steel);
   --accent: var(--px-blue);
@@ -50,10 +74,11 @@
   --accent-lo: var(--px-navy);
   --ok: var(--px-green);
   --ok-text: var(--px-ink);
-  --ok-strong: #1f7a44;          /* testo verde leggibile su carta */
+  --ok-strong: #1b6e3d;          /* testo verde leggibile (AA) su carta e --surface-2 */
   --warn: var(--px-yellow);
   --danger: var(--px-red);
   --danger-text: var(--px-white);
+  --danger-strong: var(--px-red); /* testo di errore su superfici */
   --highlight: var(--px-yellow);
   --log-bg: var(--px-ink);
   --log-text: var(--px-lime);
@@ -86,6 +111,7 @@
     --ok-strong: var(--px-lime);
     --danger: var(--px-orange);
     --danger-text: var(--px-ink);
+    --danger-strong: color-mix(in srgb, var(--px-orange) 70%, var(--px-white));
     --log-bg: #0e0f18;
     color-scheme: dark;
   }
@@ -108,6 +134,7 @@
   --ok-strong: var(--px-lime);
   --danger: var(--px-orange);
   --danger-text: var(--px-ink);
+  --danger-strong: color-mix(in srgb, var(--px-orange) 70%, var(--px-white));
   --log-bg: #0e0f18;
   color-scheme: dark;
 }
@@ -123,7 +150,8 @@ body {
   background-image: radial-gradient(var(--bg-dot) 1px, transparent 1.5px);
   background-size: calc(var(--px-unit) * 2) calc(var(--px-unit) * 2);
   color: var(--text);
-  font: 17px/1.45 var(--font-body);
+  font: var(--fs-md)/var(--lh-text) var(--font-body);
+  font-variant-numeric: tabular-nums;
   overflow-x: hidden;
   -webkit-tap-highlight-color: transparent;
 }
@@ -132,9 +160,9 @@ img, svg { display: block; max-width: 100%; }
 .px-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ================= Tipografia ================= */
-.px-title { font-family: var(--font-pixel); font-weight: 700; letter-spacing: .02em; line-height: 1.1; margin: 0; }
-.px-label { font-family: var(--font-pixel); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.px-digits { font-family: var(--font-digits); font-variant-numeric: tabular-nums; line-height: .9; }
+.px-title { font-family: var(--font-pixel); font-weight: 700; letter-spacing: .02em; line-height: var(--lh-tight); margin: 0; }
+.px-label { font: 700 var(--fs-xs)/var(--lh-tight) var(--font-body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.px-digits { font-family: var(--font-pixel); font-weight: 400; line-height: 1; letter-spacing: 0; }
 .px-muted { color: var(--muted); }
 
 /* ================= Pannello ================= */
@@ -143,7 +171,7 @@ img, svg { display: block; max-width: 100%; }
   background: var(--surface);
   color: var(--text);
   margin: var(--px-border);                       /* spazio per il bordo disegnato con ombre */
-  padding: calc(var(--px-unit) * 4);
+  padding: var(--sp-4);
   box-shadow: var(--px-ring), var(--px-drop);
   min-width: 0;
 }
@@ -158,12 +186,12 @@ img, svg { display: block; max-width: 100%; }
   --b-lo: rgba(0, 0, 0, .18);
   appearance: none; border: 0; cursor: pointer;
   position: relative;
-  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
   min-height: var(--px-touch); min-width: var(--px-touch);
   margin: var(--px-border);
-  padding: 0 calc(var(--px-unit) * 4);
-  font: 700 14px/1 var(--font-pixel);
-  letter-spacing: .04em; text-transform: uppercase;
+  padding: var(--sp-2) var(--sp-4);
+  font: 700 var(--fs-md)/1.2 var(--font-body);
+  text-align: center; text-wrap: balance;
   color: var(--b-fg); background: var(--b-bg);
   box-shadow:
     inset calc(-1 * var(--px-unit)) calc(-1 * var(--px-unit)) 0 0 var(--b-lo),
@@ -182,9 +210,9 @@ img, svg { display: block; max-width: 100%; }
 .px-btn--primary { --b-bg: var(--accent); --b-fg: var(--accent-text); }
 .px-btn--ok      { --b-bg: var(--ok); --b-fg: var(--ok-text); }
 .px-btn--danger  { --b-bg: var(--danger); --b-fg: var(--danger-text); }
-.px-btn--ghost   { --b-bg: transparent; --b-hi: transparent; --b-lo: transparent; box-shadow: none; text-decoration: underline; text-underline-offset: 4px; }
+.px-btn--ghost   { --b-bg: transparent; --b-hi: transparent; --b-lo: transparent; box-shadow: none; color: var(--accent); font-size: var(--fs-sm); text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 4px; }
 .px-btn--ghost:active:not(:disabled) { box-shadow: none; }
-.px-btn--xl { min-height: 64px; font-size: 18px; padding: 0 calc(var(--px-unit) * 6); }
+.px-btn--xl { min-height: var(--px-touch-xl); font-size: var(--fs-lg); padding: var(--sp-2) var(--sp-6); }
 .px-btn--block { display: flex; width: calc(100% - var(--px-border) * 2); }
 
 /* ================= Barra di avanzamento a segmenti ================= */
@@ -210,13 +238,13 @@ img, svg { display: block; max-width: 100%; }
 
 /* ================= Chip / badge ================= */
 .px-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  min-height: 24px; padding: 2px 8px; margin: 2px;
-  font: 700 11px/1 var(--font-pixel); letter-spacing: .05em; text-transform: uppercase;
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  min-height: 24px; padding: 2px var(--sp-2); margin: 2px;
+  font: 700 var(--fs-xs)/1.2 var(--font-body); letter-spacing: 0;
   background: var(--surface-2); color: var(--text);
   box-shadow: 0 -2px 0 0 var(--line), 0 2px 0 0 var(--line), -2px 0 0 0 var(--line), 2px 0 0 0 var(--line);
 }
-.px-chip--num { font: 400 17px/1 var(--font-digits); letter-spacing: 0; text-transform: none; }
+.px-chip--num { font-variant-numeric: tabular-nums; }
 .px-chip--hdr { background: var(--px-yellow); color: var(--px-ink); }
 .px-chip--dv  { background: var(--px-plum); color: var(--px-white); }
 .px-chip--ok  { background: var(--ok); color: var(--ok-text); }
@@ -227,9 +255,9 @@ img, svg { display: block; max-width: 100%; }
 .px-seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
 .px-seg span {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  min-height: 52px; padding: 4px 2px;
+  min-height: 56px; padding: var(--sp-1) 2px;
   background: var(--surface); color: var(--text);
-  font: 400 30px/.9 var(--font-digits); text-align: center;
+  font: 400 var(--fs-xl)/1 var(--font-pixel); text-align: center;
 }
 .px-seg input:checked + span { background: var(--accent); color: var(--accent-text); box-shadow: inset 0 calc(-1 * var(--px-unit)) 0 0 var(--accent-lo); }
 .px-seg input:focus-visible + span { outline: var(--px-unit) dashed var(--highlight); outline-offset: calc(-2 * var(--px-unit)); }

@@ -1,6 +1,6 @@
 # app/ui — interfaccia pixel art
 
-Tema "Pressa a 16 colori": palette Sweetie 16, bordi pixel con angoli smussati e ombre a gradini (solo `box-shadow`, nessuna immagine), sprite SVG generati da stringhe, cifre grandi in VT323, titoli in Silkscreen, testo lungo in Atkinson Hyperlegible.
+Tema "Pressa a 16 colori": palette Sweetie 16, bordi pixel con angoli smussati e ombre a gradini (solo `box-shadow`, nessuna immagine), sprite SVG generati da stringhe, due sole famiglie: Silkscreen (pixel) solo per brand, titoli e cifre grandi; Atkinson Hyperlegible Next per tutto il resto (etichette, bottoni, tabelle con `tabular-nums`, testo). Log in monospace di sistema.
 
 | File | Ruolo |
 |---|---|
@@ -69,7 +69,8 @@ Rimosso dall'app dalla v0.17 (`fun.js` resta nel repo ma non è caricato; nessun
 ## Token principali (`theme.css`)
 
 Palette: `--px-ink plum red orange yellow lime green teal navy blue sky cyan white silver slate steel` + `--px-paper`.
-Font: `--font-pixel` (Silkscreen), `--font-digits` (VT323), `--font-body` (Atkinson Hyperlegible), con fallback di sistema.
+Font: `--font-pixel` (Silkscreen), `--font-body` (Atkinson Hyperlegible Next), `--font-mono` (log), `--font-digits` = alias di `--font-pixel`.
+Scala: `--fs-xs` 13 · `--fs-sm` 15 · `--fs-md` 17 · `--fs-lg` 20 (testo) · `--fs-px` 16 · `--fs-xl` 24 · `--fs-2xl` 32 · `--fs-3xl` 48 · `--fs-4xl` 64 (font pixel, multipli di 8). Spaziature `--sp-1/2/3/4/6` (multipli di `--px-unit`).
 Griglia: `--px-unit` (4px), `--px-border`, `--px-gap`, `--px-touch` (48px), `--px-step`.
 Ruoli (ridefiniti in scuro con `prefers-color-scheme` e `[data-theme]`): `--bg --surface --surface-2 --text --muted --line --shadow --accent --accent-text --ok --ok-strong --warn --danger --highlight --log-bg --log-text`.
 Classi: `.px-panel(--inset|--accent)`, `.px-btn(--primary|--ok|--danger|--ghost|--xl|--block)`, `.px-bar` (riempimento con `--p` 0…1 sull'elemento, figlio `<i>`), `.px-chip(--hdr|--dv|--ok|--num)`, `.px-seg`, `.px-title`, `.px-label`, `.px-digits`, `.px-blink`, `.px-bob`, `.px-sr`.
