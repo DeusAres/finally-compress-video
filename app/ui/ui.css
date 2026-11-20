@@ -125,6 +125,9 @@ details.fcv-adv[open] { display: grid; gap: 16px; padding-bottom: 6px; }
 .fcv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .fcv-grid .fcv-stat .v { font-size: 34px; }
 .fcv-cancel { justify-self: center; }
+.fcv-pip { display: grid; gap: 6px; }
+.fcv-pip[hidden], .fcv-pip [hidden] { display: none; }
+.fcv-pip-note { margin: 0; font-size: 13px; color: var(--muted); }
 
 /* ---------- Risultato ---------- */
 .fcv-done { display: grid; gap: 16px; overflow: hidden; text-align: center; }

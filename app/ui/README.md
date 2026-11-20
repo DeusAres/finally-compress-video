@@ -20,6 +20,7 @@ const ui = mountUI(document.getElementById('app'), {
   onFile(file) {},            // File scelto (l'app poi emette 'file' con i metadati)
   onStart(settings) {},       // {bitrateMbps, keyframeS, audioMode, bgAudio} (+ resume:true dal pulsante «Riprendi»); chiamato SINCRONO nel tap
   onCancel() {},              // l'app interrompe e chiama ui.setBusy(false)
+  onPip(wasActive) {},        // (v0.21) tap su «Continua in Picture-in-Picture»; SINCRONO nel tap (requestPictureInPicture richiede il gesto)
   onSave() {},                // chiamato SINCRONO nel tap → navigator.share() funziona
   onCopyLog() {},             // facoltativo: se assente la UI copia da sola il log mostrato
 }, { version: 'v0.15' });    // opts facoltativo (estensione)
@@ -36,6 +37,7 @@ Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,
 - `setDefaults(settings)` — contratto (accetta anche un oggetto parziale).
 - Estensioni: `getSettings()`, `setSaveMessage(text)` (sotto "Salva nelle Foto"), `setCopyMessage(text)`, `getLog()`, `reset()`, `destroy()`.
 - `setResume({name, done, total, settings} | null)` (v0.18): nel passo 3 mostra «Riprendi export di <nome> (segmenti x/y)»; il tap applica `settings` e chiama `onStart({...settings, resume: true})`. Nascosto durante l'export e quando si sceglie un altro file.
+- `setPip(active)` (v0.21): etichetta del pulsante PiP («Continua» / «Chiudi Picture-in-Picture»). Il pulsante (`pipBox`) compare nel pannello di avanzamento dalla fase `video` in poi solo se `document.pictureInPictureEnabled`; in display-mode standalone mostra solo la nota «apri il sito in Safari» (bug WebKit 303885). Logica PiP in `app/lib/pip.js` (`createPip(file, {log, onChange})`: `<video>` muto separato dal video dei seek, `leavepictureinpicture` → chiusura gestita, la ripresa v0.20 resta invariata).
 - `setProgNote(text, kind)` (v0.18): riquadro nel pannello di avanzamento; testo vuoto = «Tieni l'app aperta e lo schermo acceso finché finisce.»; `kind` `warn`/`bad`. Usato per «pausa di N s / ripreso / interrotto, riprendo dal segmento x».
 
 ## Eventi del bus (`bus.js`)

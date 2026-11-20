@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.20</title>
+<title>Compressore HDR v0.21</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -14,18 +14,19 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.20';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.20';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.20';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.20';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.20';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.20';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.20';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.20';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.20';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.20';
-import { mountUI } from './app/ui/ui.js?v=0.20';
-import { bus, emit } from './app/ui/bus.js?v=0.20';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.21';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.21';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.21';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.21';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.21';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.21';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.21';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.21';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.21';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.21';
+import { createPip } from './app/lib/pip.js?v=0.21';
+import { mountUI } from './app/ui/ui.js?v=0.21';
+import { bus, emit } from './app/ui/bus.js?v=0.21';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const log = (s) => emit('log', { line: String(s) });
@@ -33,8 +34,9 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.20-20261120T082525Z';
-const BUILD_LABEL = 'v0.20 · 20/11 09:25';
+const BUILD_ID = '0.21-20261120T121626Z';
+const BUILD_LABEL = 'v0.21 · 20/11 13:16';
+let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false }, NFtot = 0;
 let file = null, outFile = null, outName = '', info = null, running = false, cancelled = false, wake = null, store = null, cur = { enc: null, video: null, output: null };
 // job = packet store OPFS del job in corso (jobstore.js); savedJob = job salvato compatibile col file scelto; analysis = demux in cache per la ripresa in memoria
@@ -162,20 +164,32 @@ document.addEventListener('change', (e) => { if (e.target?.closest?.('.fcv-step-
 
 // Progress UI: fasi pesate (analisi / video / assemblaggio / audio / scrittura) → barra complessiva; frame x/y, fps, trascorso e residuo.
 const PH = { analisi: [0, .04], video: [.04, .82], assemblaggio: [.86, .04], audio: [.90, .07], scrittura: [.97, .03] };
-let TSTART = 0, curPhase = null, lastFps = NaN;
+let TSTART = 0, curPhase = null, lastFps = NaN, lastPipPc = -1;
 function setProg(phase, frac, text, etaSec, fps) {
   const el = (performance.now() - TSTART) / 1000;
   if (phase !== curPhase) { curPhase = phase; emit('phase', { phase }); }
   if (Number.isFinite(fps)) lastFps = fps;
   const f = Math.max(0, Math.min(1, frac)), tot = phase === 'video' && NFtot ? NFtot : 1;
   emit('progress', { phase, done: f * tot, total: tot, fps: phase === 'video' ? lastFps : NaN, etaS: etaSec != null && isFinite(etaSec) ? etaSec : NaN, elapsedS: el });
-  if (keep && PH[phase]) keep.setTitle(`Compressione in corso ${Math.floor((PH[phase][0] + PH[phase][1] * f) * 100)}%`);
+  if (PH[phase]) {
+    const pc = Math.floor((PH[phase][0] + PH[phase][1] * f) * 100);
+    if (keep) keep.setTitle(`Compressione in corso ${pc}%`);
+    else if (pip?.active && pc !== lastPipPc) { lastPipPc = pc; try { if (navigator.mediaSession && window.MediaMetadata) navigator.mediaSession.metadata = new MediaMetadata({ title: `Compressione ${pc}%`, artist: 'Finally Compress' }); } catch {} }
+  }
 }
 function friendlyError(e) {
   const n = e?.name || '';
   if (n === 'Cancelled') return 'Elaborazione annullata.';
   if (n === 'QuotaExceededError' || /quota|no space|spazio/i.test(e?.message || '')) return 'Spazio di archiviazione esaurito durante la scrittura. Libera spazio sul telefono e riprova (o scegli un bitrate più basso).';
   return 'Errore: ' + (n ? n + ': ' : '') + (e?.message || e) + '. I segmenti già pronti restano salvati: tocca Riprova (o riseleziona lo stesso video) per riprendere da dove si era fermato. Se la pagina si è ricaricata da sola, la memoria è finita: riprova con l\'app in primo piano.';
+}
+// Tap su «Continua in Picture-in-Picture»: SINCRONO (nessun await prima di requestPictureInPicture, dentro pip.start()).
+function onPip(wasOn) {
+  if (!running || !file) return;
+  if (wasOn) { pip?.stop().then(() => { pip = null; ui.setPip(false); }); return; }
+  if (pip) { pip.stop(); pip = null; }
+  pip = createPip(file, { log: (t) => log(`[${clock()}] ${t}`), onChange: (a) => { ui.setPip(a); if (!a) try { if (navigator.mediaSession) navigator.mediaSession.metadata = null; } catch {} } });
+  pip.start().then((ok) => { if (!ok) ui.setProgNote('Picture-in-Picture non disponibile su questo dispositivo/browser: tieni l\'app aperta e lo schermo acceso.', 'warn'); });
 }
 async function cleanupRun() {
   vidRun = null; try { cur.enc?.close(); } catch {} try { if (cur.video) releaseVideoElement(cur.video); } catch {} try { await cur.output?.cancel(); } catch {}
@@ -242,7 +256,8 @@ async function start(s) {
     if (hb) { clearInterval(hb); hb = null; }
     if (TSTART) bgSummary();
     try { keep?.stop(); } catch {} keep = null;
-    running = false; notice('');
+    if (pip) { const t = pip.elapsedS(); try { await pip.stop(); } catch {} if (t > 0) log(`Picture-in-Picture: ${fmtT(t)} in PiP durante il job`); pip = null; ui.setPip(false); }
+    lastPipPc = -1; running = false; notice('');
     try { localStorage.removeItem('jobRunning'); } catch {}
     try { await wake?.release(); } catch {} wake = null;
     if (!failed) analysis = null;
@@ -530,7 +545,7 @@ async function saveViaArtifact() {
 }
 
 ui = mountUI(document.getElementById('app'), {
-  onFile, onStart: start, onCancel() { cancelled = true; log('Annullamento richiesto'); }, onSave,
+  onFile, onStart: start, onPip, onCancel() { cancelled = true; log('Annullamento richiesto'); }, onSave,
   onCopyLog() { const t = ui.getLog(); const ok = () => ui.setCopyMessage('Copiato!'); const sel = () => ui.setCopyMessage('Seleziona e copia dal log'); if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(ok, sel); else sel(); },
 }, { version: BUILD_LABEL.startsWith('__') ? VER : BUILD_LABEL });
 ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false });

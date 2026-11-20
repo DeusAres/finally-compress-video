@@ -1,8 +1,8 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.20';
-import { sprite, SPRITES } from './sprite.js?v=0.20';
-import { estimateOutBytes } from './estimate.js?v=0.20';
+import { bus } from './bus.js?v=0.21';
+import { sprite, SPRITES } from './sprite.js?v=0.21';
+import { estimateOutBytes } from './estimate.js?v=0.21';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -159,6 +159,10 @@ function template(opts) {
     <div class="fcv-stat"><span class="px-label">Fotogrammi</span><span class="v px-digits" data-ref="frames">—</span></div>
   </div>
   <p class="fcv-warn fcv-keep" data-ref="progNote" role="status" aria-live="polite">${KEEP_OPEN}</p>
+  <div class="fcv-pip" data-ref="pipBox" hidden>
+    <button class="px-btn px-btn--block" data-ref="pipBtn" type="button">Continua in Picture-in-Picture</button>
+    <p class="fcv-pip-note" data-ref="pipNote">Puoi usare altre app: la compressione continua finché la finestrella resta aperta.</p>
+  </div>
   <button class="px-btn px-btn--danger fcv-cancel" data-ref="cancel">Annulla</button>
   <p class="px-sr" aria-live="polite" data-ref="live"></p>
 </section>
@@ -243,7 +247,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.goNote.textContent = st.file ? 'Tieni Safari aperto e lo schermo acceso: la compressione avviene sul telefono.' : 'Scegli prima un video.';
   }
   function setBusy(b) {
-    st.busy = !!b;
+    st.busy = !!b; if (!b) st.pipOn = false; updatePip();
     root.dataset.busy = String(st.busy);
     root.querySelectorAll('.fcv-step-set input, [data-ref^="input"]').forEach((i) => { i.disabled = st.busy; });
     R.go.disabled = !st.file || st.busy;
@@ -386,20 +390,32 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span><span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
     R.elapsed.textContent = '0:00';
-    R.progNote.textContent = KEEP_OPEN; R.progNote.dataset.kind = '';
+    R.progNote.textContent = KEEP_OPEN; R.progNote.dataset.kind = ''; st.pipOn = false; R.pipBox.hidden = true;
     renderPct(0);
     setPhase('analisi');
     setStage('busy');
     root.dataset.busy = 'true';
     R.prog.scrollIntoView?.({ block: 'start' });
   }
+  // PiP (v0.21): visibile dalla fase video in poi, solo se supportata; in PWA standalone solo una nota (bug WebKit 303885).
+  const standalone = () => { try { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; } catch { return false; } };
+  function updatePip() {
+    const late = st.phase && st.phase !== 'analisi' && st.phase !== 'fatto' && st.phase !== 'errore';
+    const show = !!(late && st.busy && document.pictureInPictureEnabled);
+    const sa = standalone();
+    R.pipBox.hidden = !show; R.pipBtn.hidden = sa;
+    if (show && sa) R.pipNote.textContent = 'Per lavorare in background apri il sito in Safari (nell\'app installata la finestrella PiP non funziona).';
+    else R.pipNote.textContent = st.pipOn ? 'Finestrella aperta: puoi usare altre app, la compressione continua finché resta aperta.' : 'Puoi usare altre app: la compressione continua finché la finestrella resta aperta.';
+    R.pipBtn.textContent = st.pipOn ? 'Chiudi Picture-in-Picture' : 'Continua in Picture-in-Picture';
+  }
+  R.pipBtn.addEventListener('click', () => handlers.onPip?.(!!st.pipOn)); // SINCRONO nel tap: requestPictureInPicture richiede il gesto
   function setPhase(p) {
     if (st.phase === p) return;
     const idx = PHASES.findIndex((x) => x.id === p);
     if (idx < 0) return;
     // le fasi saltate contano come completate
     st.overall = Math.max(st.overall, PHASES.slice(0, idx).reduce((a, x) => a + WEIGHT[x.id], 0));
-    st.phase = p;
+    st.phase = p; updatePip();
     const ph = PHASES[idx];
     R.phIcon.innerHTML = sprite(SPRITES[ph.icon || p], { scale: 4 });
     R.phName.textContent = ph.label;
@@ -524,6 +540,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   return {
     setBusy,
+    /** PiP (v0.21): {active} → etichetta del pulsante «Continua / Chiudi Picture-in-Picture». */
+    setPip(active) { st.pipOn = !!active; updatePip(); },
     setDefaults(s = {}) { Object.assign(DEFAULTS, s); writeSettings({ ...readSettings(), ...s }); },
     // --- estensioni ---
     getSettings: () => readSettings(),
