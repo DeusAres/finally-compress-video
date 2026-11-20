@@ -1,7 +1,7 @@
 /* finally-compress-video — tema "Pressa a 16 colori"
    Design tokens pixel art + classi base riutilizzabili (.px-*).
    Palette: Sweetie 16 (GrafxKid, CC0). Contratto documentato in app/ui/README.md. */
-@import url("https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Atkinson+Hyperlegible+Next:wght@400;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Pixelify+Sans:wght@400;600;700&family=VT323&display=swap");
 
 :root {
   /* ---- Palette (16 colori, mai usare altri valori grezzi) ---- */
@@ -23,20 +23,25 @@
   --px-steel:  #333c57;
   --px-paper:  #f3ecdc; /* fondo chiaro "carta", unico colore extra */
 
-  /* ---- Font: 2 famiglie ----
-     pixel (Silkscreen) SOLO per brand, titoli e cifre grandi; Atkinson Hyperlegible Next per tutto il resto
-     (etichette, bottoni, tabelle con tabular-nums, testo). Il log usa il monospace di sistema (SF Mono su iPhone). */
+  /* ---- Font: 3 famiglie pixel (solo Google Fonts, con fallback) ----
+     Silkscreen: brand, titoli, cifre grandi (multipli di 8 px). Pixelify Sans: testo, etichette, bottoni, chip, note.
+     VT323 (monospazio pixel): numeri di tabelle/previsioni, contatori, nome file, log tecnico. */
   --font-pixel: "Silkscreen", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", -apple-system, system-ui, "Helvetica Neue", sans-serif;
+  --font-body: "Pixelify Sans", ui-rounded, -apple-system, system-ui, "Helvetica Neue", sans-serif;
   --font-digits: var(--font-pixel);                      /* compat: cifre grandi = font pixel */
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: "VT323", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* ---- Scala tipografica unica (min 13 px; testo corrente 17) ---- */
-  /* testo (Atkinson) */
-  --fs-xs: 13px;    /* etichette, chip, note, piè di pagina */
-  --fs-sm: 15px;    /* testo secondario, celle di tabella */
-  --fs-md: 17px;    /* testo corrente, bottoni */
-  --fs-lg: 20px;    /* bottoni grandi, valori in tabella, titoli di fase */
+  /* ---- Scala tipografica unica (testo 16/18/20/24; 14 solo per note molto secondarie) ---- */
+  /* testo (Pixelify Sans) */
+  --fs-xs: 14px;    /* solo note molto secondarie, piè di pagina */
+  --fs-sm: 16px;    /* etichette, chip, testo secondario */
+  --fs-md: 18px;    /* testo corrente, bottoni */
+  --fs-lg: 20px;    /* bottoni grandi, titoli di fase */
+  --fs-body-xl: 24px; /* testo in evidenza */
+  /* monospazio pixel (VT323: glifi stretti, dimensioni maggiori) */
+  --fs-mono: 22px;      /* numeri di tabella, nome file */
+  --fs-mono-lg: 28px;   /* contatori */
+  --fs-log: 20px;       /* log tecnico */
   /* font pixel: solo multipli di 8 (glifi nitidi) */
   --fs-px: 16px;    /* titoli delle card, numeri dei passi */
   --fs-xl: 24px;    /* brand, cifre delle statistiche */
@@ -44,7 +49,7 @@
   --fs-3xl: 48px;   /* percentuale di avanzamento */
   --fs-4xl: 64px;   /* risparmio finale */
   --lh-tight: 1.15;
-  --lh-text: 1.45;
+  --lh-text: 1.4;
 
   /* ---- Griglia e forme ---- */
   --px-unit: 4px;                         /* 1 "pixel" logico: TUTTE le spaziature sono multipli */
@@ -141,6 +146,8 @@
 
 /* ================= Base ================= */
 *, *::before, *::after { box-sizing: border-box; }
+/* Pixelify Sans: la legatura "fi" sembra una "A"; !important perché la scorciatoia `font:` azzera queste proprietà */
+*, *::before, *::after { font-variant-ligatures: none !important; font-feature-settings: "liga" 0, "rlig" 0, "ccmp" 0, "calt" 0 !important; }
 html { -webkit-text-size-adjust: 100%; background: var(--bg); }
 body {
   margin: 0;
@@ -161,7 +168,7 @@ img, svg { display: block; max-width: 100%; }
 
 /* ================= Tipografia ================= */
 .px-title { font-family: var(--font-pixel); font-weight: 700; letter-spacing: .02em; line-height: var(--lh-tight); margin: 0; }
-.px-label { font: 700 var(--fs-xs)/var(--lh-tight) var(--font-body); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.px-label { font: 600 var(--fs-sm)/var(--lh-tight) var(--font-body); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .px-digits { font-family: var(--font-pixel); font-weight: 400; line-height: 1; letter-spacing: 0; }
 .px-muted { color: var(--muted); }
 
@@ -239,12 +246,12 @@ img, svg { display: block; max-width: 100%; }
 /* ================= Chip / badge ================= */
 .px-chip {
   display: inline-flex; align-items: center; gap: var(--sp-1);
-  min-height: 24px; padding: 2px var(--sp-2); margin: 2px;
-  font: 700 var(--fs-xs)/1.2 var(--font-body); letter-spacing: 0;
+  min-height: 28px; padding: 2px var(--sp-2); margin: 2px;
+  font: 600 var(--fs-sm)/1.2 var(--font-body); letter-spacing: 0;
   background: var(--surface-2); color: var(--text);
   box-shadow: 0 -2px 0 0 var(--line), 0 2px 0 0 var(--line), -2px 0 0 0 var(--line), 2px 0 0 0 var(--line);
 }
-.px-chip--num { font-variant-numeric: tabular-nums; }
+.px-chip--num { font-family: var(--font-mono); font-weight: 400; font-size: var(--fs-mono); font-variant-numeric: tabular-nums; }
 .px-chip--hdr { background: var(--px-yellow); color: var(--px-ink); }
 .px-chip--dv  { background: var(--px-plum); color: var(--px-white); }
 .px-chip--ok  { background: var(--ok); color: var(--ok-text); }

@@ -5,7 +5,7 @@
 //   seg-NNNN.json   {k, n, bytes, rpu, packets:[{ts,dur,type,offset,size}]}  (ts/dur in seconds, output timeline)
 // A segment counts as done only when the manifest says so AND its index + binary size agree (verifiedDone).
 // Writes go through the SyncAccessHandle worker (opfs-worker.js): no packet is kept in RAM after its write is acked.
-import { opfsWorker } from './opfs.js?v=0.26';
+import { opfsWorker } from './opfs.js?v=0.27';
 
 export const JOB_VERSION = 1;
 const DIR = ['jobs', 'current'];
