@@ -76,9 +76,18 @@
 .fcv-meter { display: grid; gap: 6px; padding: 10px; background: var(--surface-2); min-width: 0; }
 .fcv-hearts { display: flex; gap: 3px; }
 .fcv-hearts svg { width: 21px; height: 18px; }
-.fcv-est { font-size: 30px; }
-.fcv-est .save { font-size: 22px; color: var(--ok-strong); }
-.fcv-est .bad { color: var(--danger); }
+.fcv-meter--wide { grid-column: 1 / -1; }
+.fcv-tbl { width: 100%; border-collapse: collapse; background: var(--surface-2); box-shadow: var(--px-ring); font-family: var(--font-pixel); table-layout: fixed; }
+.fcv-tbl caption { text-align: left; padding: 6px 0; }
+.fcv-tbl th, .fcv-tbl td { padding: 8px 6px; text-align: left; font-size: 15px; font-weight: 700; border-top: 2px solid var(--line); overflow-wrap: anywhere; }
+.fcv-tbl thead th { border-top: 0; font-size: 10px; letter-spacing: 0; color: var(--muted); white-space: nowrap; }
+.fcv-tbl tbody th { font-size: 11px; width: 25%; line-height: 1.3; }
+.fcv-pred-tbl td { white-space: nowrap; overflow-wrap: normal; font-size: 14px; }
+.fcv-est-tbl td { font-size: 20px; } .fcv-est-tbl td small { font-size: 12px; }
+.fcv-est-tbl .save { font-size: 16px; color: var(--ok-strong); } .fcv-est-tbl .bad { color: var(--danger); }
+.fcv-tbl td.ok { color: var(--ok-strong); } .fcv-tbl td.warnc { color: var(--px-ink); background: var(--warn); }
+.fcv-tline { margin: 0; font: 700 13px/1.4 var(--font-pixel); text-align: center; }
+.fcv-tline[hidden], .fcv-tbl[hidden] { display: none; }
 .fcv-warn { padding: 8px 10px; background: var(--warn); color: var(--px-ink); font-size: 14px; }
 
 details.fcv-adv > summary, details.fcv-log > summary {

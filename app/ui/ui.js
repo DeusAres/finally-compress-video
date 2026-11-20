@@ -1,8 +1,8 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.24';
-import { sprite, SPRITES } from './sprite.js?v=0.24';
-import { estimateOutBytes } from './estimate.js?v=0.24';
+import { bus } from './bus.js?v=0.25';
+import { sprite, SPRITES } from './sprite.js?v=0.25';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.25';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -111,9 +111,13 @@ function template(opts) {
     <p class="fcv-hint" data-ref="brHint" aria-live="polite"></p>
   </fieldset>
   <div class="fcv-meters">
-    <div class="fcv-meter"><span class="px-label">Qualità</span><div class="fcv-hearts" data-ref="hearts"></div></div>
-    <div class="fcv-meter"><span class="px-label">Peso stimato</span><div class="fcv-est px-digits" data-ref="est">—</div></div>
+    <div class="fcv-meter fcv-meter--wide"><span class="px-label">Qualità</span><div class="fcv-hearts" data-ref="hearts"></div></div>
   </div>
+  <table class="fcv-tbl fcv-est-tbl" aria-live="polite"><caption class="px-label">Previsione</caption><tbody>
+    <tr><th scope="row">Peso</th><td class="px-digits" data-ref="est">—</td></tr>
+    <tr><th scope="row">Tempo</th><td class="px-digits" data-ref="estT">—</td></tr>
+  </tbody></table>
+  <p class="fcv-subtle" data-ref="estSrc" hidden></p>
   <p class="fcv-warn" data-ref="warn" hidden></p>
   <details class="fcv-adv">
     <summary>${s('chevron', { scale: 2, className: 'chev' })}Opzioni avanzate<span class="px-chip px-chip--num" data-ref="advSum"></span></summary>
@@ -159,6 +163,7 @@ function template(opts) {
     <div class="fcv-stat"><span class="px-label">Velocità</span><span class="v px-digits" data-ref="fps">—</span></div>
     <div class="fcv-stat"><span class="px-label">Fotogrammi</span><span class="v px-digits" data-ref="frames">—</span></div>
   </div>
+  <p class="fcv-tline" data-ref="tline" hidden></p>
   <p class="fcv-warn fcv-keep" data-ref="progNote" role="status" aria-live="polite">${KEEP_OPEN}</p>
   <div class="fcv-pip" data-ref="pipBox" hidden>
     <button class="px-btn px-btn--block" data-ref="pipBtn" type="button">Continua in Picture-in-Picture</button>
@@ -180,7 +185,10 @@ function template(opts) {
     <div class="fcv-cmp-row"><span class="px-label">Dopo</span><div class="px-bar" data-ref="afterBar"><i></i></div><span class="v px-digits" data-ref="outMB"></span></div>
   </div>
   <p class="fcv-freed" data-ref="freed"></p>
-  <p class="fcv-pred" data-ref="pred" hidden></p>
+  <table class="fcv-tbl fcv-pred-tbl" data-ref="pred" hidden><thead><tr><th></th><th scope="col">Previsto</th><th scope="col">Reale</th><th scope="col">Scarto</th></tr></thead><tbody>
+    <tr><th scope="row">Peso<br>(MB)</th><td data-ref="pW1"></td><td data-ref="pW2"></td><td data-ref="pW3"></td></tr>
+    <tr><th scope="row">Tempo<br>(m:ss)</th><td data-ref="pT1"></td><td data-ref="pT2"></td><td data-ref="pT3"></td></tr>
+  </tbody></table>
   <p class="fcv-pred-note" data-ref="predNote" hidden></p>
   <button class="px-btn px-btn--ok px-btn--xl px-btn--block" data-ref="save">${s('scrittura', { scale: 3 })}Salva nelle Foto</button>
   <p class="fcv-save-msg" data-ref="saveMsg" aria-live="polite"></p>
@@ -340,13 +348,18 @@ export function mountUI(root, handlers = {}, opts = {}) {
     updateEstimate();
   }
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps }) / 1048576 : null); // formula in estimate.js
+  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: st.settings.par2, width: f.width, height: f.height }) : null; };
   function updateEstimate() {
     const d = st.file?.durationS, src = st.file?.sizeMB;
-    R.warn.hidden = true;
-    if (!d) { R.est.innerHTML = st.file ? '…' : '—'; return; }
+    R.warn.hidden = true; R.estSrc.hidden = true;
+    if (!d) { R.est.innerHTML = R.estT.innerHTML = st.file ? '…' : '—'; return; }
     const est = predictMB();
     const pct = src ? (1 - est / src) * 100 : null;
-    R.est.innerHTML = `≈${fmtMB(est)}<small style="font-size:18px">MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))}%</span>` : '');
+    R.est.innerHTML = `≈ ${fmtMB(est)} <small>MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
+    const tt = predictTime();
+    R.estT.innerHTML = `≈ ${fmtTime(tt.s)} <small>m:ss</small>`;
+    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? ', 2 player' : ', 1 player'}).`;
+    R.estSrc.hidden = false;
     if (pct != null && pct < 10) {
       R.warn.hidden = false;
       R.warn.textContent = 'Questo video è già leggero: con questo bitrate il risparmio sarà minimo o nullo. Prova un valore più basso.';
@@ -386,7 +399,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   // ---------- avanzamento ----------
   function startProgress() {
-    st.predMB = predictMB(); st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
+    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = st.settings.par2; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
     R.log.textContent = ''; st.logLines = 0; R.logCount.textContent = '0';
     const s = st.settings;
     R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span><span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
@@ -453,12 +466,16 @@ export function mountUI(root, handlers = {}, opts = {}) {
     let eta = d.etaS;
     if (!Number.isFinite(eta) && st.overall > 0.03) eta = elapsed * (1 - st.overall) / st.overall;
     R.eta.textContent = fmtTime(eta);
+    if (p === 'video') { if (!st.vt0 && d.done > 0) st.vt0 = elapsed; st.vt1 = elapsed; st.vFrames = d.total; } else if (st.vt0 && !st.vtEnd) st.vtEnd = elapsed;
+    st.lastElapsed = elapsed;
+    if (st.predT > 0) { R.tline.hidden = false; R.tline.textContent = `Previsto ${fmtTime(st.predT)} · trascorso ${fmtTime(elapsed)} · residuo ${fmtTime(eta)}`; }
     if (Number.isFinite(d.fps)) R.fps.innerHTML = `${nf0.format(d.fps)}<small>fps</small>`;
     if (p === 'video' && d.total) R.frames.innerHTML = `${nf0.format(d.done)}<small>/${nf0.format(d.total)}</small>`;
   }
 
   // ---------- risultato ----------
   function showResult(r) {
+    if (pendingProg) { const x = pendingProg; pendingProg = null; applyProgress(x); } // ultimo avanzamento ancora in coda
     st.result = r;
     const saved = Number.isFinite(r.savedPct) ? r.savedPct : (1 - r.outMB / r.inMB) * 100;
     R.big.textContent = `${saved >= 0 ? '−' : '+'}${nf0.format(Math.abs(saved))}%`;
@@ -471,12 +488,24 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const freed = r.inMB - r.outMB;
     R.freed.innerHTML = freed > 0 ? `Hai liberato <b>${fmtMB(freed)} MB</b> · ${nf1.format(r.inMB / r.outMB)}× più piccolo` : 'Il video originale era già molto compresso: prova un bitrate più basso.';
     R.pred.hidden = R.predNote.hidden = true;
+    const realT = st.lastElapsed || (performance.now() - st.t0) / 1000, devOf = (a, b) => (b / a - 1) * 100;
+    const fmtDev = (v) => `${v > 0 ? '+' : v < 0 ? '−' : '±'}${nf1.format(Math.abs(v))}%`;
+    const setDev = (el, v) => { el.textContent = fmtDev(v); el.className = Math.abs(v) <= 10 ? 'ok' : 'warnc'; };
     if (st.predMB > 0) {
-      const dev = (r.outMB / st.predMB - 1) * 100, sign = dev > 0 ? '+' : dev < 0 ? '−' : '±';
-      R.pred.textContent = `Previsto ≈ ${fmtMB(st.predMB)} MB · Reale ${fmtMB(r.outMB)} MB · scarto ${sign}${nf1.format(Math.abs(dev))} %`;
+      const dev = devOf(st.predMB, r.outMB);
+      R.pW1.textContent = fmtMB(st.predMB); R.pW2.textContent = fmtMB(r.outMB); setDev(R.pW3, dev);
+      let tl = '', devT = null;
+      if (st.predT > 0 && realT > 0) {
+        devT = devOf(st.predT, realT);
+        R.pT1.textContent = fmtTime(st.predT); R.pT2.textContent = fmtTime(realT); setDev(R.pT3, devT);
+        tl = ` | tempo previsto ${fmtTime(st.predT)} · reale ${fmtTime(realT)} · scarto ${devT > 0 ? '+' : '−'}${nf1.format(Math.abs(devT))} %`;
+        // misura reale: frame totali / secondi della fase video (estrazione + codifica) → prossima previsione
+        const vs = (st.vtEnd || st.vt1) - st.vt0;
+        if (st.vFrames > 0 && vs > 1) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height }, st.vFrames / vs, realT);
+      } else { R.pT1.textContent = R.pT2.textContent = R.pT3.textContent = '—'; R.pT3.className = ''; }
       R.pred.hidden = false;
-      if (Math.abs(dev) > 15) { R.predNote.textContent = 'Scarto oltre il 15%: la previsione usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.'; R.predNote.hidden = false; }
-      appendLog(`PREVISIONE: previsto ≈ ${st.predMB.toFixed(2)} MB · reale ${r.outMB.toFixed(2)} MB · scarto ${dev > 0 ? '+' : ''}${dev.toFixed(1)} %`);
+      if (Math.abs(dev) > 15) { R.predNote.textContent = 'Scarto peso oltre il 15%: la previsione usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.'; R.predNote.hidden = false; }
+      appendLog(`PREVISIONE: peso ${st.predMB.toFixed(2)} MB previsto · ${r.outMB.toFixed(2)} MB reale · scarto ${dev > 0 ? '+' : ''}${dev.toFixed(1)} %${tl}`);
     }
     R.outName.textContent = r.fileName || '';
     R.saveMsg.textContent = '';

@@ -21,3 +21,27 @@ export function estimateOutBytes({ durS, videoMbps, audioMode = 'copy', aacBps }
   if (!(durS > 0)) return 0;
   return (videoMbps * 1e6 * VIDEO_OVERSHOOT + outAudioBps(audioMode, aacBps)) * durS / 8 * CONTAINER_OVERHEAD;
 }
+
+// ---------- Stima del TEMPO ----------
+//   t = 0.5 s (analisi) + frame / fpsAtteso + 3 % · tVideo + 0.5 s (assemblaggio, audio, scrittura) [+ 0.07 s · durata se eco v4]
+// fpsAtteso: ultima misura reale (localStorage, per 1/2 player e ≤1080p/4K); in mancanza, un default.
+export const DEFAULT_FPS = { p2: { hd: 90, uhd: 70 }, p1: { hd: 57, uhd: 55 } };
+export const speedKey = ({ par2, width, height }) => `fcv.fps.${par2 ? 'p2' : 'p1'}.${Math.max(width || 0, height || 0) > 1920 ? 'uhd' : 'hd'}`;
+
+/** Velocità attesa {fps, measured}. */
+export function expectedFps(o) {
+  try { const v = +localStorage.getItem(speedKey(o)); if (v > 1 && isFinite(v)) return { fps: v, measured: true }; } catch {}
+  const k = speedKey(o).split('.');
+  return { fps: DEFAULT_FPS[k[2]][k[3]], measured: false };
+}
+/** Salva la velocità reale (frame/s della fase video) e il tempo totale dell'ultimo job. */
+export function saveSpeed(o, fps, totalS) {
+  try { if (fps > 1 && isFinite(fps)) localStorage.setItem(speedKey(o), String(fps)); if (totalS > 0) localStorage.setItem('fcv.lastTotalS', String(totalS)); } catch {}
+}
+/** Tempo totale previsto in secondi + fonte della velocità. */
+export function estimateTimeS({ durS, fps = 30, audioMode = 'copy', par2, width, height }) {
+  if (!(durS > 0)) return null;
+  const frames = durS * (fps > 0 ? fps : 30), sp = expectedFps({ par2, width, height });
+  const tv = frames / sp.fps;
+  return { s: 0.5 + tv * 1.03 + 0.5 + (audioMode === 'v4' ? 0.07 * durS : 0), measured: sp.measured, fps: sp.fps };
+}

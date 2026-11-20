@@ -23,7 +23,7 @@ export const safeName = (s) => s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
 
 /** Worker holding SyncAccessHandles (opfs-worker.js). Returns {call(msg, transfer) -> Promise, terminate()}. */
 export function opfsWorker() {
-  const worker = new Worker(new URL('./opfs-worker.js?v=0.24', import.meta.url));
+  const worker = new Worker(new URL('./opfs-worker.js?v=0.25', import.meta.url));
   let seq = 0; const waiting = new Map(); let dead = null;
   worker.onmessage = (e) => { const w = waiting.get(e.data.id); if (!w) return; waiting.delete(e.data.id); if (e.data.ok) w.res(e.data); else { const er = new Error(e.data.message); er.name = e.data.name; w.rej(er); } };
   worker.onerror = (e) => { dead = new Error('worker OPFS: ' + (e.message || 'errore')); for (const w of waiting.values()) w.rej(dead); waiting.clear(); };
