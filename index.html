@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.23</title>
+<title>Compressore HDR v0.24</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -14,20 +14,21 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.23';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.23';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.23';
-import { nextBitrate, realBitrate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.23';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.23';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.23';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.23';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.23';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.23';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.23';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.23';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.23';
-import { mountUI } from './app/ui/ui.js?v=0.23';
-import { bus, emit } from './app/ui/bus.js?v=0.23';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.24';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.24';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.24';
+import { nextBitrate, realBitrate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.24';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.24';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.24';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.24';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.24';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.24';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.24';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.24';
+import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.24';
+import { createPip, pipSupported } from './app/lib/pip.js?v=0.24';
+import { mountUI } from './app/ui/ui.js?v=0.24';
+import { bus, emit } from './app/ui/bus.js?v=0.24';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const log = (s) => emit('log', { line: String(s) });
@@ -35,8 +36,8 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.23-20261120T173048Z';
-const BUILD_LABEL = 'v0.23 · 20/11 18:30';
+const BUILD_ID = '0.24-20261120T174806Z';
+const BUILD_LABEL = 'v0.24 · 20/11 18:48';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false }, NFtot = 0;
 let parOff = false; // fallback a 1 player scattato in questo job (vale anche per le riprese successive)
@@ -191,7 +192,6 @@ function onPip(wasOn) {
   if (!running || !file) return;
   if (wasOn) { pip?.stop().then(() => { pip = null; ui.setPip(false); }); return; }
   if (!pip) { pip = makePip(); pip.prepare(); } // normalmente già preparato all'avvio dell'export (v0.21.1)
-  if (cfg.par2 && !parOff) { parOff = true; log(`[${clock()}] PiP: estrazione parallela disattivata (con la PiP attiva iOS non concede il 2° player) → 1 player dal prossimo segmento`); }
   pip.start().then((ok) => { if (!ok) ui.setProgNote('Picture-in-Picture non disponibile su questo dispositivo/browser: tieni l\'app aperta e lo schermo acceso.', 'warn'); });
 }
 async function cleanupRun() {
@@ -246,6 +246,7 @@ async function start(s) {
   cfg = { bitrateMbps: +s?.bitrateMbps || 8, keyframeS: +s?.keyframeS || 4, audioMode: s?.audioMode || 'copy', bgAudio: !!s?.bgAudio, par2: !!s?.par2 };
   parOff = false; pipStat = { hiddenN: 0, hiddenMs: 0, hAt: 0, events: [], inAt: 0, fIn: 0, frames: 0, openMs: 0, tickAt: 0, tickF: 0 }; startPipWatch();
   // SINCRONO nel tap (gesto utente): l'audio di keep-alive deve partire prima di qualunque await.
+  chimeUnlock(); askNotify(); // SINCRONO nel tap: sblocca l'audio del jingle finale (iOS) e, da web app installata, chiede le notifiche
   keep = cfg.bgAudio ? startKeepAlive({ log: (t) => log(`[${clock()}] ${t}`), title: 'Compressione in corso 0%' }) : null;
   Object.assign(bg, { hiddenAt: document.hidden ? Date.now() : 0, frameAt: 0, hiddenMs: 0, frames: 0, n: 0 });
   curPhase = null; lastFps = NaN; NFtot = 0; progFrame = 0; hbRef = 0; vidRun = null; bgInt = null; ui.setBusy(true); ui.setProgNote('');
@@ -295,7 +296,7 @@ async function start(s) {
     log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || ''));
     await cleanupRun();
     if (e?.name === 'Cancelled') { await discardJob(); analysis = null; log('job annullato: segmenti eliminati'); }
-    else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); }
+    else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); chimeFail(friendlyError(e).slice(0, 120)); }
   } finally {
     if (hb) { clearInterval(hb); hb = null; }
     if (TSTART) bgSummary();
@@ -590,6 +591,7 @@ async function run({ forceFresh = false } = {}) {
   log(`file: ${outName}`);
   log(`fatto in ${((performance.now() - T0) / 1000).toFixed(1)} s.`);
   emit('phase', { phase: 'fatto' }); emit('result', { inMB: file.size / MB_, outMB: outFile.size / MB_, savedPct: pct, fileName: outName });
+  { const n = chimeDone({ savedPct: pct, fileName: outName }); log(`fine: jingle${n ? ' + notifica' : ' (notifiche disponibili solo dalla web app installata)'}`); }
 }
 
 function onSave() {
@@ -613,7 +615,7 @@ ui = mountUI(document.getElementById('app'), {
   onFile, onStart: start, onPip, onCancel() { cancelled = true; log('Annullamento richiesto'); }, onSave,
   onCopyLog() { const t = ui.getLog(); const ok = () => ui.setCopyMessage('Copiato!'); const sel = () => ui.setCopyMessage('Seleziona e copia dal log'); if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(ok, sel); else sel(); },
 }, { version: BUILD_LABEL.startsWith('__') ? VER : BUILD_LABEL });
-ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false });
+ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true });
 // Niente zoom (iOS ignora user-scalable): blocco doppio tocco e pinch.
 for (const t of ['dblclick', 'gesturestart', 'gesturechange']) document.addEventListener(t, (e) => e.preventDefault(), { passive: false });
 let lastTouchEnd = 0;

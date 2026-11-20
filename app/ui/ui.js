@@ -1,8 +1,8 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.23';
-import { sprite, SPRITES } from './sprite.js?v=0.23';
-import { estimateOutBytes } from './estimate.js?v=0.23';
+import { bus } from './bus.js?v=0.24';
+import { sprite, SPRITES } from './sprite.js?v=0.24';
+import { estimateOutBytes } from './estimate.js?v=0.24';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -37,7 +37,7 @@ const PHASES = [
   { id: 'scrittura', label: 'File', sub: 'Assemblo il file e i metadati' },
 ];
 const WEIGHT = { analisi: 0.04, video: 0.82, assemblaggio: 0.04, audio: 0.07, scrittura: 0.03 };
-const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false };
+const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true }; // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
 
 const nf1 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 });
@@ -130,7 +130,7 @@ function template(opts) {
     <fieldset class="fcv-field">
       <legend class="px-label">Sperimentale</legend>
       <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b> <i>(sperimentale: su iOS 27 non mantiene la decodifica in background)</i><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-par2" value="1"><div><b>Estrazione parallela (2 player)</b> <i>(può quasi raddoppiare la velocità; sperimentale)</i></div></label>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-par2" value="1"><div><b>Estrazione parallela (2 player)</b> <i>(~1,7× più veloce; se un player si blocca torna a 1 da solo)</i></div></label>
     </fieldset>
   </details>
 </section>
