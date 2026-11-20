@@ -236,25 +236,52 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 - 2026-11-20 — Background: senza PiP iOS revoca la decodifica (export fermo) → ripresa a segmenti (v0.18–0.20). Con **PiP** su un video separato la pagina resta "visible" e l'export continua fuori da Safari (v0.21.1, solo tab Safari).
 - 2026-11-20 — Aggiornamenti/offline/PWA come finally-cool-film (version.txt + BUILD_ID, service worker, manifest, v0.19).
 
+- 2026-11-20 — **PiP confermata su device** (v0.22–0.23): la pagina resta "visible" fuori da Safari (solo tab Safari, non PWA installata). **Estrazione parallela a 2 player ON di default** (v0.24): ~90–100 fps su iPhone (IMG_2034: 91 fps, 0 doppioni), ripiego automatico a 1 player dopo 3 tentativi (v0.22.1).
+- 2026-11-20 — **Controllo bitrate a circuito chiuso** (v0.23): il rate control VT è legato al tempo reale, quindi il bitrate configurato viene corretto per segmento (brctl.js) fino a ±4 % del target (8.01 Mbps reali su 8).
+- 2026-11-20 — **Suono di fine** (v0.24–0.25.3): Web Audio è trattenuto in background (PiP fuori da Safari) → jingle via `<audio>` con WAV sbloccato nel tap con un WAV di silenzio (iOS ignora `muted`), suonato prima di chiudere la PiP (0.9 s). Notifiche solo da web app installata.
+- 2026-11-20 — **Previsione peso e tempo appresa** (v0.25): velocità misurata per modalità/risoluzione e memorizzata; tabella Previsto/Reale/Scarto a fine export.
+- 2026-11-20 — **UI pixel art rifinita** (v0.26–0.27.1): font Silkscreen (brand/titoli), Pixelify Sans (testo), VT323 (numeri/log), token tipografici e di spaziatura, contrasto AA, legatura "fi" disattivata. Eco v4 è la modalità consigliata del filtro audio.
+- 2026-11-20 — Pulizia repo: rimossi `fun.js`/`fun-preview.html` (gioco, fuori dall'app dalla v0.17) e `__pycache__`; `tools/run-tests.sh` lancia i test Node.
+
 ## 13. STATO / RIPRESA (leggere per primo)
 
-**Fase attuale: APP FUNZIONANTE in produzione** — https://deusares.github.io/finally-compress-video/ (GitHub Pages da `main`, radice). Rilascio: `tools/stamp-version.sh <ver>` poi commit/push su `main` (+ branch `claude/hevc-video-compression-hzxnlt`).
+**Fase attuale: APP FUNZIONANTE in produzione, v0.27.1** — https://deusares.github.io/finally-compress-video/ (GitHub Pages da `main`, radice). Rilascio: `tools/stamp-version.sh <ver>` poi commit/push su `main`. Test: `tools/run-tests.sh`.
 
-**Pipeline (index.html + app/lib)** — tutto verificato su iPhone 17 Pro Max / Safari 27.0.1:
+**Pipeline (index.html + app/lib)** — verificata su iPhone 17 Pro Max / Safari 27.0.1:
 1. Demux Mediabunny 1.65.1 (ESM, CDN jsdelivr) → timestamp esatti, RPU Dolby Vision per frame (NAL 62), metadati.
-2. Frame 10-bit HLG frame-exact: seek su `<video>` + rVFC richiesto PRIMA del seek + `new VideoFrame(video)` (frames.js). ~60 fps.
-3. VideoEncoder HEVC (VT realtime): Main10 dal frame nativo; keyframe a inizio segmento; bitrate fisso (default 8 Mbps ≈ VMAF 88.9 = "quasi perfetto").
+2. Frame 10-bit HLG frame-exact: seek su `<video>` + rVFC richiesto PRIMA del seek + `new VideoFrame(video)` (frames.js). **Estrazione parallela a 2 player ON di default**: ~90–100 fps su iPhone (≈ 0.6× la durata a 60 fps), ripiego automatico a 1 player (~60 fps) dopo 3 tentativi falliti.
+3. VideoEncoder HEVC (VT realtime): Main10 dal frame nativo; keyframe a inizio segmento. **Controllo bitrate a circuito chiuso** (brctl.js): il rate control VT è legato al tempo reale, il bitrate configurato è corretto per segmento fino a ±4 % del target (default 8 Mbps ≈ VMAF 88.9).
 4. Export a segmenti ~4 s su OPFS (jobstore.js) → ripresa dopo background/reload; assemblaggio + mux Mediabunny StreamTarget su OPFS (opfs-worker con sync handle).
-5. Post: patch VUI BT.2020/HLG nell'SPS (hevc-vui.js), colr nclx, dvvC + RPU trapiantati (Dolby Vision 8.4 preservato), moov/meta + trak/meta copiati verbatim dall'originale (data con fuso, camera), tag displayname/description con impostazioni.
+5. Post: patch VUI BT.2020/HLG nell'SPS (hevc-vui.js), colr nclx, dvvC + RPU trapiantati (Dolby Vision 8.4), moov/meta + trak/meta copiati verbatim dall'originale (data con fuso, camera), tag displayname/description con impostazioni.
 6. Audio: AAC copiato (default) o riparazione eco del comando rapido v1–v4 (v4 consigliato: −5…−13 dB di eco residua contro un limite lineare ≈ −9…−12).
-7. Consegna: share sheet con solo il File → «Salva video». PiP opzionale per lavorare fuori da Safari.
+7. Consegna: share sheet con solo il File → «Salva video».
+
+**Background / PiP**: senza PiP iOS revoca la decodifica hardware (export fermo → ripresa dall'ultimo segmento, v0.20). Con **Picture-in-Picture** su un video separato in riproduzione muta la pagina resta "visible" e l'export continua fuori da Safari (**solo tab Safari**: nella web app installata `requestPictureInPicture` non funziona, bug WebKit 303885). Se l'utente chiude la PiP fuori da Safari la pagina va in bg e si riprende al rientro.
+
+**Fine export**: jingle via `<audio>` con WAV (Web Audio è trattenuto in background; sblocco con WAV di silenzio nel tap), suonato prima di chiudere la PiP; **notifica solo da web app installata**; titolo Media Session.
+
+**PWA / aggiornamenti**: manifest + icone pixel art, service worker con precache (offline), aggiornamento automatico (`version.txt` mai in cache + `BUILD_ID`); `tools/stamp-version.sh` timbra versione, `?v=` e precache.
+
+**Previsione**: peso stimato (estimate.js, con audio) e tempo stimato con velocità appresa per modalità/risoluzione; a fine export tabella Previsto/Reale/Scarto.
+
+**UI**: pixel art (palette Sweetie 16), font Silkscreen (brand/titoli), Pixelify Sans (testo), VT323 (numeri/log); chiaro/scuro; drag & drop; zoom disattivato (`app/ui/README.md`).
+
 **Risultati**: IMG_7440 −60 % a 8 Mbps (VMAF 88.9); originali 4K −90 %; sorgenti già a 15 Mbps ≈ −40 %.
 
-**Moduli pronti ma NON integrati**: ricerca bitrate per scena (scenes.js, quality.js, ratecontrol.js, research/12): garantisce ogni segmento ≥ VMAF 88 ma su IMG_7440 costa +10 % di peso e 1.7× il tempo → in attesa di decisione utente.
+**Moduli pronti ma NON integrati** (in corso di integrazione da altro lavoro): ricerca bitrate per scena (scenes.js, quality.js, ratecontrol.js, research/12): garantisce ogni segmento ≥ VMAF 88 ma su IMG_7440 costa +10 % di peso e 1.7× il tempo.
 
-**Limiti noti**: niente background senza PiP (decodifica revocata da iOS); PiP non funziona da PWA installata (bug WebKit 303885); velocità ≈ tempo reale per video 60 fps (estrazione parallela a 2 player, sperimentale v0.22: ~1.5× in Chromium, frame identici; da misurare su iPhone); audio spaziale `apac` scartato; eco del comando rapido riducibile, non eliminabile (12 % non lineare).
+**Limiti noti**: PiP non da PWA installata; eco del comando rapido riducibile, non eliminabile (12 % non lineare); audio spaziale `apac` scartato (vedi Idee future); encoder VT realtime ~6 punti VMAF sotto x265 a pari bitrate.
 
-**File chiave**: `docs/research/02` (fatti misurati su device §10–11), `05` (curve VMAF reali), `04` (container/audio/eco), `13` (background/PiP), `12` (ricerca per scena).
+**File chiave**: `docs/research/02` (fatti su device §10–11), `05` (curve VMAF reali), `04` (container/audio/eco), `13` (background/PiP, suono, parallela), `12` (ricerca per scena).
+
+### Collaudi da fare su device
+- Video lungo 3–5 min e 4K: tenuta memoria/OPFS, velocità parallela, PiP per tutta la durata, spazio libero.
+- Ripresa **senza PiP** dopo background (rientro in Safari): riparte dall'ultimo segmento, file finale senza buchi né doppioni.
+- Web app installata: notifica di fine, funzionamento offline, aggiornamento automatico alla nuova versione (version.txt/service worker).
+- Ricerca per scena su file diversi (una volta integrata): peso, tempo e qualità vs bitrate fisso.
+
+### Idee future
+- Passthrough della traccia audio spaziale `apac` tramite post-processing del moov (come già fatto per `dvvC`), invece di scartarla.
 
 ---
 ### Nota operativa

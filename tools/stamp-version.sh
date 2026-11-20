@@ -18,7 +18,7 @@ LABEL="v$V · $when"
 
 # 1) ?v=<VER> (sostituisce un ?v= precedente)
 sed -i -E "s#(\./app/(lib|ui)/[a-z0-9-]+\.js)(\?v=[^']*)?'#\1?v=$V'#g" index.html
-sed -i -E "s#(from '\./[a-z0-9-]+\.js)(\?v=[^']*)?'#\1?v=$V'#g" app/lib/*.js app/ui/*.js app/ui/preview.html app/ui/fun-preview.html
+sed -i -E "s#(from '\./[a-z0-9-]+\.js)(\?v=[^']*)?'#\1?v=$V'#g" app/lib/*.js app/ui/*.js app/ui/preview.html
 sed -i -E "s#(opfs-worker\.js)(\?v=[^']*)?'#\1?v=$V'#g" app/lib/opfs.js
 sed -i -E "s#Compressore HDR v[0-9][0-9A-Za-z.]*#Compressore HDR v$V#g" index.html
 # 2) BUILD_ID / etichetta in index.html (le costanti vengono riscritte, qualunque valore avessero)

@@ -5,7 +5,7 @@ Tema "Pressa a 16 colori": palette Sweetie 16, bordi pixel con angoli smussati e
 | File | Ruolo |
 |---|---|
 | `theme.css` | design token (`--px-*`, ruoli semantici, chiaro/scuro) + classi base `.px-*` |
-| `bus.js` | bus eventi app → UI / fun.js |
+| `bus.js` | bus eventi app → UI |
 | `ui.js` | `mountUI(root, handlers, opts?)` |
 | `ui.css` | layout dell'app (prefisso `.fcv-`), caricato da `ui.js` se manca |
 | `sprite.js` | `sprite(rows, {scale, title, className})` → `<svg>` + `SPRITES` condivisi |
@@ -49,7 +49,7 @@ Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,
 | `file` | `{name, sizeMB, durationS, width, height, hdr, dolbyVision}` (+ `fps` facoltativo) | scheda file, badge HDR/Dolby Vision, peso stimato |
 | `phase` | `{phase: 'analisi'\|'video'\|'assemblaggio'\|'audio'\|'scrittura'\|'fatto'\|'errore'}` | fase corrente, catena delle fasi |
 | `progress` | `{phase, done, total, fps, etaS, elapsedS}` (campi mancanti tollerati) | %, barra, restante, trascorso, fps, fotogrammi. Coalescente con rAF: si può emettere spesso |
-| `frame` | `{index}` | ignorato dalla UI (per fun.js) |
+| `frame` | `{index}` | ignorato dalla UI |
 | `result` | `{inMB, outMB, savedPct, fileName}` | schermata "Fatto!" con −%, MB prima→dopo, coriandoli una volta |
 | `log` | `{line}` | aggiunge una riga al log tecnico |
 | `error` | `{message}` | pannello errore + log aperto + Riprova |
@@ -58,7 +58,7 @@ Percentuale complessiva = pesi per fase (analisi 4 %, video 82 %, assemblaggio 4
 
 ## Intrattenimento
 
-Rimosso dall'app dalla v0.17 (`fun.js` resta nel repo ma non è caricato; nessun `#fun-slot`). Il root ha `data-busy` e `data-stage` ∈ `pick|ready|busy|done|error`.
+Rimosso dall'app dalla v0.17 (modulo e anteprima rimossi; nessun `#fun-slot`). Il root ha `data-busy` e `data-stage` ∈ `pick|ready|busy|done|error`.
 
 ## Drag & drop, zoom, previsione
 
