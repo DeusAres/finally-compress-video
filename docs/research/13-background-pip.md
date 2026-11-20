@@ -184,3 +184,15 @@ Fatto misurato: con `<audio>` loop quasi muto + AudioContext il JS resta vivo (t
 | Web Locks / SharedWorker / SW / Background Fetch | ❌ | nessun meccanismo supportato |
 
 Raccomandazione: eseguire il pannello `bg-test.html` (60 s, 10 s fg + 40 s bg) in 4 combinazioni: {nessun keep-alive, audio} x {Worker, main} e una con PiP attivato; poi decidere. Se (c)+(d) sono VIVI e (e) in PiP e' VIVO si puo' progettare un export "foreground-first con degradazione": fg = seek 10-bit, bg = switch automatico a playback PiP/VideoDecoder 8-bit (mixed quality da dichiarare) -- altrimenti restare su Wake Lock + resume.
+
+## Risultato test bg-test.html su device (iOS 27.0.1, tab Safari, 2026-11-20) ✅
+Config: codec avc1.42001f, sottotest a–f in Worker, **keep-alive audio NON attivo**; fg 16.1 s, bg 43.9 s.
+| sottotest | fg/s | bg/s | bg/fg | esito |
+|---|---|---|---|---|
+| a setInterval main | 1.0 | 0.5 | 51 % | RIDOTTO (1 ogni 2 s) |
+| b setInterval Worker | 0.9 | 1.0 | 108 % | **VIVO** |
+| c VideoEncoder (H.264, frame da OffscreenCanvas, Worker) | 497 | 461 | 93 % | **VIVO** |
+| d VideoDecoder | 1218 | 0 | 0 % | **FERMO** — "Decoder failure" esattamente al passaggio in hidden |
+| e rVFC su <video> in riproduzione | 48.7 | 0 | 0 % | FERMO |
+| f seek+VideoFrame | 0 in fg | — | — | test rotto (già misurato nell'app: fermo in bg) |
+**Conclusione**: in background iOS 27 lascia vivi Worker e **encoder hardware**, ma **revoca la decodifica hardware** (VideoDecoder fallisce, <video> si ferma). Le uniche decodifiche possibili in bg sono software (WASM) → frame 8-bit, incompatibili con i segmenti Main10 HLG dello stesso file. ⇒ **Export HDR/Dolby Vision in background non ottenibile dal browser**. Mitigazione adottata: Wake Lock + ripresa immediata dall'ultimo segmento (v0.20). Variante scartata: modalità "background SDR 8-bit" con decoder WASM (perde HDR, lenta).
