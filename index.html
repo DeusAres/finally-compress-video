@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.19</title>
+<title>Compressore HDR v0.20</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -14,17 +14,18 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.19';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.19';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.19';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.19';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.19';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.19';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.19';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.19';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.19';
-import { mountUI } from './app/ui/ui.js?v=0.19';
-import { bus, emit } from './app/ui/bus.js?v=0.19';
+import { openVideoElement, seekFrames, releaseVideoElement } from './app/lib/frames.js?v=0.20';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.20';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.20';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.20';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.20';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.20';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.20';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.20';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.20';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.20';
+import { mountUI } from './app/ui/ui.js?v=0.20';
+import { bus, emit } from './app/ui/bus.js?v=0.20';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
 const log = (s) => emit('log', { line: String(s) });
@@ -32,14 +33,17 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.19-20261119T205240Z';
-const BUILD_LABEL = 'v0.19 · 19/11 21:52';
+const BUILD_ID = '0.20-20261120T082525Z';
+const BUILD_LABEL = 'v0.20 · 20/11 09:25';
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false }, NFtot = 0;
 let file = null, outFile = null, outName = '', info = null, running = false, cancelled = false, wake = null, store = null, cur = { enc: null, video: null, output: null };
 // job = packet store OPFS del job in corso (jobstore.js); savedJob = job salvato compatibile col file scelto; analysis = demux in cache per la ripresa in memoria
 let job = null, savedJob = null, analysis = null, progFrame = 0, keep = null, hb = null, segsSaved = 0; // segsSaved: segmenti salvati nel tentativo corrente
 const bg = { hiddenAt: 0, frameAt: 0, hiddenMs: 0, frames: 0, n: 0 }; // statistiche background del job
-const MB_ = 1048576, AUDIO_BPS = 256000;
+const MB_ = 1048576;
+// Interruzione da background: durante la fase video l'attesa del seek corrente viene abortita al volo (hidden), poi si riparte dall'ultimo segmento (visible).
+let vidRun = null, bgInt = null; // vidRun: AbortController della run video in corso; bgInt: {at} della richiesta di interruzione
+let hbRef = 0; // riferimento del delta frame nell'heartbeat (azzerato a ogni run)
 const fmtT = (s) => { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m ? `${m}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`; };
 const fmtMB = (b) => b >= 1024 * MB_ ? `${(b / 1024 / MB_).toFixed(2)} GB` : `${(b / MB_).toFixed(1)} MB`;
 const clock = () => { const d = new Date(); return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0'); };
@@ -47,7 +51,7 @@ const cancelErr = () => Object.assign(new Error('Elaborazione annullata'), { nam
 const checkCancel = () => { if (cancelled) throw cancelErr(); };
 // Pagina in background → iOS sospende JS/seek: attendi il ritorno in primo piano prima di proseguire.
 // Con il test "background con audio" NON si attende: si misura se il lavoro continua da nascosto.
-const whenVisible = async () => { if (!cfg.bgAudio) while (document.hidden) { await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true })); } checkCancel(); };
+const whenVisible = async () => { if (vidRun?.signal.aborted) throw Object.assign(new Error('interrotto: pagina in background'), { name: 'BackgroundInterrupt' }); if (!cfg.bgAudio) while (document.hidden) { await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true })); } checkCancel(); };
 const acquireWake = async () => {
   try { if (!wake || wake.released) { wake = await navigator.wakeLock?.request('screen'); wake?.addEventListener('release', () => { if (running) log(`[${clock()}] wake lock rilasciato (${document.visibilityState})`); }); if (running && wake) log(`[${clock()}] wake lock attivo`); } }
   catch (e) { wake = null; if (running) log('wake lock non ottenuto: ' + (e?.message || e)); }
@@ -56,6 +60,7 @@ document.addEventListener('visibilitychange', () => {
   if (!running) return;
   if (document.hidden) {
     bg.hiddenAt = Date.now(); bg.frameAt = progFrame; bg.n++;
+    if (vidRun && !vidRun.signal.aborted) { bgInt = { at: Date.now(), seg: segsSaved }; log(`[${clock()}] background: interrompo la run video (nessuna attesa del seek), si riprende al ritorno`); vidRun.abort(); }
     log(`[${clock()}] visibilità: hidden (frame ${progFrame}/${NFtot}${keep ? ' · ' + keep.state() : ''})`);
     notice('Pagina in background: l\'elaborazione può fermarsi finché non torni qui. Tieni l\'app aperta e lo schermo acceso.', 'warn');
   } else {
@@ -77,29 +82,30 @@ function bgSummary() {
     (cfg.bgAudio ? ` · test audio keep-alive ATTIVO (${keep ? keep.state() + ', pause audio ' + keep.pauses : 'non avviato'})` : ' · senza audio keep-alive'));
 }
 function startHeartbeat() {
-  let last = Date.now(), lastF = progFrame;
+  let last = Date.now(); hbRef = progFrame;
   hb = setInterval(() => {
     const now = Date.now(), gap = (now - last) / 1000; last = now;
-    log(`♥ ${clock()} frame ${progFrame}/${NFtot} (+${progFrame - lastF}) ${document.visibilityState}${gap > 2.5 ? ` · timer fermo per ${gap.toFixed(1)} s` : ''}${keep ? ' · ' + keep.state() : ''}`);
-    lastF = progFrame;
+    const d = Math.max(0, progFrame - hbRef); // hbRef è azzerato a ogni nuova run (progFrame riparte dall'ultimo segmento completo)
+    log(`♥ ${clock()} frame ${progFrame}/${NFtot} (+${d}) ${document.visibilityState}${gap > 2.5 ? ` · timer fermo per ${gap.toFixed(1)} s` : ''}${keep ? ' · ' + keep.state() : ''}`);
+    hbRef = progFrame;
   }, 1000);
 }
 
 // Stima preventiva: spazio OPFS disponibile rispetto alla dimensione stimata in uscita (bitrate × durata). Ritorna {ok, text}.
 // I segmenti di un job già salvato e riutilizzabile sono già nell'occupato: non vanno richiesti di nuovo.
-async function checkSpace(br = cfg.bitrateMbps) {
+async function checkSpace(br = cfg.bitrateMbps, audioMode = cfg.audioMode) {
   if (!file) return { ok: false, text: '' };
   if (!info) return { ok: true, text: '' };
   if (info.error) return { ok: false, text: 'Impossibile leggere il video: ' + info.error };
   if (!opfsSupported()) return { ok: false, text: 'Archiviazione OPFS non disponibile in questo browser: impossibile elaborare in streaming.' };
-  const outBytes = (br * 1e6 + AUDIO_BPS) * info.dur / 8 * 1.01, reuse = savedJob && sameFile(savedJob.manifest.file, fileKey(file)) ? savedJob.bytes : 0;
+  const outBytes = estimateOutBytes({ durS: info.dur, videoMbps: br, audioMode, aacBps: info.aacBps }), reuse = savedJob && sameFile(savedJob.manifest.file, fileKey(file)) ? savedJob.bytes : 0;
   const need = Math.max(32 * MB_, outBytes * 1.15 + 32 * MB_ - reuse);
   const sp = await opfsSpace();
   if (sp && sp.free < need) return { ok: false, text: `Spazio insufficiente: servono almeno ${fmtMB(need)} (liberi ${fmtMB(sp.free)}). Libera spazio sul telefono o scegli un bitrate più basso.` };
   return { ok: true, text: info.dur > 600 ? 'Video lungo: tieni l\'app in primo piano e lo schermo acceso per tutta l\'elaborazione.' : '' };
 }
 async function updateEstimate() {
-  const r = await checkSpace(ui ? ui.getSettings().bitrateMbps : cfg.bitrateMbps);
+  const st = ui ? ui.getSettings() : cfg; const r = await checkSpace(st.bitrateMbps, st.audioMode);
   notice(r.text, r.ok ? 'warn' : 'bad'); if (r.text) log(r.text);
 }
 async function inspectFile(f) {
@@ -110,6 +116,8 @@ async function inspectFile(f) {
     try { const cs = await vt.getColorSpace(); r.hdr = cs?.transfer === 'hlg' || cs?.transfer === 'pq'; } catch {}
     try { const rf = async (o, l) => new Uint8Array(await f.slice(o, o + l).arrayBuffer()); const loc = await locateMoov(rf, f.size); r.dv = !!(loc && extractDoviConfigBox(await rf(loc.offset, loc.size))); } catch {}
     try { const st = await vt.computePacketStats(120); r.fps = st?.averagePacketRate || 0; } catch {}
+    // bitrate della traccia AAC sorgente (0 = nessuna AAC; 256 kbps se non misurabile): serve alla stima del peso (app/ui/estimate.js)
+    try { r.aacBps = 0; for (const a of await input.getAudioTracks()) if ((await a.getCodec()) === 'aac') { let b = 0; try { b = (await a.computePacketStats(200))?.averageBitrate || 0; } catch {} r.aacBps = b > 0 ? Math.round(b) : 256000; break; } } catch { r.aacBps = undefined; }
     return r;
   } catch (e) { return { error: e?.message || String(e) }; } finally { try { input.dispose?.(); } catch {} }
 }
@@ -131,7 +139,7 @@ async function onFile(f) {
   const r = await inspectFile(f); if (f !== file) return; info = r;
   if (r.error) { log('Impossibile leggere il video: ' + r.error); notice('Impossibile leggere il video: ' + r.error, 'bad'); return; }
   log(`${r.W}×${r.H} · ${fmtT(r.dur)} · HDR ${r.hdr ? 'sì' : 'no'} · Dolby Vision ${r.dv ? 'sì' : 'no'}${r.fps ? ' · ' + r.fps.toFixed(1) + ' fps' : ''}`);
-  emit('file', { name: f.name, sizeMB: f.size / MB_, durationS: r.dur, width: r.W, height: r.H, hdr: r.hdr, dolbyVision: r.dv, fps: r.fps });
+  emit('file', { name: f.name, sizeMB: f.size / MB_, durationS: r.dur, width: r.W, height: r.H, hdr: r.hdr, dolbyVision: r.dv, fps: r.fps, aacBps: r.aacBps });
   await refreshResume(); if (f !== file) return;
   await updateEstimate();
 }
@@ -170,7 +178,7 @@ function friendlyError(e) {
   return 'Errore: ' + (n ? n + ': ' : '') + (e?.message || e) + '. I segmenti già pronti restano salvati: tocca Riprova (o riseleziona lo stesso video) per riprendere da dove si era fermato. Se la pagina si è ricaricata da sola, la memoria è finita: riprova con l\'app in primo piano.';
 }
 async function cleanupRun() {
-  try { cur.enc?.close(); } catch {} try { if (cur.video) releaseVideoElement(cur.video); } catch {} try { await cur.output?.cancel(); } catch {}
+  vidRun = null; try { cur.enc?.close(); } catch {} try { if (cur.video) releaseVideoElement(cur.video); } catch {} try { await cur.output?.cancel(); } catch {}
   cur = { enc: null, video: null, output: null }; try { await store?.remove(); } catch {} store = null;
   try { job?.close(); } catch {} job = null;
 }
@@ -182,12 +190,12 @@ async function start(s) {
   // SINCRONO nel tap (gesto utente): l'audio di keep-alive deve partire prima di qualunque await.
   keep = cfg.bgAudio ? startKeepAlive({ log: (t) => log(`[${clock()}] ${t}`), title: 'Compressione in corso 0%' }) : null;
   Object.assign(bg, { hiddenAt: document.hidden ? Date.now() : 0, frameAt: 0, hiddenMs: 0, frames: 0, n: 0 });
-  curPhase = null; lastFps = NaN; NFtot = 0; progFrame = 0; ui.setBusy(true); ui.setProgNote('');
+  curPhase = null; lastFps = NaN; NFtot = 0; progFrame = 0; hbRef = 0; vidRun = null; bgInt = null; ui.setBusy(true); ui.setProgNote('');
   let failed = false;
   try {
     if (!info) info = await inspectFile(file);
     if (!savedJob) await refreshResume().catch(() => {});
-    const sp = await checkSpace(cfg.bitrateMbps);
+    const sp = await checkSpace(cfg.bitrateMbps, cfg.audioMode);
     if (!sp.ok) { log(sp.text); emit('error', { message: sp.text }); failed = true; return; }
     notice(''); TSTART = performance.now(); try { localStorage.setItem('jobRunning', '1'); } catch {}
     if (outFile) { outFile = null; await cleanOpfs(); }
@@ -201,6 +209,15 @@ async function start(s) {
       catch (e) {
         const phase = curPhase, hadJob = !!job; await cleanupRun();
         if (e?.name === 'Cancelled') throw e;
+        if (e?.name === 'BackgroundInterrupt') { // non è un guasto: non consuma i tentativi automatici
+          const at = bgInt?.at || Date.now(); bgInt = null;
+          while (document.hidden) await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true }));
+          checkCancel();
+          const pj = await peekJob(), secs = (Date.now() - at) / 1000, n = (pj?.done ?? 0) + 1;
+          const m = `ripreso dopo ${secs.toFixed(1)} s in background dal segmento ${n}${pj?.total ? '/' + pj.total : ''}`;
+          log(`[${clock()}] ▶ ${m}`); ui.setProgNote(m[0].toUpperCase() + m.slice(1) + '. Tieni l\'app aperta e lo schermo acceso finché finisce.', 'warn');
+          await acquireWake(); keep?.nudge(); continue;
+        }
         if ((e?.name === 'HvccMismatch' || e?.name === 'JobMismatch') && !fresh) {
           const m = `I segmenti salvati non sono compatibili con questo encoder (${e.message}): ricomincio il video da capo.`;
           log('⚠️ ' + m); ui.setProgNote(m, 'warn'); fresh = true; continue;
@@ -294,8 +311,9 @@ async function run({ forceFresh = false } = {}) {
   // 3. Video: seek 10-bit nativo + VideoEncoder HEVC, UN encoder per run; i pacchetti vanno subito su disco (segmento corrente).
   const hlg = srcCs?.transfer === 'hlg';
   if (doneSeg < nSeg) {
-    const runStart = segStarts[doneSeg]; progFrame = runStart;
-    const video = await openVideoElement(file);
+    const runStart = segStarts[doneSeg]; progFrame = runStart; hbRef = runStart; // nuovo run: azzera il riferimento dell'heartbeat
+    vidRun = new AbortController(); if (document.hidden && !bgInt) bgInt = { at: Date.now(), seg: segsSaved }; if (document.hidden) vidRun.abort();
+    const video = await openVideoElement(file, vidRun.signal);
     cur.video = video; const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}`);
     if (!job.manifest.video.W) Object.assign(job.manifest.video, { W, H });
     else if (job.manifest.video.W !== W || job.manifest.video.H !== H) throw Object.assign(new Error(`dimensioni ${W}×${H} ≠ job ${job.manifest.video.W}×${job.manifest.video.H}`), { name: 'JobMismatch' });
@@ -340,7 +358,7 @@ async function run({ forceFresh = false } = {}) {
     // frame confirmation is MANDATORY: without waiting for the presented frame (rVFC) after 'seeked',
     // Safari often returns the previous frame (measured: alternating 33/22 dB PSNR, VMAF 43–53). v0.13.
     const vstats = { n: 0, dup: 0, off: 0, noCallback: 0, samples: [] };
-    for await (const vf of seekFrames(video, frames.slice(runStart).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), vstats)) {
+    for await (const vf of seekFrames(video, frames.slice(runStart).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), vstats, vidRun.signal)) {
       const k = runStart + i; while (k >= segEnd(segStarts, s, NF)) s++;
       // keyframe forzato a inizio segmento (segmento decodificabile da solo → riprendibile); dentro il segmento la scelta dell'utente
       try { if (encErr || cancelled) throw encErr || cancelErr(); enc.encode(vf, (k - segStarts[s]) % keyEvery === 0); } finally { vf.close(); } // sempre chiuso
@@ -355,7 +373,7 @@ async function run({ forceFresh = false } = {}) {
     }
     if (encErr) throw encErr;
     setProg('video', 1, 'chiusura encoder');
-    await enc.flush(); enc.close(); cur.enc = null; releaseVideoElement(video); cur.video = null; await wq; if (encErr) throw encErr;
+    await enc.flush(); enc.close(); cur.enc = null; releaseVideoElement(video); cur.video = null; vidRun = null; await wq; if (encErr) throw encErr;
     if (job.doneCount !== nSeg) throw new Error(`segmenti completati ${job.doneCount}/${nSeg} (pacchetti ${nChunks}/${NF - runStart})`);
     const encSec = (performance.now() - tE) / 1000;
     log(`verifica frame: ${vstats.n} seek, doppioni ${vstats.dup}, fuori posto ${vstats.off}, senza callback ${vstats.noCallback}${vstats.retried ? `, seek ripetuti ${vstats.retried}` : ''} ${vstats.samples.length ? 'es. ' + JSON.stringify(vstats.samples) : ''}`);

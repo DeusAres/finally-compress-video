@@ -1,7 +1,8 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.19';
-import { sprite, SPRITES } from './sprite.js?v=0.19';
+import { bus } from './bus.js?v=0.20';
+import { sprite, SPRITES } from './sprite.js?v=0.20';
+import { estimateOutBytes } from './estimate.js?v=0.20';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -128,7 +129,7 @@ function template(opts) {
     </fieldset>
     <fieldset class="fcv-field">
       <legend class="px-label">Sperimentale</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b> <i>(sperimentale: su iOS 27 non mantiene la decodifica in background)</i><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
     </fieldset>
   </details>
 </section>
@@ -332,7 +333,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}`;
     updateEstimate();
   }
-  const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? (br + 0.26) * d / 8 * (1e6 / 1048576) : null);
+  const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps }) / 1048576 : null); // formula in estimate.js
   function updateEstimate() {
     const d = st.file?.durationS, src = st.file?.sizeMB;
     R.warn.hidden = true;
@@ -503,7 +504,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   // ---------- bus ----------
   const subs = {
-    file: (d) => { st.file = { ...st.file, ...d }; showFile(st.file); if (st.stage === 'pick') setStage('ready'); },
+    file: (d) => { st.file = { ...st.file, ...d }; showFile(st.file); updateEstimate(); if (st.stage === 'pick') setStage('ready'); },
     phase: (d) => {
       if (d.phase === 'errore') { if (st.stage !== 'error') showError(st.lastError || 'La compressione si è interrotta.'); return; }
       if (d.phase === 'fatto') { renderPct(1); return; }
