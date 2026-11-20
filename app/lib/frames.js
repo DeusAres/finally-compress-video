@@ -101,9 +101,15 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
       for (let i = p; i < N; i += P) {
         while (!stop && !degraded && !signal?.aborted && i >= next + maxFlight) await wake(); // finestra: max frame vivi
         if (stop || degraded || signal?.aborted) return;
-        const r = await grabFrame(videos[p], frames[i], stats.players[p], signal);
+        let r = await grabFrame(videos[p], frames[i], stats.players[p], signal);
+        // v0.22.1: su iPhone il 2° player può non confermare i primi frame (riscaldamento): ritenta lo stesso frame
+        // fino a 3 volte prima di arrendersi (prima: fallback immediato al primo mediaTime assente).
+        for (let k = 0; r.bad && k < 3 && !stop && !degraded && !signal?.aborted; k++) {
+          r.vf.close(); stats.players[p].retried++;
+          r = await grabFrame(videos[p], frames[i], stats.players[p], signal);
+        }
         if (stop || degraded) { r.vf.close(); return; }
-        if (r.bad) { r.vf.close(); degrade(`player ${p + 1}: frame ${i} non verificato (mediaTime ${r.mt == null ? 'assente' : r.mt.toFixed(4)})`); return; }
+        if (r.bad) { r.vf.close(); degrade(`player ${p + 1}: frame ${i} non verificato dopo 3 tentativi (mediaTime ${r.mt == null ? 'assente' : r.mt.toFixed(4)})`); return; }
         buf.set(i, r); notify();
       }
     } catch (e) {
