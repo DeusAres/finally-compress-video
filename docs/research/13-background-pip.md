@@ -128,3 +128,11 @@ Test D: Wake Lock baseline: `await navigator.wakeLock.request('screen')` in PWA 
 Test E: memoria: lanciare export reale con `performance.measureUserAgentSpecificMemory` non disponibile su iOS -> osservare se la pagina viene ricaricata (log azzerato) dopo 2-5 min in bg; registrare `pageshow` con `event.persisted` e un contatore in `sessionStorage`.
 
 Criterio di successo: gap massimo di 'main', 'worker' e 'draw' < 2 s per 5 min con app in bg e schermo bloccato, e throughput encode in bg >= 80% del fg. Altrimenti: scartare PiP/audio e adottare solo Wake Lock + resume.
+
+## Risultato su device (iOS 27, 2026-11-20)
+
+Test su iPhone (Safari iOS 27) con il «test background con audio» (keep-alive `<audio>` + Web Audio + Media Session) durante l'export a segmenti.
+
+- **JS vivo in background con l'audio**: il battito del log continua da `hidden` (heartbeat ogni ~2 s, throttled rispetto al secondo richiesto), nessuna sospensione del processo.
+- **Decodifica/seek del `<video>` sospesa**: nello stesso intervallo il lavoro reale avanza di 2 fotogrammi in 12.4 s di background. Il `seeked` non arriva finché la pagina non torna `visible`; al ritorno il `<video>` non rispondeva più ai seek e l'app restava ferma ~8 s fino a «seek timeout», poi ripartiva (da capo se nessun segmento era completo).
+- **Conclusione**: con l'architettura seek-`<video>` + VideoEncoder il background non è ottenibile: l'audio tiene vivo il JS, non la pipeline di decodifica media. Il test resta disponibile ma marcato sperimentale. La **ripresa è la mitigazione**: su `hidden` la run video viene interrotta subito (AbortController, nessuna attesa del timeout di seek, che resta a ~4 s solo per guasti reali), su `visible` si ricrea l'elemento `<video>` dal File e si riparte dall'ultimo segmento completato, senza consumare i 3 tentativi automatici (log «ripreso dopo X s in background dal segmento n»).

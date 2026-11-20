@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Test background Safari iOS</title>
+<style>
+:root{--bg:#f6f7f9;--fg:#15191f;--mut:#5b6573;--card:#fff;--line:#dde2e8;--acc:#1d5fd1;--ok:#137a3a;--ko:#b3261e;--warn:#9a6700;--mono:ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif;margin:0;padding:20px max(16px,env(safe-area-inset-right)) 40px max(16px,env(safe-area-inset-left));max-width:760px;margin-inline:auto}
+h1{font-size:1.35rem;margin:0 0 4px}h2{font-size:1rem;margin:0}
+p,li{color:var(--mut)}p{margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;display:grid;gap:10px;min-width:0}
+button{font:inherit;background:var(--acc);color:var(--bg);border:0;border-radius:8px;padding:10px 14px;cursor:pointer;justify-self:start}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible{outline:3px solid var(--fg)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+label{display:flex;gap:6px;align-items:center;color:var(--fg)}
+select,input[type=file]{font:inherit;max-width:100%}
+pre{font:12px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:260px;margin:0;white-space:pre}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;font:12px var(--mono);min-width:100%}
+th,td{border:1px solid var(--line);padding:4px 6px;text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+.ok{color:var(--ok)}.ko{color:var(--ko)}.warn{color:var(--warn)}
+video{width:160px;max-width:45%;background:#000;border-radius:6px}
+#state{font:600 1.1rem var(--mono)}
+</style>
+</head>
+<body>
+<h1>Test background Safari iOS</h1>
+<p>Misura quali sottosistemi restano vivi con l'app in background. Procedura: scegli un video, premi <b>Avvia</b>, resta in primo piano ~10 s, poi vai alla Home (o blocca lo schermo) per ~30-40 s, torna alla pagina e attendi la fine dei 60 s. Per il PiP: tocca «Attiva PiP» prima di uscire.</p>
+
+<div class="card">
+  <h2>Impostazioni</h2>
+  <div class="row"><input type="file" id="file" accept="video/*"></div>
+  <div class="row">
+    <label>Codec <select id="codec"><option value="avc1.42001f">H.264</option><option value="hvc1.1.6.L93.B0">HEVC</option></select></label>
+    <label>Encoder/decoder in <select id="where"><option value="worker">Worker</option><option value="main">main thread</option></select></label>
+    <label>Durata (s) <select id="dur"><option>60</option><option>30</option><option>120</option><option>300</option></select></label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="t_a" checked> a main timer</label>
+    <label><input type="checkbox" id="t_b" checked> b Worker timer</label>
+    <label><input type="checkbox" id="t_c" checked> c VideoEncoder</label>
+    <label><input type="checkbox" id="t_d" checked> d VideoDecoder</label>
+    <label><input type="checkbox" id="t_e" checked> e video play + rVFC</label>
+    <label><input type="checkbox" id="t_f" checked> f seek + VideoFrame</label>
+    <label><input type="checkbox" id="t_g" checked> g audio keep-alive</label>
+  </div>
+  <div class="row">
+    <button id="go">Avvia</button>
+    <button id="pip" disabled>Attiva PiP</button>
+    <button id="calc" disabled>Calcola ora</button>
+  </div>
+  <div id="state">pronto</div>
+</div>
+
+<div class="card">
+  <h2>Video (e) in riproduzione muta / (f) seek</h2>
+  <div class="row"><video id="ve" muted playsinline loop></video><video id="vf" muted playsinline></video></div>
+</div>
+
+<div class="card"><h2>Log per secondo</h2><pre id="log">In attesa.</pre></div>
+
+<div class="card">
+  <h2>Riepilogo</h2>
+  <div class="tw" id="sum">Nessun dato.</div>
+  <div class="row"><button id="copy" disabled>Copia risultati</button><span id="copied" class="ok"></span></div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const NAMES = {a:'a main setInterval', b:'b Worker setInterval', c:'c VideoEncoder chunk', d:'d VideoDecoder frame', e:'e rVFC (video play)', f:'f seek+VideoFrame ok', f_to:'f seek timeout'};
+const ORDER = ['a','b','c','d','e','f','f_to'];
+
+// ---------- codice encoder+decoder, eseguibile in main o in Worker ----------
+function codecBody(emit, o) {
+  let stop = false, dcfg = null, enc = null, dec = null, waiterE = null, waiterD = null;
+  const chunks = []; let started = false, readyRes; const ready = new Promise(r => readyRes = r);
+  const mc = new MessageChannel(); let mcRes = null; mc.port1.onmessage = () => { const r = mcRes; mcRes = null; r && r(); };
+  const yieldMC = () => new Promise(r => { mcRes = r; mc.port2.postMessage(0); });
+  const W = 640, H = 360;
+  async function run() {
+    const cfg = {codec: o.codec, width: W, height: H, bitrate: 2e6, framerate: 30, latencyMode: 'realtime'};
+    if (o.codec.startsWith('hvc')) cfg.hevc = {format: 'hevc'}; else cfg.avc = {format: 'avc'};
+    const sup = await VideoEncoder.isConfigSupported(cfg).catch(e => ({supported: false, err: e.message}));
+    if (!sup.supported) { emit('err', 'encoder config non supportata: ' + o.codec + ' ' + (sup.err || '')); return; }
+    enc = new VideoEncoder({
+      output: (c, m) => {
+        emit('c');
+        if (m && m.decoderConfig && !dcfg) dcfg = m.decoderConfig;
+        if (!started) { if (c.type === 'key') started = true; else return; }
+        if (chunks.length < 90) { const b = new Uint8Array(c.byteLength); c.copyTo(b); chunks.push({type: c.type, b}); if (chunks.length >= 30 && dcfg) readyRes(); }
+        if (waiterE) { const w = waiterE; waiterE = null; w(); }
+      },
+      error: e => emit('err', 'encoder: ' + e.message)
+    });
+    enc.configure(cfg);
+    const oc = new OffscreenCanvas(W, H), g = oc.getContext('2d');
+    (async () => {
+      let i = 0;
+      while (!stop) {
+        if (enc.state === 'closed') return;
+        if (enc.encodeQueueSize >= 3) { await new Promise(r => { waiterE = r; setTimeout(r, 50); }); continue; }
+        g.fillStyle = 'hsl(' + (i * 7 % 360) + ',60%,40%)'; g.fillRect(0, 0, W, H);
+        g.fillStyle = '#fff'; g.font = '48px sans-serif'; g.fillText('frame ' + i, 30, 120);
+        g.fillRect((i * 9) % (W - 40), 200, 40, 40);
+        for (let k = 0; k < 40; k++) g.fillRect((i * 31 + k * 97) % W, (k * 53 + i * 5) % H, 3, 3);
+        const f = new VideoFrame(oc, {timestamp: i * 33333});
+        try { enc.encode(f, {keyFrame: i % 30 === 0}); } catch (e) { emit('err', 'encode: ' + e.message); f.close(); return; }
+        f.close(); i++;
+        if (i % 8 === 0) await yieldMC();
+      }
+    })();
+    if (!o.dec) return;
+    await ready; if (stop) return;
+    const dsup = await VideoDecoder.isConfigSupported(dcfg).catch(e => ({supported: false}));
+    if (!dsup.supported) { emit('err', 'decoder config non supportata'); return; }
+    dec = new VideoDecoder({
+      output: f => { f.close(); emit('d'); if (waiterD) { const w = waiterD; waiterD = null; w(); } },
+      error: e => emit('err', 'decoder: ' + e.message)
+    });
+    dec.configure(dcfg);
+    const gop = chunks.slice(0, 30); // un GOP completo (key ogni 30)
+    let k = 0, ts = 0;
+    while (!stop) {
+      if (dec.state === 'closed') return;
+      if (dec.decodeQueueSize >= 4) { await new Promise(r => { waiterD = r; setTimeout(r, 50); }); continue; }
+      const c = gop[k % gop.length]; k++; ts += 33333;
+      try { dec.decode(new EncodedVideoChunk({type: c.type, timestamp: ts, data: c.b})); } catch (e) { emit('err', 'decode: ' + e.message); return; }
+      if (k % 8 === 0) await yieldMC();
+    }
+  }
+  run().catch(e => emit('err', 'codec: ' + e.message));
+  return () => { stop = true; try { enc && enc.close(); } catch {} try { dec && dec.close(); } catch {} };
+}
+
+const WORKER_SRC = '(' + (function () {
+  let stopFn = null, buf = [], lastFlush = 0, tick = null;
+  const flush = () => { if (buf.length) { postMessage({ev: buf}); buf = []; } lastFlush = Date.now(); };
+  const emit = (n, extra) => {
+    if (n === 'err') { postMessage({err: extra}); return; }
+    const t = Date.now(); buf.push([n, t]);
+    if (buf.length >= 20 || t - lastFlush > 100) flush();
+  };
+  onmessage = e => {
+    const m = e.data;
+    if (m.cmd === 'ticker') { tick = setInterval(() => postMessage({ev: [['b', Date.now()]]}), 1000); }
+    if (m.cmd === 'codec') { stopFn = codecBody(emit, m.o); }
+    if (m.cmd === 'stop') { stopFn && stopFn(); clearInterval(tick); flush(); postMessage({stopped: true}); }
+    if (m.cmd === 'flush') flush();
+  };
+}).toString() + ')();';
+
+// ---------- stato ----------
+let ev = {}, errs = [], vis = [], logLines = [], started = false, tStart = 0, tEnd = 0, dur = 60;
+let workers = [], stoppers = [], timers = [], objUrl = null, audioCtx = null, audioEl = null, finished = false, cfgUsed = null;
+const now = () => Date.now();
+function rec(n, t) { if (!started || finished) return; (ev[n] ||= []).push(t || now()); }
+const cnt = n => (ev[n] || []).length;
+
+function setState(s) { $('state').textContent = s; }
+
+// silenzio quasi-udibile: WAV PCM16 mono 8 kHz, 1 s con ampiezza minima (+-1) per non essere "zero esatto"
+function silentWav() {
+  const sr = 8000, n = sr, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const s = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  s(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); s(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, i % 2 ? 1 : -1, true);
+  return new Blob([buf], {type: 'audio/wav'});
+}
+
+function startAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+  audioEl = new Audio(URL.createObjectURL(silentWav())); audioEl.loop = true; audioEl.volume = 0.01;
+  audioEl.play().catch(e => errs.push('audio.play: ' + e.message));
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain(); gain.gain.value = 0.0001;
+    osc.connect(gain).connect(audioCtx.destination); osc.start(); audioCtx.resume();
+  } catch (e) { errs.push('AudioContext: ' + e.message); }
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({title: 'Test background', artist: 'Compress'});
+    navigator.mediaSession.setActionHandler('pause', () => {});
+  } catch {}
+}
+
+// (e) rVFC su video in riproduzione
+function startE() {
+  const v = $('ve');
+  if (!('requestVideoFrameCallback' in v)) { errs.push('rVFC non supportato'); return; }
+  const cb = () => { if (finished) return; rec('e'); v.requestVideoFrameCallback(cb); };
+  v.requestVideoFrameCallback(cb);
+  v.play().catch(e => errs.push('ve.play: ' + e.message));
+}
+
+// (f) seek + rVFC + new VideoFrame
+async function startF() {
+  const v = $('vf');
+  if (v.readyState < 1) await new Promise(r => v.addEventListener('loadedmetadata', r, {once: true}));
+  const d = v.duration || 1, step = 1 / 30;
+  const wait = (ev_, ms) => new Promise(r => { const t = setTimeout(() => r(false), ms); v.addEventListener(ev_, () => { clearTimeout(t); r(true); }, {once: true}); });
+  const rv = ms => new Promise(r => { const t = setTimeout(() => r(false), ms); v.requestVideoFrameCallback(() => { clearTimeout(t); r(true); }); });
+  let k = 0;
+  const mc = new MessageChannel();
+  while (!finished) {
+    const time = (k++ * step) % Math.max(d - step, step);
+    const p = wait('seeked', 400);
+    v.currentTime = time;
+    const ok = await p;
+    const ok2 = ok && await rv(250);
+    if (ok && ok2) {
+      try { const f = new VideoFrame(v); f.close(); rec('f'); } catch (e) { rec('f_to'); errs.push('VideoFrame(vf): ' + e.message); await new Promise(r => setTimeout(r, 200)); }
+    } else rec('f_to');
+  }
+}
+
+function startCodec(where, codec, dec) {
+  const emit = (n, extra) => { if (n === 'err') errs.push(extra); else rec(n); };
+  if (where === 'main') {
+    try { stoppers.push(codecBody(emit, {codec, dec})); } catch (e) { errs.push('codec main: ' + e.message); }
+    return;
+  }
+  const w = makeWorker();
+  w.postMessage({cmd: 'codec', o: {codec, dec}});
+}
+
+function makeWorker() {
+  const w = new Worker(URL.createObjectURL(new Blob([WORKER_SRC + '\n' + codecBody.toString().replace(/^/, 'var codecBody=') ], {type: 'text/javascript'})));
+  w.onmessage = e => {
+    const m = e.data;
+    if (m.ev) m.ev.forEach(([n, t]) => { if (t >= tStart && t <= tEnd) (ev[n] ||= []).push(t); });
+    if (m.err) errs.push(m.err);
+  };
+  w.onerror = e => errs.push('worker error: ' + e.message);
+  workers.push(w);
+  return w;
+}
+
+// ---------- avvio ----------
+$('file').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  if (objUrl) URL.revokeObjectURL(objUrl);
+  objUrl = URL.createObjectURL(f);
+  $('ve').src = objUrl; $('vf').src = objUrl;
+  setState('video caricato: ' + f.name);
+});
+
+$('go').addEventListener('click', () => {
+  if (started) return;
+  const use = k => $('t_' + k).checked;
+  if ((use('e') || use('f')) && !objUrl) { setState('scegli prima un video (o deseleziona e/f)'); return; }
+  dur = +$('dur').value;
+  const codec = $('codec').value, where = $('where').value;
+  cfgUsed = {codec, where, dur, tests: ORDER.filter(k => k.length === 1 && use(k)).join(''), ua: navigator.userAgent};
+  ev = {}; errs = []; logLines = []; finished = false; started = true;
+  tStart = now(); tEnd = tStart + dur * 1000;
+  vis = [{t: tStart, s: document.visibilityState}];
+  $('go').disabled = true; $('calc').disabled = false; $('pip').disabled = !use('e');
+  // sincrono nel gesto utente: audio + play
+  if (use('g')) startAudio();
+  if (use('e')) startE();
+  if (use('a')) timers.push(setInterval(() => rec('a'), 1000));
+  if (use('b')) { const w = makeWorker(); w.postMessage({cmd: 'ticker'}); }
+  if (use('c') || use('d')) startCodec(where, codec, use('d'));
+  if (use('f')) startF().catch(e => errs.push('f: ' + e.message));
+  timers.push(setInterval(tick, 1000));
+  setState('in corso (' + dur + ' s)...');
+  $('log').textContent = '';
+});
+
+let lastTot = {};
+function tick() {
+  if (!started) return;
+  const t = now(), el = ((t - tStart) / 1000).toFixed(1);
+  const line = el.padStart(5) + 's ' + (document.visibilityState === 'visible' ? 'V' : 'H') + ' ' +
+    ORDER.filter(n => ev[n] || (n.length === 1 && cfgUsed.tests.includes(n))).map(n => { const c = cnt(n); const d = c - (lastTot[n] || 0); lastTot[n] = c; return n + '=' + c + '(+' + d + ')'; }).join(' ') +
+    (cfgUsed.tests.includes('e') ? ' ct=' + $('ve').currentTime.toFixed(1) : '');
+  logLines.push(line);
+  const pre = $('log'); pre.textContent += line + '\n'; pre.scrollTop = pre.scrollHeight;
+  if (t >= tEnd) finish();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!started || finished) return;
+  vis.push({t: now(), s: document.visibilityState});
+  logLines.push('--- visibilitychange -> ' + document.visibilityState + ' @' + ((now() - tStart) / 1000).toFixed(1) + 's');
+  $('log').textContent += logLines[logLines.length - 1] + '\n';
+  if (now() >= tEnd) finish();
+});
+['freeze', 'resume'].forEach(n => document.addEventListener(n, () => { if (started && !finished) { logLines.push('--- ' + n + ' @' + ((now() - tStart) / 1000).toFixed(1) + 's'); $('log').textContent += logLines[logLines.length - 1] + '\n'; } }));
+$('pip').addEventListener('click', async () => {
+  const v = $('ve');
+  try {
+    if (v.requestPictureInPicture) await v.requestPictureInPicture();
+    else v.webkitSetPresentationMode('picture-in-picture');
+    logLines.push('PiP attivato'); $('log').textContent += 'PiP attivato\n';
+  } catch (e) {
+    try { v.webkitSetPresentationMode('picture-in-picture'); logLines.push('PiP via webkitSetPresentationMode'); }
+    catch (e2) { errs.push('PiP: ' + e.message + ' / ' + e2.message); }
+  }
+});
+$('calc').addEventListener('click', () => finish(true));
+
+function finish(manual) {
+  if (finished && !manual) return;
+  if (!finished) {
+    finished = true; timers.forEach(clearInterval); timers = [];
+    stoppers.forEach(f => f()); workers.forEach(w => w.postMessage({cmd: 'stop'}));
+    try { $('ve').pause(); } catch {}
+    try { audioEl && audioEl.pause(); audioCtx && audioCtx.close(); } catch {}
+    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+    setState('finito, raccolgo i dati dei Worker...');
+  }
+  setTimeout(summarize, manual ? 0 : 800);
+}
+
+// ---------- riepilogo ----------
+function summarize() {
+  const end = Math.min(now(), tEnd);
+  // intervalli per stato
+  const segs = [];
+  vis.forEach((v, i) => { const t1 = Math.min(i + 1 < vis.length ? vis[i + 1].t : end, end); if (t1 > v.t) segs.push({a: v.t, b: t1, hid: v.s !== 'visible'}); });
+  const secs = hid => segs.filter(s => s.hid === hid).reduce((x, s) => x + (s.b - s.a) / 1000, 0);
+  const fgS = secs(false), bgS = secs(true);
+  const rows = [];
+  ORDER.forEach(n => {
+    const arr = (ev[n] || []).filter(t => t <= end).sort((a, b) => a - b);
+    const enabled = n === 'f_to' ? cfgUsed.tests.includes('f') : cfgUsed.tests.includes(n);
+    if (!enabled) return;
+    const inSeg = (hid) => arr.filter(t => segs.some(s => s.hid === hid && t >= s.a && t < s.b)).length;
+    const nF = inSeg(false), nB = inSeg(true);
+    let gapB = 0;
+    segs.filter(s => s.hid).forEach(s => {
+      let prev = s.a; arr.filter(t => t >= s.a && t < s.b).forEach(t => { gapB = Math.max(gapB, t - prev); prev = t; });
+      gapB = Math.max(gapB, s.b - prev);
+    });
+    const rF = fgS > 0 ? nF / fgS : NaN, rB = bgS > 0 ? nB / bgS : NaN, ratio = rF > 0 ? rB / rF : NaN;
+    let verdict = '-', cls = '';
+    if (n !== 'f_to') {
+      if (fgS < 3 || bgS < 3) verdict = 'dati insufficienti';
+      else if (!(rF > 0)) verdict = 'ko in fg';
+      else if (ratio >= 0.8) { verdict = 'VIVO'; cls = 'ok'; }
+      else if (ratio > 0.05) { verdict = 'RIDOTTO'; cls = 'warn'; }
+      else { verdict = 'FERMO'; cls = 'ko'; }
+    }
+    rows.push({n, name: NAMES[n], fgS, nF, rF, bgS, nB, rB, ratio, gapB: bgS > 0 ? Math.round(gapB) : NaN, tot: arr.length, verdict, cls});
+  });
+  const f1 = x => Number.isFinite(x) ? x.toFixed(1) : '-';
+  let html = '<table><tr><th>sottotest</th><th>fg s</th><th>fg n</th><th>fg /s</th><th>bg s</th><th>bg n</th><th>bg /s</th><th>bg/fg</th><th>gap bg ms</th><th>esito</th></tr>';
+  rows.forEach(r => { html += '<tr><td>' + r.name + '</td><td>' + f1(r.fgS) + '</td><td>' + r.nF + '</td><td>' + f1(r.rF) + '</td><td>' + f1(r.bgS) + '</td><td>' + r.nB + '</td><td>' + f1(r.rB) + '</td><td>' + (Number.isFinite(r.ratio) ? Math.round(r.ratio * 100) + '%' : '-') + '</td><td>' + (Number.isFinite(r.gapB) ? r.gapB : '-') + '</td><td class="' + r.cls + '">' + r.verdict + '</td></tr>'; });
+  html += '</table>';
+  if (errs.length) html += '<p class="ko">Errori: ' + errs.slice(0, 10).map(e => String(e).replace(/</g, '&lt;')).join(' | ') + '</p>';
+  $('sum').innerHTML = html;
+  const txt = ['Test background', JSON.stringify(cfgUsed), 'fg ' + f1(fgS) + ' s, bg ' + f1(bgS) + ' s',
+    'sottotest | fg_s fg_n fg/s | bg_s bg_n bg/s | bg/fg | gapBg_ms | esito',
+    ...rows.map(r => [r.name, f1(r.fgS), r.nF, f1(r.rF), f1(r.bgS), r.nB, f1(r.rB), Number.isFinite(r.ratio) ? Math.round(r.ratio * 100) + '%' : '-', r.gapB, r.verdict].join(' | ')),
+    'visibilita: ' + vis.map(v => ((v.t - tStart) / 1000).toFixed(1) + 's=' + v.s).join(', '),
+    'errori: ' + (errs.length ? errs.join(' || ') : 'nessuno'), '--- log ---', ...logLines].join('\n');
+  window.__resultText = txt; window.__rows = rows;
+  $('copy').disabled = false; setState('finito');
+}
+
+$('copy').addEventListener('click', async () => {
+  const t = window.__resultText || '';
+  try { await navigator.clipboard.writeText(t); $('copied').textContent = 'Copiato'; }
+  catch {
+    const ta = document.createElement('textarea'); ta.value = t; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); $('copied').textContent = 'Copiato'; } catch { $('copied').textContent = 'Copia manuale non riuscita'; }
+    ta.remove();
+  }
+});
+</script>
+</body>
+</html>
