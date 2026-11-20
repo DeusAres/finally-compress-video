@@ -47,7 +47,7 @@
 /* Riquadri di valori (statistiche, misuratori) */
 .fcv-stat, .fcv-meter { display: grid; gap: var(--sp-2); align-content: start; padding: var(--sp-3); background: var(--surface-2); min-width: 0; }
 .fcv-stat .v { font: 400 var(--fs-mono-lg)/1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.fcv-stat .v small { font: 600 var(--fs-xs)/1 var(--font-body); color: var(--muted); margin-left: var(--sp-1); }
+.fcv-stat .v small { font: 400 var(--fs-mono)/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); margin-left: var(--sp-1); }
 
 /* Avvisi: un solo componente per info / attenzione / errore */
 .fcv-warn, .fcv-keep, .fcv-drop-msg, .fcv-err-msg, .fcv-pred-note {
@@ -113,7 +113,7 @@
 .fcv-pred-tbl th[scope="row"] { width: 31%; }
 .fcv-tbl td.ok { color: var(--ok-strong); }
 .fcv-tbl td.warnc { color: var(--px-ink); background: var(--warn); }
-.fcv-tline { margin: 0; font-size: var(--fs-xs); color: var(--muted); text-align: center; text-wrap: balance; }
+.fcv-tline { margin: 0; font: 400 var(--fs-log)/1.2 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); text-align: center; text-wrap: balance; }
 .fcv-tline[hidden], .fcv-tbl[hidden] { display: none; }
 
 /* Sezioni apribili (opzioni avanzate, log): stessa riga di intestazione */
