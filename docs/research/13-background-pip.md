@@ -196,3 +196,10 @@ Config: codec avc1.42001f, sottotest a–f in Worker, **keep-alive audio NON att
 | e rVFC su <video> in riproduzione | 48.7 | 0 | 0 % | FERMO |
 | f seek+VideoFrame | 0 in fg | — | — | test rotto (già misurato nell'app: fermo in bg) |
 **Conclusione**: in background iOS 27 lascia vivi Worker e **encoder hardware**, ma **revoca la decodifica hardware** (VideoDecoder fallisce, <video> si ferma). Le uniche decodifiche possibili in bg sono software (WASM) → frame 8-bit, incompatibili con i segmenti Main10 HLG dello stesso file. ⇒ **Export HDR/Dolby Vision in background non ottenibile dal browser**. Mitigazione adottata: Wake Lock + ripresa immediata dall'ultimo segmento (v0.20). Variante scartata: modalità "background SDR 8-bit" con decoder WASM (perde HDR, lenta).
+
+## SVOLTA: Picture-in-Picture tiene la pagina attiva (iOS 27.0.1, tab Safari, 2026-11-20) ✅
+Test bg-test.html con PiP attivato su un <video> in riproduzione muta (sottotest e), utente uscito da Safari e rientrato più volte:
+- `visibilityState` resta **"visible"** per tutta la durata (iOS non segnala mai il background) → nessun throttling.
+- Tutto continua a piena velocità: Worker/setInterval 1/s, VideoEncoder ~470–500 chunk/s, **VideoDecoder ~860–1100 frame/s**, rVFC su video in riproduzione ~41–45/s e — con il test seek corretto (rVFC richiesto prima del seek) — **seek + new VideoFrame su un SECONDO <video> ~31–37 frame/s**, 1 solo timeout in 20 s.
+- Senza PiP (test precedente): decodifica revocata in bg ("Decoder failure"), <video> fermo.
+⇒ **Export HDR in background possibile tenendo attiva una PiP** (video separato in riproduzione muta, avviata con un tap). Limiti: solo tab Safari (PWA standalone: requestPictureInPicture non funziona, bug WebKit 303885); se l'utente chiude la PiP fuori da Safari la pagina va in bg → ripresa dall'ultimo segmento (v0.20).
