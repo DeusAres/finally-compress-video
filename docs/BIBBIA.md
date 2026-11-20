@@ -231,27 +231,30 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 
 - 2026-11-19 — **Soglia qualità decisa dall'utente**: "quasi perfetto" = file 8 Mbps verificato (VMAF 88.9, frame allineati). 4 Mbps (VMAF 76.6) giudicato troppo estremo. Niente altri confronti visivi. Default app: 8 Mbps (IMG_7440: −60 %). Obiettivo −50 % raggiunto su contenuti ad alto bitrate.
 
+- 2026-11-19 — Interfaccia pixel art (v0.16), gioco rimosso su richiesta (v0.17), drag & drop, zoom disattivato, confronto previsto/reale.
+- 2026-11-19 — Fuori perimetro (decisione utente): scalatura di risoluzione, importazione audio da altro file.
+- 2026-11-20 — Background: senza PiP iOS revoca la decodifica (export fermo) → ripresa a segmenti (v0.18–0.20). Con **PiP** su un video separato la pagina resta "visible" e l'export continua fuori da Safari (v0.21.1, solo tab Safari).
+- 2026-11-20 — Aggiornamenti/offline/PWA come finally-cool-film (version.txt + BUILD_ID, service worker, manifest, v0.19).
+
 ## 13. STATO / RIPRESA (leggere per primo)
 
-**Fase attuale: RICERCA (pre-costruzione). Nessun codice app ancora.**
+**Fase attuale: APP FUNZIONANTE in produzione** — https://deusares.github.io/finally-compress-video/ (GitHub Pages da `main`, radice). Rilascio: `tools/stamp-version.sh <ver>` poi commit/push su `main` (+ branch `claude/hevc-video-compression-hzxnlt`).
 
-File di ricerca prodotti (leggerli prima di sintetizzare le sezioni 2–11):
-- `research/02-webkit-webcodecs.md` ✅ (letto sorgente WebKit) — **VINCOLO CRITICO**: in Safari 27.0–27.2 l'encoder è il wrapper libwebrtc `RTCVideoEncoderH265` (VT **RealTime**, **no B-frame**, solo AverageBitRate, BitrateAdjuster); bitrateMode/quantizer/framerate/contentHint ignorati; keyFrame per-frame OK; configure() col solo bitrate = cambio al volo senza keyframe. **Niente VideoFrame 10-bit costruibili né copyTo 10-bit**; frame da canvas/WebGPU → NV12 8-bit; decoder release probabilmente 8-bit. VT diretto + 10-bit solo su WebKit `main` (futuro). WebGPU importExternalTexture mantiene 10-bit ma ignora colorSpace. → Nel release: **HDR 10-bit + pre-filtro GPU non fattibile**; opzioni: output 8-bit (SDR tone-mapped o HLG 8-bit ❓), attendere Safari futuro, o encoder WASM. Test device T0–T8 nel file.
-- `research/03-memoria-ios.md` ✅ — limite WebContent soft ~1.5 GB (bug 277848), ~2–3 GB osservati; regole anti-crash con budget (frame in volo ≤4, decodeQueue ≤8, encodeQueue ≤4, footprint ≤700 MB); OPFS + createSyncAccessHandle in worker; Wake Lock in PWA da iOS 18.4; share sheet con file grandi problematico.
-- `research/04-container-metadati.md` ✅ — Mediabunny 1.66: legge hvc1 Main10/colr/rotazione/VFR/tag mdta; NON scrive apac/mebx; tag mdta in udta/meta (Foto potrebbe ignorarli → post-processing moov/meta); usare fastStart:false + StreamTarget OPFS; pipeline manuale VideoSampleSink→Source (Conversion via canvas rischia 8-bit); copiare `amve` (TN3145) + mdcv/clli; rimuovere dvcC/dvvC; APAC: passthrough non supportato → proposta: scartare, tenere AAC.
-- `research/05-esperimenti-proxy.md` ✅ — GOP lungo ≈ 6–10 % bitrate; denoise penalizzato dalle metriche FR; SSIM-Y 0.95 a ~9–10 Mbps (x265 faster) ≈ −50 %. VMAF da ottenere (serve permesso).
-- `research/06-algoritmi-percettivi.md` 🟡 — molte citazioni ❓ (subagent con poche ricerche): **da verificare i paper prima di fidarsi dei numeri**. Ranking: per-scena + keyframe a scene-cut > denoise MC > JND in PU21/HLG > guardia banding > motion masking > ROI volti. Metrica in-loop: SSIM/MS-SSIM in PU21 + controllo banding; offline VMAF NEG / ColorVideoVDP.
-- `research/09-prior-art.md` ✅ — kimymt/iphone-video-compressor (mediabunny, HEVC Main 8-bit, 34 pitfall Safari: niente IDR automatico, user activation, wake lock, 1 encoder HW, fastStart in-memory = RAM); nessuno fa Main10/HDR, pre-filtri WebGPU con metrica, per-scena HEVC, output grandi senza RAM → nostro spazio.
+**Pipeline (index.html + app/lib)** — tutto verificato su iPhone 17 Pro Max / Safari 27.0.1:
+1. Demux Mediabunny 1.65.1 (ESM, CDN jsdelivr) → timestamp esatti, RPU Dolby Vision per frame (NAL 62), metadati.
+2. Frame 10-bit HLG frame-exact: seek su `<video>` + rVFC richiesto PRIMA del seek + `new VideoFrame(video)` (frames.js). ~60 fps.
+3. VideoEncoder HEVC (VT realtime): Main10 dal frame nativo; keyframe a inizio segmento; bitrate fisso (default 8 Mbps ≈ VMAF 88.9 = "quasi perfetto").
+4. Export a segmenti ~4 s su OPFS (jobstore.js) → ripresa dopo background/reload; assemblaggio + mux Mediabunny StreamTarget su OPFS (opfs-worker con sync handle).
+5. Post: patch VUI BT.2020/HLG nell'SPS (hevc-vui.js), colr nclx, dvvC + RPU trapiantati (Dolby Vision 8.4 preservato), moov/meta + trak/meta copiati verbatim dall'originale (data con fuso, camera), tag displayname/description con impostazioni.
+6. Audio: AAC copiato (default) o riparazione eco del comando rapido v1–v4 (v4 consigliato: −5…−13 dB di eco residua contro un limite lineare ≈ −9…−12).
+7. Consegna: share sheet con solo il File → «Salva video». PiP opzionale per lavorare fuori da Safari.
+**Risultati**: IMG_7440 −60 % a 8 Mbps (VMAF 88.9); originali 4K −90 %; sorgenti già a 15 Mbps ≈ −40 %.
 
-**AGGIORNAMENTO device (Safari 27.0.1)**: vedi research/02 §10. HEVC Main10 10-bit ✅ da frame nativo; AV1 reale ✅ solo da canvas 8-bit (87 fps); quantizer ✗; keyFrame ✅; bitrate al volo ✅ senza keyframe; chunk.duration=0. Decisione da prendere: percorso A (HDR, no filtri pixel) vs B (filtri GPU, 8-bit) vs test canvas HDR float16.
+**Moduli pronti ma NON integrati**: ricerca bitrate per scena (scenes.js, quality.js, ratecontrol.js, research/12): garantisce ogni segmento ≥ VMAF 88 ma su IMG_7440 costa +10 % di peso e 1.7× il tempo → in attesa di decisione utente.
 
-**Prossimi passi alla ripresa**
-0. VMAF — distinzione: (a) LAB offline nel container = ground truth per calibrare (build libvmaf richiede permesso utente); (b) IN-APP = da studiare: ffvmaf (WASM) su frame campione per scena, costo su iPhone, vs MS-SSIM GPU / FUNQUE.
-1. Decisione con utente sul vincolo 02 (8-bit vs attesa vs WASM) + prima build = pagina diagnostica T0–T8 da aprire sull'iPhone (verità sul device reale, Safari 27.x).
-2. Verificare le fonti ❓ di `06` (subagent Sonnet dedicato, solo verifica paper + numeri).
-3. Chiedere all'utente il permesso per compilare libvmaf (bloccato dal classificatore) → rifare ladder con VMAF/VMAF-NEG + clip low-light.
-4. Sintetizzare sezioni 2–11 di questa BIBBIA dai file research + elenco "Test da eseguire su device" unificato (prima build = pagina diagnostica che esegue isConfigSupported & co. sull'iPhone).
-5. Architettura proposta → approvazione utente → costruzione.
+**Limiti noti**: niente background senza PiP (decodifica revocata da iOS); PiP non funziona da PWA installata (bug WebKit 303885); velocità ≈ tempo reale per video 60 fps (estrazione parallela a 2 player, sperimentale v0.22: ~1.5× in Chromium, frame identici; da misurare su iPhone); audio spaziale `apac` scartato; eco del comando rapido riducibile, non eliminabile (12 % non lineare).
+
+**File chiave**: `docs/research/02` (fatti misurati su device §10–11), `05` (curve VMAF reali), `04` (container/audio/eco), `13` (background/PiP), `12` (ricerca per scena).
 
 ---
 ### Nota operativa
