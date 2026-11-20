@@ -64,8 +64,18 @@ export function createPip(file, { log = () => {}, onChange = () => {} } = {}) {
     async stop() {
       stopped = true;
       const was = active;
-      try { if (document.pictureInPictureElement === v) await document.exitPictureInPicture(); } catch {}
-      try { if (v?.webkitPresentationMode === 'picture-in-picture') v.webkitSetPresentationMode('inline'); } catch {}
+      // v0.23: chiudi DAVVERO la finestrella prima di rimuovere il video (su iOS il confronto pictureInPictureElement === v
+      // può fallire e rimuovere il video in PiP lasciava la finestrella aperta): prova entrambe le API e attendi l'uscita.
+      if (v) {
+        const left = new Promise((r) => { const t = setTimeout(r, 1500); const done = () => { clearTimeout(t); r(); };
+          v.addEventListener('leavepictureinpicture', done, { once: true });
+          v.addEventListener('webkitpresentationmodechanged', () => { if (v?.webkitPresentationMode !== 'picture-in-picture') done(); }); });
+        let asked = false;
+        try { if (document.pictureInPictureElement) { await document.exitPictureInPicture(); asked = true; } } catch {}
+        try { if (v.webkitPresentationMode === 'picture-in-picture') { v.webkitSetPresentationMode('inline'); asked = true; } } catch {}
+        if (asked || active) await left;
+        try { v.pause(); } catch {}
+      }
       if (was) closed();
       cleanup();
     },

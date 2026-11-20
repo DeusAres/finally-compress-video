@@ -6,7 +6,7 @@
 // - moduli, CSS, icone: URL esatto dalla cache, altrimenti rete (e tenuto); offline, qualunque versione in cache;
 // - cross-origin: solo il bundle Mediabunny (jsdelivr) e Google Fonts (cache a runtime); il resto non si tocca;
 // - version.txt (checkUpdate in index.html): mai in cache. I video scelti dall'utente sono File locali, non passano di qui.
-const VERSION = '0.23-20261120T172921Z';
+const VERSION = '0.23-20261120T173048Z';
 /*PRECACHE:BEGIN*/const PRECACHE = [
   './',
   'index.html',

@@ -35,8 +35,8 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.23-20261120T172921Z';
-const BUILD_LABEL = 'v0.23 · 20/11 18:29';
+const BUILD_ID = '0.23-20261120T173048Z';
+const BUILD_LABEL = 'v0.23 · 20/11 18:30';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false }, NFtot = 0;
 let parOff = false; // fallback a 1 player scattato in questo job (vale anche per le riprese successive)
@@ -191,6 +191,7 @@ function onPip(wasOn) {
   if (!running || !file) return;
   if (wasOn) { pip?.stop().then(() => { pip = null; ui.setPip(false); }); return; }
   if (!pip) { pip = makePip(); pip.prepare(); } // normalmente già preparato all'avvio dell'export (v0.21.1)
+  if (cfg.par2 && !parOff) { parOff = true; log(`[${clock()}] PiP: estrazione parallela disattivata (con la PiP attiva iOS non concede il 2° player) → 1 player dal prossimo segmento`); }
   pip.start().then((ok) => { if (!ok) ui.setProgNote('Picture-in-Picture non disponibile su questo dispositivo/browser: tieni l\'app aperta e lo schermo acceso.', 'warn'); });
 }
 async function cleanupRun() {
