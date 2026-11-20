@@ -1,11 +1,12 @@
 // Resumable export job in OPFS ("packet store"). Layout: jobs/current/
 //   manifest.json   {v, app, file:{name,size,lastModified}, settings, video:{W,H,nFrames,firstTs,lastTs,keyEvery,dv},
-//                    segStarts:[frame index…], doneCount, config:{codec,codedWidth,codedHeight,colorSpace,description(b64 hvcC)}}
+//                    segStarts:[frame index…], doneCount, config:{codec,codedWidth,codedHeight,colorSpace,description(b64 hvcC)},
+//                    encBitrate, encRatio (controllo brctl), scene:{k:{b,why,prior,pts,est,ms,real}} (v0.28, solo «qualità per scena»)}
 //   seg-NNNN.bin    encoded packets of segment N back to back (already stripParameterSets + RPU appended)
 //   seg-NNNN.json   {k, n, bytes, rpu, packets:[{ts,dur,type,offset,size}]}  (ts/dur in seconds, output timeline)
 // A segment counts as done only when the manifest says so AND its index + binary size agree (verifiedDone).
 // Writes go through the SyncAccessHandle worker (opfs-worker.js): no packet is kept in RAM after its write is acked.
-import { opfsWorker } from './opfs.js?v=0.27.1';
+import { opfsWorker } from './opfs.js?v=0.28';
 
 export const JOB_VERSION = 1;
 const DIR = ['jobs', 'current'];
@@ -15,7 +16,7 @@ const te = new TextEncoder();
 export const fileKey = (f) => ({ name: f.name, size: f.size, lastModified: f.lastModified });
 export const sameFile = (a, b) => !!(a && b && a.name === b.name && a.size === b.size && a.lastModified === b.lastModified);
 /** Only the settings that change the encoded video matter for resuming (audio is processed at assembly). */
-export const sameVideoSettings = (a, b) => !!(a && b && +a.bitrateMbps === +b.bitrateMbps && +a.keyframeS === +b.keyframeS);
+export const sameVideoSettings = (a, b) => !!(a && b && +a.bitrateMbps === +b.bitrateMbps && +a.keyframeS === +b.keyframeS && !!a.sceneQ === !!b.sceneQ);
 
 export const toB64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
 export const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -92,6 +93,8 @@ export async function openJob(manifest, { fresh = false, done = manifest.doneCou
     get total() { return manifest.segStarts.length; },
     /** Decoder config saved with the job (description = patched hvcC as Uint8Array), or null. */
     getConfig() { const c = manifest.config; return c ? { ...c, description: fromB64(c.description) } : null; },
+    /** Riscrive il manifest (es. risultati delle prove per scena: una ripresa non rifà le prove già salvate). */
+    async save() { manifest.updated = Date.now(); await writeJson('manifest.json', manifest); },
     async setConfig(c) { manifest.config = { ...c, description: toB64(c.description) }; manifest.updated = Date.now(); await writeJson('manifest.json', manifest); },
     /** Writer for segment k (truncates any partial data). add() resolves when the worker has written the bytes. */
     async beginSegment(k) {

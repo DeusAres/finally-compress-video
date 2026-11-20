@@ -1,8 +1,8 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.27.1';
-import { sprite, SPRITES } from './sprite.js?v=0.27.1';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.27.1';
+import { bus } from './bus.js?v=0.28';
+import { sprite, SPRITES } from './sprite.js?v=0.28';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.28';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -37,7 +37,7 @@ const PHASES = [
   { id: 'scrittura', label: 'File', sub: 'Assemblo il file e i metadati' },
 ];
 const WEIGHT = { analisi: 0.04, video: 0.82, assemblaggio: 0.04, audio: 0.07, scrittura: 0.03 };
-const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true }; // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
+const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: false }; // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
 
 const nf1 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 });
@@ -131,6 +131,7 @@ function template(opts) {
     </fieldset>
     <fieldset class="fcv-field">
       <legend class="px-label">Sperimentale</legend>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-sceneq" value="1"><div><b>Qualità garantita per scena (sperimentale)</b><i>(più lento: ~1,7× il tempo)</i><span>Prova più bitrate per ogni tratto e sceglie il minimo che resta «quasi perfetto» (VMAF stimato ≥ 88); più lento. Il bitrate scelto sopra diventa il limite massimo: il file non pesa mai più della stima.</span></div></label>
       <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b><i>(sperimentale: su iOS 27 non mantiene la decodifica in background)</i><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
       <label class="fcv-radio"><input type="checkbox" name="fcv-par2" value="1"><div><b>Estrazione parallela (2 player)</b><i>(~1,7× più veloce; se un player si blocca torna a 1 da solo)</i></div></label>
     </fieldset>
@@ -183,6 +184,7 @@ function template(opts) {
     <div class="fcv-cmp-row"><span class="px-label">Dopo</span><div class="px-bar" data-ref="afterBar"><i></i></div><span class="v" data-ref="outMB"></span></div>
   </div>
   <p class="fcv-freed" data-ref="freed"></p>
+  <p class="fcv-scene-br" data-ref="sceneBr" hidden></p>
   <table class="fcv-tbl fcv-pred-tbl" data-ref="pred" hidden><thead><tr><th></th><th scope="col">Previsto</th><th scope="col">Reale</th><th scope="col">Scarto</th></tr></thead><tbody>
     <tr><th scope="row">Peso <small>MB</small></th><td data-ref="pW1"></td><td data-ref="pW2"></td><td data-ref="pW3"></td></tr>
     <tr><th scope="row">Tempo <small>m:ss</small></th><td data-ref="pT1"></td><td data-ref="pT2"></td><td data-ref="pT3"></td></tr>
@@ -326,37 +328,39 @@ export function mountUI(root, handlers = {}, opts = {}) {
   // ---------- passo 2: impostazioni ----------
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2') };
+    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), sceneQ: !!v('fcv-sceneq') };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
     set('fcv-br', s.bitrateMbps); set('fcv-kf', s.keyframeS); set('fcv-audio', s.audioMode);
     if (s.bgAudio != null) { const c = root.querySelector('input[name="fcv-bgaudio"]'); if (c) c.checked = !!s.bgAudio; }
     if (s.par2 != null) { const c = root.querySelector('input[name="fcv-par2"]'); if (c) c.checked = !!s.par2; }
+    if (s.sceneQ != null) { const c = root.querySelector('input[name="fcv-sceneq"]'); if (c) c.checked = !!s.sceneQ; }
     syncSettings();
   }
   function syncSettings() {
     st.settings = readSettings();
     const { bitrateMbps: br, keyframeS: kf, audioMode: am } = st.settings;
     const info = BR_INFO[br] || BR_INFO[8];
-    R.brHint.textContent = info.t;
+    R.brHint.textContent = st.settings.sceneQ ? `Qualità per scena attiva: ${br} Mbps è il limite massimo, ogni tratto riceve il minimo che resta «quasi perfetto».` : info.t;
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
-    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}`;
+    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}`;
     updateEstimate();
   }
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps }) / 1048576 : null); // formula in estimate.js
-  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: st.settings.par2, width: f.width, height: f.height }) : null; };
+  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: st.settings.par2, width: f.width, height: f.height, sceneQ: st.settings.sceneQ }) : null; };
   function updateEstimate() {
     const d = st.file?.durationS, src = st.file?.sizeMB;
     R.warn.hidden = true; R.estSrc.hidden = true;
     if (!d) { R.est.innerHTML = R.estT.innerHTML = st.file ? '…' : '—'; return; }
     const est = predictMB();
     const pct = src ? (1 - est / src) * 100 : null;
-    R.est.innerHTML = `≈ ${fmtMB(est)} <small>MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
+    const vary = st.settings.sceneQ; // qualità per scena: peso variabile (al massimo quello a bitrate fisso), tempo ≈ ×1.7
+    R.est.innerHTML = `${vary ? 'variabile, ≤' : '≈'} ${fmtMB(est)} <small>MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${vary ? 'almeno ' : ''}${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
     const tt = predictTime();
-    R.estT.innerHTML = `≈ ${fmtTime(tt.s)} <small>m:ss</small>`;
-    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? ', 2 player' : ', 1 player'}).`;
+    R.estT.innerHTML = `${vary ? 'variabile, ≈' : '≈'} ${fmtTime(tt.s)} <small>m:ss</small>`;
+    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? ', 2 player' : ', 1 player'})${vary ? ', ×1,7 per le prove per scena' : ''}.`;
     R.estSrc.hidden = false;
     if (pct != null && pct < 10) {
       R.warn.hidden = false;
@@ -386,7 +390,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.resume.hidden = !st.resume;
     if (!st.resume) return;
     const s = st.resume.settings || {};
-    R.resumeText.textContent = `Trovato un export interrotto di questo video (${s.bitrateMbps} Mbps, key ${s.keyframeS}s): ${st.resume.done} segmenti su ${st.resume.total} già pronti.`;
+    R.resumeText.textContent = `Trovato un export interrotto di questo video (${s.bitrateMbps} Mbps${s.sceneQ ? ' max, qualità per scena' : ''}, key ${s.keyframeS}s): ${st.resume.done} segmenti su ${st.resume.total} già pronti.`;
     R.resumeBtn.textContent = `Riprendi export di ${st.resume.name} (segmenti ${st.resume.done}/${st.resume.total})`;
   }
   R.again.addEventListener('click', () => { setStage('ready'); root.querySelector('.fcv-step-set').scrollIntoView({ block: 'start' }); });
@@ -397,10 +401,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   // ---------- avanzamento ----------
   function startProgress() {
-    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = st.settings.par2; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
+    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = st.settings.par2; st.sceneUsed = st.settings.sceneQ; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
     R.log.textContent = ''; st.logLines = 0; R.logCount.textContent = '0';
     const s = st.settings;
-    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span><span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
+    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span><span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
     R.elapsed.textContent = '0:00';
     R.progNote.textContent = KEEP_OPEN; R.progNote.dataset.kind = ''; st.pipOn = false; R.pipBox.hidden = true;
@@ -486,6 +490,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const freed = r.inMB - r.outMB;
     R.freed.innerHTML = freed > 0 ? `Hai liberato <b>${fmtMB(freed)} MB</b> <span class="sep">·</span> <span class="nw">${nf1.format(r.inMB / r.outMB)}× più piccolo</span>` : 'Il video originale era già molto compresso: prova un bitrate più basso.';
     R.pred.hidden = R.predNote.hidden = true;
+    const sb = r.sceneBr; R.sceneBr.hidden = !sb; // «qualità per scena»: riga «bitrate per scena: min–max, medio»
+    if (sb) R.sceneBr.textContent = `Bitrate per scena: ${nf1.format(sb.min)}–${nf1.format(sb.max)} Mbps, medio ${nf1.format(sb.mean)} Mbps`;
     const realT = st.lastElapsed || (performance.now() - st.t0) / 1000, devOf = (a, b) => (b / a - 1) * 100;
     const fmtDev = (v) => `${v > 0 ? '+' : v < 0 ? '−' : '±'}${nf1.format(Math.abs(v))}%`;
     const setDev = (el, v) => { el.textContent = fmtDev(v); el.className = Math.abs(v) <= 10 ? 'ok' : 'warnc'; };
@@ -499,10 +505,12 @@ export function mountUI(root, handlers = {}, opts = {}) {
         tl = ` | tempo previsto ${fmtTime(st.predT)} · reale ${fmtTime(realT)} · scarto ${devT > 0 ? '+' : '−'}${nf1.format(Math.abs(devT))} %`;
         // misura reale: frame totali / secondi della fase video (estrazione + codifica) → prossima previsione
         const vs = (st.vtEnd || st.vt1) - st.vt0;
-        if (st.vFrames > 0 && vs > 1) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height }, st.vFrames / vs, realT);
+        // con le prove per scena la fase video non misura la velocità di codifica: niente salvataggio
+        if (st.vFrames > 0 && vs > 1 && !st.sceneUsed) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height }, st.vFrames / vs, realT);
       } else { R.pT1.textContent = R.pT2.textContent = R.pT3.textContent = '—'; R.pT3.className = ''; }
       R.pred.hidden = false;
-      if (Math.abs(dev) > 15) { R.predNote.textContent = 'Scarto peso oltre il 15%: la previsione usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.'; R.predNote.hidden = false; }
+      if (st.sceneUsed) { R.predNote.textContent = 'Qualità per scena: la previsione del peso è il massimo (bitrate scelto come limite); ogni tratto ha ricevuto solo il bitrate che gli serviva.'; R.predNote.hidden = false; }
+      else if (Math.abs(dev) > 15) { R.predNote.textContent = 'Scarto peso oltre il 15%: la previsione usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.'; R.predNote.hidden = false; }
       appendLog(`PREVISIONE: peso ${st.predMB.toFixed(2)} MB previsto · ${r.outMB.toFixed(2)} MB reale · scarto ${dev > 0 ? '+' : ''}${dev.toFixed(1)} %${tl}`);
     }
     R.outName.textContent = r.fileName || '';

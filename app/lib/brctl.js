@@ -12,3 +12,22 @@ export function nextBitrate(configured, real, target) {
   if (!(real > 0) || !(configured > 0) || !(target > 0)) return configured > 0 ? configured : target;
   return clamp(configured * clamp(Math.pow(target / real, BR_GAIN), BR_STEP[0], BR_STEP[1]), target * BR_ABS[0], target * BR_ABS[1]);
 }
+
+/**
+ * Controllo con TARGET PER SEGMENTO (v0.28, «qualità per scena»: target = bitrate scelto dalle prove; a bitrate fisso target costante).
+ * Stato = rapporto configurato/target, cioè quanto l'encoder VT sotto- o sovra-produce al ritmo di alimentazione attuale: resta valido
+ * da un segmento all'altro. All'inizio del segmento s si configura ratio × target(s) (prima del keyframe); dopo ogni finestra misurata
+ * sul segmento m il rapporto si aggiorna con nextBitrate verso target(m) e si riapplica al segmento in ingresso `cur` (i pacchetti
+ * arrivano qualche frame dopo l'ingresso). Con target costante è identico al controllo v0.27 (nextBitrate sul configurato).
+ */
+// holdBelow (solo «qualità per scena»): una finestra con reale < holdBelow × target è limitata dal CONTENUTO (scena statica: l'encoder non
+// spende i bit), non dal ritmo di alimentazione → il rapporto non si aggiorna, altrimenti salirebbe a 2.5× e il segmento successivo
+// (magari difficile, target alto) partirebbe molto sopra il suo target. A bitrate fisso holdBelow = 0 (comportamento v0.27).
+export function createSegmentRate(targetOf, ratio0 = 1, { holdBelow = 0 } = {}) {
+  let ratio = clamp(Number.isFinite(ratio0) && ratio0 > 0 ? ratio0 : 1, BR_ABS[0], BR_ABS[1]);
+  return {
+    get ratio() { return ratio; },
+    configured: (s) => ratio * targetOf(s),
+    update(m, real, cur = m) { const T = targetOf(m); if (!(real < holdBelow * T)) ratio = nextBitrate(ratio * T, real, T) / T; return ratio * targetOf(cur); },
+  };
+}

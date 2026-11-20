@@ -186,6 +186,8 @@ details.fcv-adv > .fcv-field:last-child { margin-bottom: var(--sp-2); }
 .fcv-freed { font-size: var(--fs-md); text-wrap: balance; }
 .fcv-freed b { color: var(--ok-strong); }
 .fcv-freed .nw { white-space: nowrap; }
+.fcv-scene-br { margin: 0; font: var(--fs-mono)/1.2 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.fcv-scene-br[hidden] { display: none; }
 .fcv-pred-note { text-align: left; }
 .fcv-outname { font: 400 var(--fs-mono)/1.2 var(--font-mono); color: var(--muted); word-break: break-all; }
 .fcv-save-msg { font-size: var(--fs-sm); }

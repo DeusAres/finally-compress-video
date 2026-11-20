@@ -12,3 +12,4 @@ run node tools/lab/brctl-test.mjs
 rm -f /tmp/.fcv-test.$$
 [ $fail = 0 ] && echo "TUTTI I TEST OK" || echo "ALCUNI TEST FALLITI"
 exit $fail
+node app/lib/scenesearch.test.mjs

@@ -10,8 +10,8 @@
 // Everything browser-dependent is INJECTED (deps), so this module runs in Node with stubs
 // (app/lib/ratecontrol.test.mjs). No WebCodecs/DOM access here.
 
-import { segmentScenes, pickTrialWindow } from './scenes.js?v=0.27.1';
-import { DEFAULT_CALIBRATION, pool, estimateVmaf } from './quality.js?v=0.27.1';
+import { segmentScenes, pickTrialWindow } from './scenes.js?v=0.28';
+import { DEFAULT_CALIBRATION, pool, estimateVmaf } from './quality.js?v=0.28';
 
 export const DEFAULTS = Object.freeze({
   targetVmaf: 88,        // user decision 2026-11-19 (BIBBIA §12): ≈ the verified 8 Mbps file
@@ -117,7 +117,7 @@ export async function searchBitrate(segment, deps, opts = {}) {
     for (const e of enc) {
       const dbs = await deps.measure(w, e.encoded);
       const pooled = pool(dbs), est = estimateVmaf(pooled, cal);
-      points.push({ bitrate: e.bitrate, bytes: e.bytes, pooled, q: est.mean, qLow: est.low });
+      points.push({ bitrate: e.bitrate, requested: e.requested ?? e.bitrate, bytes: e.bytes, pooled, q: est.mean, qLow: est.low });
     }
   };
   const need = () => {

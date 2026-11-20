@@ -38,10 +38,12 @@ export function expectedFps(o) {
 export function saveSpeed(o, fps, totalS) {
   try { if (fps > 1 && isFinite(fps)) localStorage.setItem(speedKey(o), String(fps)); if (totalS > 0) localStorage.setItem('fcv.lastTotalS', String(totalS)); } catch {}
 }
-/** Tempo totale previsto in secondi + fonte della velocità. */
-export function estimateTimeS({ durS, fps = 30, audioMode = 'copy', par2, width, height }) {
+// «Qualità garantita per scena» (v0.28): le prove per segmento portano il tempo a ≈ 1.7× (research/12 §6, stima da misurare su iPhone).
+export const SCENE_TIME_FACTOR = 1.7;
+/** Tempo totale previsto in secondi + fonte della velocità. sceneQ: tempo del video × SCENE_TIME_FACTOR (variabile). */
+export function estimateTimeS({ durS, fps = 30, audioMode = 'copy', par2, width, height, sceneQ = false }) {
   if (!(durS > 0)) return null;
   const frames = durS * (fps > 0 ? fps : 30), sp = expectedFps({ par2, width, height });
-  const tv = frames / sp.fps;
-  return { s: 0.5 + tv * 1.03 + 0.5 + (audioMode === 'v4' ? 0.07 * durS : 0), measured: sp.measured, fps: sp.fps };
+  const tv = frames / sp.fps * (sceneQ ? SCENE_TIME_FACTOR : 1);
+  return { s: 0.5 + tv * 1.03 + 0.5 + (audioMode === 'v4' ? 0.07 * durS : 0), measured: sp.measured, fps: sp.fps, variable: !!sceneQ };
 }
