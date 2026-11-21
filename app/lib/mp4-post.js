@@ -1,6 +1,6 @@
 // Post-processing of the MP4 produced by Mediabunny (fastStart:false => moov AFTER mdat, so growing/shrinking
 // boxes inside moov never moves mdat and chunk offsets (stco/co64) stay valid).
-import { parseBoxes, childrenOffset, findBox, boxBytes, videoTrak } from './dovi.js?v=0.31';
+import { parseBoxes, childrenOffset, findBox, boxBytes, videoTrak } from './dovi.js?v=0.32';
 
 const fourccBytes = (s) => [s.charCodeAt(0), s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)];
 function concat(parts) {
@@ -23,7 +23,7 @@ export function makeBox(type, ...parts) {
 
 // Rebuild a container box: fn([{type,bytes}]) -> new children ({type,bytes}); header prefix (e.g. stsd entry
 // count, sample-entry fields) is kept, size recomputed (32-bit header).
-function rebuild(bytes, fn) {
+export function rebuild(bytes, fn) {
   const box = parseBoxes(bytes)[0];
   const cOff = box.start + childrenOffset(bytes, box);
   const kids = parseBoxes(bytes, cOff, box.end);

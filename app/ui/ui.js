@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.31';
-import { sprite, SPRITES } from './sprite.js?v=0.31';
-import { createLogStore } from './logstore.js?v=0.31';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.31';
+import { bus } from './bus.js?v=0.32';
+import { sprite, SPRITES } from './sprite.js?v=0.32';
+import { createLogStore } from './logstore.js?v=0.32';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.32';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -38,7 +38,7 @@ const PHASES = [
   { id: 'scrittura', label: 'File', sub: 'Assemblo il file e i metadati' },
 ];
 const WEIGHT = { analisi: 0.04, video: 0.82, assemblaggio: 0.04, audio: 0.07, scrittura: 0.03 };
-const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: false }; // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
+const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: false, apac: true }; // apac: audio spaziale mantenuto (v0.32, solo se la sorgente lo ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
 
 const nf1 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 });
@@ -129,6 +129,10 @@ function template(opts) {
       <legend class="px-label">Audio</legend>
       <div class="fcv-radios" data-ref="audio">${audio}</div>
       <p class="fcv-subtle">Le voci "versione precedente" e "diagnostica" servono per confronti tecnici.</p>
+    </fieldset>
+    <fieldset class="fcv-field" data-ref="apacBox" hidden>
+      <legend class="px-label">Audio spaziale</legend>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-apac" value="1" checked><div><b>Audio spaziale (apac) — mantieni</b><i>(video iPhone con audio spaziale)</i><span>Copia invariata la traccia audio spaziale accanto a quella stereo, come nell'originale: in Foto resta l'audio spaziale (e «Mix audio»). Solo con l'audio «copia»: con la riparazione dell'eco o la ricodifica viene tolta. Aggiunge ~0,4 Mbps.</span></div></label>
     </fieldset>
     <fieldset class="fcv-field" data-ref="dsBox" hidden>
       <legend class="px-label">Risoluzione</legend>
@@ -303,6 +307,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const chips = [];
     if (fi.hdr) chips.push('<span class="px-chip px-chip--hdr">HDR</span>');
     if (fi.dolbyVision) chips.push('<span class="px-chip px-chip--dv">Dolby Vision</span>');
+    if (fi.apac) chips.push('<span class="px-chip">Audio spaziale</span>');
     if (fi.width && fi.height) chips.push(`<span class="px-chip px-chip--num">${fi.width}×${fi.height}</span>`);
     if (fi.fps) chips.push(`<span class="px-chip px-chip--num">${Math.round(fi.fps)} fps</span>`);
     R.fChips.innerHTML = chips.join('');
@@ -338,11 +343,12 @@ export function mountUI(root, handlers = {}, opts = {}) {
   function syncDs() {
     const ok = dsAvailable(), c = root.querySelector('input[name="fcv-ds"]');
     R.dsBox.hidden = !ok; if (c) { c.disabled = !ok; if (!ok) c.checked = false; }
+    R.apacBox.hidden = !st.file?.apac; // «Audio spaziale (apac) — mantieni»: solo se la sorgente ha la traccia apac
     syncSettings();
   }
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), sceneQ: !!v('fcv-sceneq'), downscale: !!v('fcv-ds') && dsAvailable() };
+    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), sceneQ: !!v('fcv-sceneq'), downscale: !!v('fcv-ds') && dsAvailable(), apac: !!v('fcv-apac') };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
@@ -351,6 +357,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (s.par2 != null) { const c = root.querySelector('input[name="fcv-par2"]'); if (c) c.checked = !!s.par2; }
     if (s.sceneQ != null) { const c = root.querySelector('input[name="fcv-sceneq"]'); if (c) c.checked = !!s.sceneQ; }
     if (s.downscale != null) { const c = root.querySelector('input[name="fcv-ds"]'); if (c) c.checked = !!s.downscale; }
+    if (s.apac != null) { const c = root.querySelector('input[name="fcv-apac"]'); if (c) c.checked = !!s.apac; }
     syncSettings();
   }
   function syncSettings() {
@@ -360,10 +367,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.brHint.textContent = st.settings.sceneQ ? `Qualità per scena attiva: ${br} Mbps è il limite massimo, ogni tratto riceve il minimo che resta «quasi perfetto».` : info.t;
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
-    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}`;
+    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}`;
     updateEstimate();
   }
-  const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps }) / 1048576 : null); // formula in estimate.js
+  const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js
   const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: st.settings.par2, width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: st.settings.downscale }) : null; };
   function updateEstimate() {
     const d = st.file?.durationS, src = st.file?.sizeMB;

@@ -17,9 +17,10 @@ export function outAudioBps(audioMode, aacBps) {
 }
 
 /** Peso stimato del file finale in byte. */
-export function estimateOutBytes({ durS, videoMbps, audioMode = 'copy', aacBps }) {
+export function estimateOutBytes({ durS, videoMbps, audioMode = 'copy', aacBps, apacBps = 0 }) {
   if (!(durS > 0)) return 0;
-  return (videoMbps * 1e6 * VIDEO_OVERSHOOT + outAudioBps(audioMode, aacBps)) * durS / 8 * CONTAINER_OVERHEAD;
+  const spatial = audioMode === 'copy' && aacBps !== 0 && apacBps > 0 ? apacBps : 0; // traccia apac copiata (v0.32): solo con l'AAC copiato
+  return (videoMbps * 1e6 * VIDEO_OVERSHOOT + outAudioBps(audioMode, aacBps) + spatial) * durS / 8 * CONTAINER_OVERHEAD;
 }
 
 // ---------- Stima del TEMPO ----------

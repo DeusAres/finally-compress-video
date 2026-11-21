@@ -18,7 +18,7 @@ import { mountUI } from './app/ui/ui.js';
 import { emit } from './app/ui/bus.js';
 const ui = mountUI(document.getElementById('app'), {
   onFile(file) {},            // File scelto (l'app poi emette 'file' con i metadati)
-  onStart(settings) {},       // {bitrateMbps, keyframeS, audioMode, bgAudio, par2, sceneQ} (+ resume:true dal pulsante «Riprendi»); chiamato SINCRONO nel tap
+  onStart(settings) {},       // {bitrateMbps, keyframeS, audioMode, bgAudio, par2, sceneQ, downscale, apac} (+ resume:true dal pulsante «Riprendi»); chiamato SINCRONO nel tap
   onCancel() {},              // l'app interrompe e chiama ui.setBusy(false)
   onPip(wasActive) {},        // (v0.21) tap su «Continua in Picture-in-Picture»; SINCRONO nel tap (requestPictureInPicture richiede il gesto)
   onSave() {},                // chiamato SINCRONO nel tap → navigator.share() funziona
@@ -30,7 +30,7 @@ ui.setBusy(true); /* … export … */ ui.setBusy(false);
 
 `index.html` può linkare `theme.css` e `ui.css` nel `<head>` per evitare il flash; altrimenti `mountUI` li aggiunge.
 
-Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,10 · `audioMode` ∈ `copy`,`v4`,`v3`,`v2`,`v1`,`reenc` · `bgAudio` (bool, opzioni avanzate → Sperimentale, default false: test background con audio keep-alive) · `par2` (bool, Sperimentale, default false: estrazione frame parallela con 2 player) · `sceneQ` (bool, Sperimentale, default false, v0.28: «Qualità garantita per scena» — prove di bitrate per ogni segmento, `app/lib/scenesearch.js`; il bitrate scelto diventa il **limite superiore**, quindi la stima del peso mostra «variabile, ≤ X MB» e quella del tempo «variabile, ≈ t × 1,7» (`estimate.js` `SCENE_TIME_FACTOR`, research/12 §6); con l'opzione attiva la velocità misurata non viene salvata per le stime successive).
+Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,10 · `audioMode` ∈ `copy`,`v4`,`v3`,`v2`,`v1`,`reenc` · `bgAudio` (bool, opzioni avanzate → Sperimentale, default false: test background con audio keep-alive) · `par2` (bool, Sperimentale, default false: estrazione frame parallela con 2 player) · `sceneQ` (bool, Sperimentale, default false, v0.28: «Qualità garantita per scena» — prove di bitrate per ogni segmento, `app/lib/scenesearch.js`; il bitrate scelto diventa il **limite superiore**, quindi la stima del peso mostra «variabile, ≤ X MB» e quella del tempo «variabile, ≈ t × 1,7» (`estimate.js` `SCENE_TIME_FACTOR`, research/12 §6); con l'opzione attiva la velocità misurata non viene salvata per le stime successive). · `apac` (bool, opzioni avanzate → «Audio spaziale», default **true**, v0.32: copia byte per byte la traccia audio spaziale iPhone, `app/lib/apac.js`; il fieldset è visibile solo se il file ha `apac`; vale solo con `audioMode` `copy`, il riassunto delle avanzate mostra «spaziale» / «senza spaziale»; la stima del peso aggiunge `apacBps`).
 
 ### Ritorno di `mountUI`
 - `setBusy(bool)` — contratto. `true` mostra il pannello di avanzamento e blocca i controlli; `false` senza `result`/`error` ⇒ torna al passo 2 ("annullato").
@@ -46,7 +46,7 @@ Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,
 
 | tipo | detail | effetto nella UI |
 |---|---|---|
-| `file` | `{name, sizeMB, durationS, width, height, hdr, dolbyVision}` (+ `fps` facoltativo) | scheda file, badge HDR/Dolby Vision, peso stimato |
+| `file` | `{name, sizeMB, durationS, width, height, hdr, dolbyVision}` (+ `fps`, `aacBps`, `apac`, `apacBps` facoltativi) | scheda file, badge HDR/Dolby Vision/Audio spaziale, peso stimato; `apac` mostra l'opzione «Audio spaziale (apac) — mantieni» |
 | `phase` | `{phase: 'analisi'\|'video'\|'assemblaggio'\|'audio'\|'scrittura'\|'fatto'\|'errore'}` | fase corrente, catena delle fasi |
 | `progress` | `{phase, done, total, fps, etaS, elapsedS}` (campi mancanti tollerati) | %, barra, restante, trascorso, fps, fotogrammi. Coalescente con rAF: si può emettere spesso |
 | `frame` | `{index}` | ignorato dalla UI |
