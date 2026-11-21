@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.30';
-import { sprite, SPRITES } from './sprite.js?v=0.30';
-import { createLogStore } from './logstore.js?v=0.30';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.30';
+import { bus } from './bus.js?v=0.31';
+import { sprite, SPRITES } from './sprite.js?v=0.31';
+import { createLogStore } from './logstore.js?v=0.31';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.31';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -129,6 +129,10 @@ function template(opts) {
       <legend class="px-label">Audio</legend>
       <div class="fcv-radios" data-ref="audio">${audio}</div>
       <p class="fcv-subtle">Le voci "versione precedente" e "diagnostica" servono per confronti tecnici.</p>
+    </fieldset>
+    <fieldset class="fcv-field" data-ref="dsBox" hidden>
+      <legend class="px-label">Risoluzione</legend>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-ds" value="1"><div><b>Riduci a 1080p (sperimentale)</b><i>(solo video con lato corto oltre 1080)</i><span>Il video esce a 1080×1920 (o 1920×1080) invece che in 4K, sempre HDR a 10 bit: a parità di bitrate la qualità percepita sale. Spetta all'encoder di Safari ridurre i fotogrammi: se non ci riesce mantenendo i 10 bit l'export si ferma con un messaggio (nessun ripiego a 8 bit). Il tempo resta quello del 4K.</span></div></label>
     </fieldset>
     <fieldset class="fcv-field">
       <legend class="px-label">Sperimentale</legend>
@@ -302,7 +306,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (fi.width && fi.height) chips.push(`<span class="px-chip px-chip--num">${fi.width}×${fi.height}</span>`);
     if (fi.fps) chips.push(`<span class="px-chip px-chip--num">${Math.round(fi.fps)} fps</span>`);
     R.fChips.innerHTML = chips.join('');
-    updateEstimate();
+    syncDs(); // mostra/nasconde «Riduci a 1080p» e aggiorna le stime
   }
   // ---------- drag & drop (pagina intera; iPad/iPhone: trascinamento da Foto in Split View / Slide Over) ----------
   const isVideo = (f) => /^video\//.test(f.type) || /\.(mov|mp4|m4v|hevc)$/i.test(f.name || '');
@@ -329,9 +333,16 @@ export function mountUI(root, handlers = {}, opts = {}) {
   for (const k of ['input', 'input2', 'input3']) R[k].addEventListener('change', onPicked);
 
   // ---------- passo 2: impostazioni ----------
+  // «Riduci a 1080p»: visibile/attivo solo se il lato corto della sorgente supera 1080 (default OFF)
+  const dsAvailable = () => Math.min(st.file?.width || 0, st.file?.height || 0) > 1080;
+  function syncDs() {
+    const ok = dsAvailable(), c = root.querySelector('input[name="fcv-ds"]');
+    R.dsBox.hidden = !ok; if (c) { c.disabled = !ok; if (!ok) c.checked = false; }
+    syncSettings();
+  }
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), sceneQ: !!v('fcv-sceneq') };
+    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), sceneQ: !!v('fcv-sceneq'), downscale: !!v('fcv-ds') && dsAvailable() };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
@@ -339,6 +350,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (s.bgAudio != null) { const c = root.querySelector('input[name="fcv-bgaudio"]'); if (c) c.checked = !!s.bgAudio; }
     if (s.par2 != null) { const c = root.querySelector('input[name="fcv-par2"]'); if (c) c.checked = !!s.par2; }
     if (s.sceneQ != null) { const c = root.querySelector('input[name="fcv-sceneq"]'); if (c) c.checked = !!s.sceneQ; }
+    if (s.downscale != null) { const c = root.querySelector('input[name="fcv-ds"]'); if (c) c.checked = !!s.downscale; }
     syncSettings();
   }
   function syncSettings() {
@@ -348,11 +360,11 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.brHint.textContent = st.settings.sceneQ ? `Qualità per scena attiva: ${br} Mbps è il limite massimo, ogni tratto riceve il minimo che resta «quasi perfetto».` : info.t;
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
-    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}`;
+    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}`;
     updateEstimate();
   }
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps }) / 1048576 : null); // formula in estimate.js
-  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: st.settings.par2, width: f.width, height: f.height, sceneQ: st.settings.sceneQ }) : null; };
+  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: st.settings.par2, width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: st.settings.downscale }) : null; };
   function updateEstimate() {
     const d = st.file?.durationS, src = st.file?.sizeMB;
     R.warn.hidden = true; R.estSrc.hidden = true;
@@ -363,7 +375,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.est.innerHTML = `${vary ? 'variabile, ≤' : '≈'} ${fmtMB(est)} <small>MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${vary ? 'almeno ' : ''}${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
     const tt = predictTime();
     R.estT.innerHTML = `${vary ? 'variabile, ≈' : '≈'} ${fmtTime(tt.s)} <small>m:ss</small>`;
-    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? ', 2 player' : ', 1 player'})${vary ? ', ×1,7 per le prove per scena' : ''}.`;
+    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? ', 2 player' : ', 1 player'})${vary ? ', ×1,7 per le prove per scena' : ''}${st.settings.downscale ? ' · estrazione dal 4K, uscita 1080p (stessa durata del 4K)' : ''}.`;
     R.estSrc.hidden = false;
     if (pct != null && pct < 10) {
       R.warn.hidden = false;
@@ -393,7 +405,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.resume.hidden = !st.resume;
     if (!st.resume) return;
     const s = st.resume.settings || {};
-    R.resumeText.textContent = `Trovato un export interrotto di questo video (${s.bitrateMbps} Mbps${s.sceneQ ? ' max, qualità per scena' : ''}, key ${s.keyframeS}s): ${st.resume.done} segmenti su ${st.resume.total} già pronti.`;
+    R.resumeText.textContent = `Trovato un export interrotto di questo video (${s.bitrateMbps} Mbps${s.sceneQ ? ' max, qualità per scena' : ''}${s.downscale ? ', 1080p' : ''}, key ${s.keyframeS}s): ${st.resume.done} segmenti su ${st.resume.total} già pronti.`;
     R.resumeBtn.textContent = `Riprendi export di ${st.resume.name} (segmenti ${st.resume.done}/${st.resume.total})`;
   }
   R.again.addEventListener('click', () => { setStage('ready'); root.querySelector('.fcv-step-set').scrollIntoView({ block: 'start' }); });
@@ -404,10 +416,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   // ---------- avanzamento ----------
   function startProgress() {
-    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = st.settings.par2; st.sceneUsed = st.settings.sceneQ; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
+    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = st.settings.par2; st.sceneUsed = st.settings.sceneQ; st.dsUsed = st.settings.downscale; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
     clearLog();
     const s = st.settings;
-    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span><span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
+    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span>${s.downscale ? '<span class="px-chip px-chip--num">1080p</span>' : ''}<span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
     R.elapsed.textContent = '0:00';
     R.progNote.textContent = KEEP_OPEN; R.progNote.dataset.kind = ''; st.pipOn = false; R.pipBox.hidden = true;
@@ -509,7 +521,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
         // misura reale: frame totali / secondi della fase video (estrazione + codifica) → prossima previsione
         const vs = (st.vtEnd || st.vt1) - st.vt0;
         // con le prove per scena la fase video non misura la velocità di codifica: niente salvataggio
-        if (st.vFrames > 0 && vs > 1 && !st.sceneUsed) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height }, st.vFrames / vs, realT);
+        if (st.vFrames > 0 && vs > 1 && !st.sceneUsed) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height, downscale: st.dsUsed }, st.vFrames / vs, realT);
       } else { R.pT1.textContent = R.pT2.textContent = R.pT3.textContent = '—'; R.pT3.className = ''; }
       R.pred.hidden = false;
       if (st.sceneUsed) { R.predNote.textContent = 'Qualità per scena: la previsione del peso è il massimo (bitrate scelto come limite); ogni tratto ha ricevuto solo il bitrate che gli serviva.'; R.predNote.hidden = false; }

@@ -24,8 +24,8 @@
 // Memoria: la cache della luma sorgente è Uint8 a ½ risoluzione e solo frame pari (1080×1920 → 0.5 MB × 30 =
 // 15 MB per finestra), liberata a fine segmento; chunk di prova ≈ 1–3 MB; encoder/decoder di prova sempre chiusi
 // (finally) PRIMA dell'encode finale, che non coesiste mai con loro (research/12 §7.9, research/03).
-import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.30';
-import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.30';
+import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.31';
+import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.31';
 
 export const SCENE = Object.freeze({
   targetVmaf: RC.targetVmaf,   // 88 (BIBBIA §12)
@@ -180,11 +180,14 @@ export function makeCanvasLuma(W, H, factor = SCENE.factor) {
  * Implementazioni browser di encodeTrial/measure per ratecontrol.searchBitrate.
  *  W,H: dimensioni dei frame nativi; frames: [{ts,dur}] in secondi (index.html);
  *  frameSource(startIdx, endIdx) → async iterable di VideoFrame (seekFrames/parallelFrames, il chiamante li riceve e li chiude QUI);
- *  makeEncoder({width,height,bitrate,onChunk,onError}) → wrapper come encode.createHevcEncoder (encode/drain/flush/close);
+ *  makeEncoder({width,height,bitrate,framerate,onChunk,onError}) → wrapper come encode.createHevcEncoder (encode/drain/flush/close);
  *  colorSpace: VideoColorSpaceInit da forzare sul decoder di prova (HLG come il file finale), facoltativo.
+ *  encW/encH (default W/H): dimensioni dell'encoder se diverse dai frame nativi (v0.31 «Riduci a 1080p»); verifyOutput(decoderConfig): lancia se l'uscita non è quella chiesta.
  */
-export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorSpace, stride = SCENE.stride, factor = SCENE.factor, onStat = () => {} }) {
-  const luma = makeCanvasLuma(W, H, factor);
+export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorSpace, stride = SCENE.stride, factor = SCENE.factor, onStat = () => {}, encW = W, encH = H, framerate, verifyOutput }) {
+  // «Riduci a 1080p»: W×H = frame nativi (4K), encW×encH = dimensioni dell'encoder. La luma si prende SEMPRE a 1/factor di encW×encH:
+  // sorgente 4K (drawImage ridimensiona) e frame decodificato 1080p finiscono nella stessa griglia → confronto a risoluzione comune.
+  const luma = makeCanvasLuma(encW, encH, factor);
   const cache = new Map(); // finestra → luma sorgente (solo indici multipli di stride)
   const keyOf = (w) => `${w.startIdx}-${w.endIdx}`;
   return {
@@ -193,7 +196,7 @@ export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorS
       let durS = 0; for (let i = w.startIdx; i < w.endIdx; i++) durS += frames[i].dur;
       const outs = rates.map((r) => ({ r, chunks: [], bytes: 0, config: null, err: null, enc: null }));
       try {
-        for (const o of outs) o.enc = makeEncoder({ width: W, height: H, bitrate: r0(o.r),
+        for (const o of outs) o.enc = makeEncoder({ width: encW, height: encH, framerate, bitrate: r0(o.r),
           onChunk: (c, meta) => { if (meta?.decoderConfig && !o.config) o.config = meta.decoderConfig; o.chunks.push(c); o.bytes += c.byteLength; },
           onError: (e) => { o.err ||= e; } });
         let j = 0;
@@ -212,7 +215,8 @@ export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorS
       if (capture) cache.set(key, src);
       return outs.map((o) => {
         if (!o.config || !o.chunks.length) throw new Error('prova: l\'encoder non ha prodotto pacchetti o decoderConfig');
-        const config = { ...o.config, codedWidth: o.config.codedWidth || W, codedHeight: o.config.codedHeight || H };
+        verifyOutput?.(o.config); // downscale: dimensioni/10 bit dell'uscita (errore fatale, mai assorbito dalle prove)
+        const config = { ...o.config, codedWidth: o.config.codedWidth || encW, codedHeight: o.config.codedHeight || encH };
         if (colorSpace) config.colorSpace = colorSpace;
         onStat({ requested: o.r, bytes: o.bytes, real: o.bytes * 8 / durS });
         return { bitrate: o.bytes * 8 / durS, requested: o.r, bytes: o.bytes, encoded: { chunks: o.chunks, config, n: o.chunks.length } };

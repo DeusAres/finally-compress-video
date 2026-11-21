@@ -6,6 +6,7 @@ fail=0
 run() { echo "== $*"; if "$@" >/tmp/.fcv-test.$$ 2>&1; then tail -n 3 /tmp/.fcv-test.$$; else cat /tmp/.fcv-test.$$; echo "FALLITO: $*"; fail=1; fi; }
 run node app/lib/hevc-vui.test.mjs
 run node app/lib/dovi.test.mjs
+run node app/lib/downscale.test.mjs
 run node app/lib/echo.test.mjs
 run node --test app/lib/ratecontrol.test.mjs
 run node tools/lab/brctl-test.mjs

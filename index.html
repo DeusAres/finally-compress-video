@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.30</title>
+<title>Compressore HDR v0.31</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -15,22 +15,23 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.30';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.30';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.30';
-import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.30';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.30';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.30';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.30';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.30';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.30';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.30';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.30';
-import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.30';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.30';
-import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary } from './app/lib/scenesearch.js?v=0.30';
-import { mountUI } from './app/ui/ui.js?v=0.30';
-import { bus, emit } from './app/ui/bus.js?v=0.30';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.31';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.31';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.31';
+import { downscaleDims, avgFramerate, verifyDownscale, dsError } from './app/lib/downscale.js?v=0.31';
+import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.31';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.31';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.31';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.31';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.31';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.31';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.31';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.31';
+import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.31';
+import { createPip, pipSupported } from './app/lib/pip.js?v=0.31';
+import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary } from './app/lib/scenesearch.js?v=0.31';
+import { mountUI } from './app/ui/ui.js?v=0.31';
+import { bus, emit } from './app/ui/bus.js?v=0.31';
 import * as MB from './vendor/mediabunny-1.65.1.min.mjs';
 const $ = (id) => document.getElementById(id);
 // cat: setup | segment | pip | heartbeat | warn | error | summary | info (se omessa la deduce l'archivio dal prefisso); data: numeri per il riassunto
@@ -39,10 +40,10 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.30-20261121T083955Z';
-const BUILD_LABEL = 'v0.30 · 21/11 09:39';
+const BUILD_ID = '0.31-20261121T113800Z';
+const BUILD_LABEL = 'v0.31 · 21/11 12:38';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
-let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false, sceneQ: false }, NFtot = 0;
+let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false, sceneQ: false, downscale: false }, NFtot = 0;
 let parOff = false; // fallback a 1 player scattato in questo job (vale anche per le riprese successive)
 let pipStat = { hiddenN: 0, hiddenMs: 0, hAt: 0, events: [], inAt: 0, fIn: 0, frames: 0, openMs: 0, tickAt: 0, tickF: 0 }, pipTimer = null; // tenuta PiP (v0.22)
 let file = null, outFile = null, outName = '', info = null, running = false, cancelled = false, wake = null, store = null, cur = { enc: null, video: null, video2: null, output: null };
@@ -138,7 +139,7 @@ async function refreshResume() {
   if (pj && pj.done > 0 && pj.manifest.app === VER && sameFile(pj.manifest.file, fileKey(file))) {
     savedJob = pj;
     ui.setResume({ name: file.name, done: pj.done, total: pj.total, settings: pj.manifest.settings });
-    log(`export interrotto trovato per questo video: ${pj.done}/${pj.total} segmenti pronti (${pj.manifest.settings.bitrateMbps} Mbps${pj.manifest.settings.sceneQ ? ' max, qualità per scena' : ''}, key ${pj.manifest.settings.keyframeS}s)`);
+    log(`export interrotto trovato per questo video: ${pj.done}/${pj.total} segmenti pronti (${pj.manifest.settings.bitrateMbps} Mbps${pj.manifest.settings.sceneQ ? ' max, qualità per scena' : ''}${pj.manifest.settings.downscale ? ', 1080p' : ''}, key ${pj.manifest.settings.keyframeS}s)`);
   } else ui.setResume(null);
 }
 async function onFile(f) {
@@ -187,6 +188,7 @@ function setProg(phase, frac, text, etaSec, fps) {
 function friendlyError(e) {
   const n = e?.name || '';
   if (n === 'Cancelled') return 'Elaborazione annullata.';
+  if (n === 'DownscaleError') return e.message; // «Safari non riesce a ridurre la risoluzione…»: nessun ripiego, il job si ferma (v0.31)
   if (n === 'QuotaExceededError' || /quota|no space|spazio/i.test(e?.message || '')) return 'Spazio di archiviazione esaurito durante la scrittura. Libera spazio sul telefono e riprova (o scegli un bitrate più basso).';
   return 'Errore: ' + (n ? n + ': ' : '') + (e?.message || e) + '. I segmenti già pronti restano salvati: tocca Riprova (o riseleziona lo stesso video) per riprendere da dove si era fermato. Se la pagina si è ricaricata da sola, la memoria è finita: riprova con l\'app in primo piano.';
 }
@@ -246,7 +248,7 @@ async function start(s) {
   running = true; cancelled = false;
   // v0.21.1: prepara SUBITO (nel tap di Comprimi) il video della PiP: iOS non la avvia su un video senza dati o invisibile.
   try { if (pipSupported() && !(matchMedia('(display-mode: standalone)').matches || navigator.standalone === true)) { if (pip) { pip.stop(); } pip = makePip(); pip.prepare(); } } catch (e) { log('PiP: preparazione fallita ' + (e?.message || e)); }
-  cfg = { bitrateMbps: +s?.bitrateMbps || 8, keyframeS: +s?.keyframeS || 4, audioMode: s?.audioMode || 'copy', bgAudio: !!s?.bgAudio, par2: !!s?.par2, sceneQ: !!s?.sceneQ };
+  cfg = { bitrateMbps: +s?.bitrateMbps || 8, keyframeS: +s?.keyframeS || 4, audioMode: s?.audioMode || 'copy', bgAudio: !!s?.bgAudio, par2: !!s?.par2, sceneQ: !!s?.sceneQ, downscale: !!s?.downscale };
   parOff = false; pipStat = { hiddenN: 0, hiddenMs: 0, hAt: 0, events: [], inAt: 0, fIn: 0, frames: 0, openMs: 0, tickAt: 0, tickF: 0 }; startPipWatch();
   // SINCRONO nel tap (gesto utente): l'audio di keep-alive deve partire prima di qualunque await.
   chimeUnlock(); askNotify(); // SINCRONO nel tap: sblocca l'audio del jingle finale (iOS) e, da web app installata, chiede le notifiche
@@ -270,7 +272,7 @@ async function start(s) {
       try { await run({ forceFresh: fresh }); break; }
       catch (e) {
         const phase = curPhase, hadJob = !!job; await cleanupRun();
-        if (e?.name === 'Cancelled') throw e;
+        if (e?.name === 'Cancelled' || e?.name === 'DownscaleError') throw e; // downscale non riuscito: mai ritentare né ripiegare (v0.31)
         if (e?.name === 'BackgroundInterrupt') { // non è un guasto: non consuma i tentativi automatici
           const at = bgInt?.at || Date.now(); bgInt = null;
           while (document.hidden) await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true }));
@@ -297,6 +299,7 @@ async function start(s) {
   } catch (e) {
     failed = true;
     log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || ''), 'error');
+    if (e?.name === 'DownscaleError') log(`downscale: FALLITO, job interrotto senza ripiego (nessun passaggio via canvas/WebGPU: sarebbe 8 bit, HDR perso). Dettaglio tecnico: ${e.detail}`, 'error');
     await cleanupRun();
     if (e?.name === 'Cancelled') { await discardJob(); analysis = null; log('job annullato: segmenti eliminati'); }
     else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); chimeFail(friendlyError(e).slice(0, 120)); }
@@ -356,13 +359,13 @@ async function run({ forceFresh = false } = {}) {
   const NF = frames.length; NFtot = NF;
   const fpsEst = NF / durS, keyEvery = Math.max(1, Math.round(gopSec * 60));
   const segStarts = planSegments(NF, fpsEst, keyEvery), nSeg = segStarts.length;
-  const want = { v: JOB_VERSION, app: VER, created: Date.now(), file: fileKey(file), settings: { bitrateMbps: cfg.bitrateMbps, keyframeS: cfg.keyframeS, audioMode: cfg.audioMode, sceneQ: cfg.sceneQ },
+  const want = { v: JOB_VERSION, app: VER, created: Date.now(), file: fileKey(file), settings: { bitrateMbps: cfg.bitrateMbps, keyframeS: cfg.keyframeS, audioMode: cfg.audioMode, sceneQ: cfg.sceneQ, downscale: !!cfg.downscale },
     video: { W: 0, H: 0, nFrames: NF, firstTs: frames[0].ts, lastTs: frames[NF - 1].ts, keyEvery, dv: !!dvBox }, segStarts, doneCount: 0, config: null };
   const saved = forceFresh ? null : await peekJob();
   let why = '';
   if (saved) {
     const m = saved.manifest;
-    why = m.app !== VER ? `versione ${m.app}` : !sameFile(m.file, want.file) ? `altro file (${m.file.name})` : !sameVideoSettings(m.settings, cfg) ? `impostazioni diverse (${m.settings.bitrateMbps} Mbps, key ${m.settings.keyframeS}s${m.settings.sceneQ ? ', qualità per scena' : ''})`
+    why = m.app !== VER ? `versione ${m.app}` : !sameFile(m.file, want.file) ? `altro file (${m.file.name})` : !sameVideoSettings(m.settings, cfg) ? `impostazioni diverse (${m.settings.bitrateMbps} Mbps, key ${m.settings.keyframeS}s${m.settings.sceneQ ? ', qualità per scena' : ''}${m.settings.downscale ? ', 1080p' : ''})`
       : (m.video.nFrames !== NF || Math.abs(m.video.firstTs - want.video.firstTs) > 1e-6 || Math.abs(m.video.lastTs - want.video.lastTs) > 1e-6 || m.video.keyEvery !== keyEvery || m.video.dv !== want.video.dv || JSON.stringify(m.segStarts) !== JSON.stringify(segStarts)) ? 'fotogrammi/segmenti diversi'
       : !saved.done ? 'nessun segmento completo' : !m.config ? 'configurazione decoder mancante' : '';
     if (why) log(`job salvato non riutilizzabile (${why}): ricomincio da capo`);
@@ -383,6 +386,25 @@ async function run({ forceFresh = false } = {}) {
     let video2 = null;
     if (cfg.par2 && !parOff) { try { video2 = await openVideoElement(file, vidRun.signal); cur.video2 = video2; if (video2.videoWidth !== video.videoWidth || video2.videoHeight !== video.videoHeight) throw new Error('dimensioni diverse tra i due player'); } catch (e) { if (e?.name === 'BackgroundInterrupt') throw e; log(`[${clock()}] estrazione parallela non disponibile (${e?.message || e}): 1 player`); try { if (video2) releaseVideoElement(video2); } catch {} video2 = null; cur.video2 = null; parOff = true; } }
     const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}${video2 ? ' · estrazione parallela: 2 player (pari/dispari)' : ''}`);
+    // «Riduci a 1080p» (v0.31): l'encoder è configurato a outW×outH e riceve i frame NATIVI (4K, già ruotati): deve scalarli lui (WebCodecs).
+    // Ipotesi da verificare su Safari/VT (research/02 §12): lo fa WebKit? tiene i 10 bit? Verifica sul primo chunk (hvcC/SPS); nessun ripiego.
+    const ds = cfg.downscale ? downscaleDims(W, H) : null, dsOn = !!ds, outW = ds ? ds.width : W, outH = ds ? ds.height : H;
+    let dsVerified = false;
+    const dsWrap = (e, where) => dsOn && !dsVerified && !['Cancelled', 'DownscaleError', 'BackgroundInterrupt'].includes(e?.name) ? dsError(`${where}: ${e?.name || 'errore'}: ${e?.message || e}`) : e;
+    const dsSeen = new Set();
+    const dsCheck = (desc, where) => { // dimensioni VISIBILI (coded − conformance window) e bit depth dall'hvcC dell'encoder
+      const v = verifyDownscale(desc, { width: outW, height: outH });
+      if (v.ok && dsSeen.has(where)) return v; dsSeen.add(where); // in prova: una sola riga se tutto ok (un encoder per bitrate per segmento)
+      log(`downscale: encoder ha prodotto ${v.w ?? '?'}×${v.h ?? '?'}, bit depth ${v.bitDepth ?? '?'} (${where}; coded ${v.codedW ?? '?'}×${v.codedH ?? '?'}, atteso ${outW}×${outH} a 10 bit, hvcC profilo ${v.profile ?? '?'} depth ${v.hvccDepth ?? '?'})${v.ok ? ' ✓' : ' ✗ ' + v.why}`, v.ok ? undefined : 'error');
+      if (!v.ok) throw dsError(v.why || 'verifica non riuscita');
+      return v;
+    };
+    if (cfg.downscale && !ds) log(`downscale: ignorato (lato corto ${Math.min(W, H)} ≤ 1080)`);
+    if (dsOn) {
+      log(`downscale: frame nativi ${W}×${H} → encoder ${outW}×${outH}${ds.exact ? '' : ' ⚠️ proporzione non esatta (arrotondata a pari)'}; scalatura DELL'ENCODER (nessun canvas/WebGPU: manterrebbe solo 8 bit), da verificare sul primo chunk`);
+      if (dvBox) log('downscale: Dolby Vision, RPU copiati invariati (L1/L2 non dipendono dalla risoluzione). ⚠️ L5 (active area in pixel) NON viene rilevata dall\'app: se il video ha barre nere/letterbox controlla il risultato a occhio');
+    }
+    const framerate = avgFramerate(NF, durS);
     if (!job.manifest.video.W) Object.assign(job.manifest.video, { W, H });
     else if (job.manifest.video.W !== W || job.manifest.video.H !== H) throw Object.assign(new Error(`dimensioni ${W}×${H} ≠ job ${job.manifest.video.W}×${job.manifest.video.H}`), { name: 'JobMismatch' });
     // 3b. «Qualità garantita per scena» (v0.28, sperimentale, app/lib/scenesearch.js): prove per ogni segmento dell'export ancora da fare,
@@ -399,11 +421,16 @@ async function run({ forceFresh = false } = {}) {
         return video2 && !parOff ? parallelFrames([video, video2], list, st, vidRun.signal, { maxFlight: 4, onFallback: (why) => { parOff = true; log(`[${clock()}] ⚠️ estrazione parallela (prove): ${why} → passo a 1 player per il resto del job`); } })
           : seekFrames(video, list, (st.players = [st], st), vidRun.signal);
       };
-      const deps = createTrialDeps({ W, H, frames, frameSource: trialFrames, makeEncoder: createHevcEncoder,
+      const makeTrialEnc = !dsOn ? createHevcEncoder : (o) => { // prove con downscale: errori prima del primo chunk = downscale non riuscito (fatale, mai assorbito come «prova fallita»)
+        let got = false; const e = createHevcEncoder({ ...o, onChunk: (c, m) => { got = true; o.onChunk(c, m); }, onError: (x) => o.onError(got ? x : dsWrap(x, 'prova: encoder')) });
+        return { ...e, encode: (f, k) => { try { e.encode(f, k); } catch (x) { throw got ? x : dsWrap(x, 'prova: encode()'); } } };
+      };
+      const deps = createTrialDeps({ W, H, frames, frameSource: trialFrames, makeEncoder: makeTrialEnc, encW: outW, encH: outH, framerate,
+        verifyOutput: dsOn ? (c) => { if (!c?.description) throw dsError('prova: decoderConfig senza description'); return dsCheck(c.description, 'prova'); } : undefined,
         colorSpace: hlg ? { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false } : undefined }); // decoder di prova: stesso colore del file finale
       const t0 = performance.now(); if (todo) setProg('video', 0, 'prove per scena');
       await runSceneSearch({ plan, from: doneSeg, saved: job.manifest.scene, deps, ceiling: bitrate,
-        isFatal: (e) => e?.name === 'BackgroundInterrupt' || e?.name === 'Cancelled' || cancelled || !!vidRun?.signal.aborted,
+        isFatal: (e) => e?.name === 'BackgroundInterrupt' || e?.name === 'Cancelled' || e?.name === 'DownscaleError' || cancelled || !!vidRun?.signal.aborted,
         save: async (k, rec) => { job.manifest.scene[k] = rec; await job.save(); },
         check: async () => { checkCancel(); await whenVisible(); },
         log: (t) => log(`[${clock()}] ${t}`),
@@ -425,8 +452,9 @@ async function run({ forceFresh = false } = {}) {
     let wSeg = doneSeg, segW = null, wq = Promise.resolve(), wqN = 0;
     // coda di scrittura seriale: segmento → OPFS (worker). Mai più di ~8 pacchetti in RAM.
     const enqueue = (fn) => { wqN++; wq = wq.then(async () => { try { if (!encErr) await fn(); } catch (e) { encErr ||= e; } finally { wqN--; } }); };
-    const enc = createHevcEncoder({ width: W, height: H, bitrate: curBr,
-      onError: (e) => { encErr ||= e; },
+    let enc;
+    try { enc = createHevcEncoder({ width: outW, height: outH, bitrate: curBr, framerate, log: (t) => log(t),
+      onError: (e) => { encErr ||= dsWrap(e, 'encoder'); },
       onChunk: (chunk, meta) => {
         if (encErr) return;
         const k = runStart + nChunks, src = frames[k]; // k-th output chunk = k-th source frame (no reordering in the encoder)
@@ -439,7 +467,8 @@ async function run({ forceFresh = false } = {}) {
           const dc = meta?.decoderConfig; if (!dc?.description) { encErr = new Error('decoderConfig assente nel primo pacchetto'); return; }
           const desc = new Uint8Array(dc.description.buffer ? dc.description.buffer.slice(dc.description.byteOffset || 0, (dc.description.byteOffset || 0) + dc.description.byteLength) : dc.description);
           log(`hvcC encoder: profilo ${desc[1] & 31}, bit depth ${(desc[17] & 7) + 8}, codec ${dc.codec}, coded ${dc.codedWidth ?? '?'}×${dc.codedHeight ?? '?'}`);
-          const dcfg = { codec: dc.codec, codedWidth: W, codedHeight: H,
+          if (dsOn) { try { dsCheck(desc, 'primo chunk'); dsVerified = true; } catch (e) { encErr = e; return; } } // dimensioni/bit depth dall'hvcC: se non sono quelle chieste il job si ferma
+          const dcfg = { codec: dc.codec, codedWidth: outW, codedHeight: outH, // muxer (tkhd/stsd): dimensioni di USCITA
             description: hlg ? patchHvcC(desc, { primaries: 9, transfer: 18, matrix: 9, fullRange: false }) : desc,
             colorSpace: hlg ? { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false } : (srcCs ? { ...srcCs } : undefined) };
           const old = job.getConfig();
@@ -466,7 +495,7 @@ async function run({ forceFresh = false } = {}) {
             enqueue(async () => log(rec ? `[${clock()}] ${sceneLine(s, rec, real)} → encoder ora ${(curBr / 1e6).toFixed(1)} Mbps` : `segmento ${s + 1}: reale ${(real / 1e6).toFixed(1)} Mbps (target ${bt / 1e6}) → encoder ora ${(curBr / 1e6).toFixed(1)} Mbps`, 'segment', { seg: s + 1, real, target: rec ? rec.b : bt, chosen: rec ? rec.b : curBr, scene: !!rec }));
           }
         }
-      } });
+      } }); } catch (e) { throw dsWrap(e, 'configure()'); }
     cur.enc = enc; let i = 0, s = doneSeg; const tE = performance.now();
     setProg('video', vfrac(runStart / NF), `frame ${runStart}/${NF}`);
     // frame confirmation is MANDATORY: without waiting for the presented frame (rVFC) after 'seeked',
@@ -480,7 +509,7 @@ async function run({ forceFresh = false } = {}) {
       const k = runStart + i; while (k >= segEnd(segStarts, s, NF)) s++;
       if (s !== inSeg) { inSeg = s; const c = rc.configured(s); if (Math.abs(c - curBr) > curBr * 0.005) { curBr = c; enc.setBitrate(curBr); job.manifest.encBitrate = curBr; } } // nuovo target: configure PRIMA del keyframe del segmento
       // keyframe forzato a inizio segmento (segmento decodificabile da solo → riprendibile); dentro il segmento la scelta dell'utente
-      try { if (encErr || cancelled) throw encErr || cancelErr(); enc.encode(vf, (k - segStarts[s]) % keyEvery === 0); } finally { vf.close(); } // sempre chiuso
+      try { if (encErr || cancelled) throw encErr || cancelErr(); enc.encode(vf, (k - segStarts[s]) % keyEvery === 0); } catch (e) { throw dsWrap(e, 'encode()'); } finally { vf.close(); } // sempre chiuso
       i++; progFrame = k + 1; if (i % 10 === 0) emit('frame', { index: k + 1 });
       await enc.drain(4); // encodeQueue ≤ 4
       if (wqN > 8) await wq; // pacchetti → OPFS: mai accumulo
@@ -492,7 +521,9 @@ async function run({ forceFresh = false } = {}) {
     }
     if (encErr) throw encErr;
     setProg('video', 1, 'chiusura encoder');
-    await enc.flush(); enc.close(); cur.enc = null; releaseVideoElement(video); cur.video = null; if (video2) { releaseVideoElement(video2); cur.video2 = null; } vidRun = null; await wq; if (encErr) throw encErr;
+    try { await enc.flush(); } catch (e) { throw dsWrap(e, 'flush()'); }
+    if (encErr) throw encErr; if (dsOn && !dsVerified) throw dsError('nessun pacchetto prodotto dall\'encoder (flush senza output)');
+    enc.close(); cur.enc = null; releaseVideoElement(video); cur.video = null; if (video2) { releaseVideoElement(video2); cur.video2 = null; } vidRun = null; await wq; if (encErr) throw encErr;
     job0Br = curBr;
     if (job.doneCount !== nSeg) throw new Error(`segmenti completati ${job.doneCount}/${nSeg} (pacchetti ${nChunks}/${NF - runStart})`);
     const encSec = (performance.now() - tE) / 1000;
@@ -538,8 +569,9 @@ async function run({ forceFresh = false } = {}) {
   // Output: STREAMING su OPFS (Worker + SyncAccessHandle), moov in coda (fastStart:false) → riscritto a fine job senza caricare mdat in RAM.
   const aTag = { copy: 'aCopy', reenc: 'aReenc', v1: 'eco1', v2: 'eco2', v3: 'eco3', v4: 'eco4' }[echoFix ? (echoFix.v4 ? 'v4' : echoFix.v3 ? 'v3' : echoFix.v2 ? 'v2' : echoFix.reencOnly ? 'reenc' : 'v1') : 'copy'];
   const base = file.name.replace(/\.[^.]+$/, ''), brTag = sceneQ ? `autoQ88-max${bitrate / 1e6}M` : `${bitrate / 1e6}M`;
-  outName = `${base}_${brTag}_k${gopSec}s_${aTag}_${VER}.mp4`;
-  const label = `${base} · ${sceneQ ? `qualità per scena ≤ ${bitrate / 1e6}` : bitrate / 1e6} Mbps · key ${gopSec}s · ${aTag} · ${VER}`;
+  const dsTag = cfg.downscale && info && downscaleDims(info.W, info.H) ? '_1080p' : '';
+  outName = `${base}_${brTag}${dsTag}_k${gopSec}s_${aTag}_${VER}.mp4`;
+  const label = `${base} · ${sceneQ ? `qualità per scena ≤ ${bitrate / 1e6}` : bitrate / 1e6} Mbps${dsTag ? ' · 1080p' : ''} · key ${gopSec}s · ${aTag} · ${VER}`;
   store = await openOpfsStore(outName);
   const target = new MB.StreamTarget(new WritableStream({ write: (c) => store.write(c.position, c.data) }), { chunked: true, chunkSize: 4 * MB_ });
   const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart, metadataFormat: 'mdta' }), target });
@@ -617,7 +649,7 @@ async function run({ forceFresh = false } = {}) {
   // moov in coda: lo riscrivo SENZA caricare mdat: leggo solo header + moov dal file OPFS, tronco a prefixLength e appendo il nuovo moov.
   const outSize = await store.size();
   const { prefixLength, moov } = await rewriteMoov({ size: outSize, read: (o, l) => store.read(o, l) }, (m) => { let x = srcMoov ? copySourceMetadata(srcMoov, m) : m; if (dvBox) x = insertIntoVideoSampleEntry(x, dvBox);
-    x = setMetaString(x, 'com.apple.quicktime.displayname', label); x = setMetaString(x, 'com.apple.quicktime.description', `finally-compress-video ${VER} · ${sceneQ ? 'qualità per scena (VMAF stimato ≥ 88), limite' : 'target'} ${bitrate / 1e6} Mbps · keyframe ${gopSec}s · audio ${aTag}`); return x; });
+    x = setMetaString(x, 'com.apple.quicktime.displayname', label); x = setMetaString(x, 'com.apple.quicktime.description', `finally-compress-video ${VER} · ${sceneQ ? 'qualità per scena (VMAF stimato ≥ 88), limite' : 'target'} ${bitrate / 1e6} Mbps${dsTag ? ' · ridotto a 1080p' : ''} · keyframe ${gopSec}s · audio ${aTag}`); return x; });
   setProg('scrittura', .5, 'riscrittura moov');
   await store.truncate(prefixLength); await store.write(prefixLength, moov); await store.flush(); await store.close();
   const f0 = await store.getFile(); store = null;

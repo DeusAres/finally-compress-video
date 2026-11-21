@@ -6,7 +6,7 @@
 //   seg-NNNN.json   {k, n, bytes, rpu, packets:[{ts,dur,type,offset,size}]}  (ts/dur in seconds, output timeline)
 // A segment counts as done only when the manifest says so AND its index + binary size agree (verifiedDone).
 // Writes go through the SyncAccessHandle worker (opfs-worker.js): no packet is kept in RAM after its write is acked.
-import { opfsWorker } from './opfs.js?v=0.30';
+import { opfsWorker } from './opfs.js?v=0.31';
 
 export const JOB_VERSION = 1;
 const DIR = ['jobs', 'current'];
@@ -16,7 +16,7 @@ const te = new TextEncoder();
 export const fileKey = (f) => ({ name: f.name, size: f.size, lastModified: f.lastModified });
 export const sameFile = (a, b) => !!(a && b && a.name === b.name && a.size === b.size && a.lastModified === b.lastModified);
 /** Only the settings that change the encoded video matter for resuming (audio is processed at assembly). */
-export const sameVideoSettings = (a, b) => !!(a && b && +a.bitrateMbps === +b.bitrateMbps && +a.keyframeS === +b.keyframeS && !!a.sceneQ === !!b.sceneQ);
+export const sameVideoSettings = (a, b) => !!(a && b && +a.bitrateMbps === +b.bitrateMbps && +a.keyframeS === +b.keyframeS && !!a.sceneQ === !!b.sceneQ && !!a.downscale === !!b.downscale);
 
 export const toB64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
 export const fromB64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));

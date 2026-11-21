@@ -26,7 +26,8 @@ export function estimateOutBytes({ durS, videoMbps, audioMode = 'copy', aacBps }
 //   t = 0.5 s (analisi) + frame / fpsAtteso + 3 % · tVideo + 0.5 s (assemblaggio, audio, scrittura) [+ 0.07 s · durata se eco v4]
 // fpsAtteso: ultima misura reale (localStorage, per 1/2 player e ≤1080p/4K); in mancanza, un default.
 export const DEFAULT_FPS = { p2: { hd: 90, uhd: 70 }, p1: { hd: 57, uhd: 55 } };
-export const speedKey = ({ par2, width, height }) => `fcv.fps.${par2 ? 'p2' : 'p1'}.${Math.max(width || 0, height || 0) > 1920 ? 'uhd' : 'hd'}`;
+// downscale (v0.31 «Riduci a 1080p»): l'estrazione resta quella del 4K (stessa classe uhd) ma la velocità si salva a parte (l'encoder scala: costo diverso)
+export const speedKey = ({ par2, width, height, downscale }) => `fcv.fps.${par2 ? 'p2' : 'p1'}.${Math.max(width || 0, height || 0) > 1920 ? 'uhd' : 'hd'}${downscale ? '.ds' : ''}`;
 
 /** Velocità attesa {fps, measured}. */
 export function expectedFps(o) {
@@ -41,9 +42,9 @@ export function saveSpeed(o, fps, totalS) {
 // «Qualità garantita per scena» (v0.28): le prove per segmento portano il tempo a ≈ 1.7× (research/12 §6, stima da misurare su iPhone).
 export const SCENE_TIME_FACTOR = 1.7;
 /** Tempo totale previsto in secondi + fonte della velocità. sceneQ: tempo del video × SCENE_TIME_FACTOR (variabile). */
-export function estimateTimeS({ durS, fps = 30, audioMode = 'copy', par2, width, height, sceneQ = false }) {
+export function estimateTimeS({ durS, fps = 30, audioMode = 'copy', par2, width, height, sceneQ = false, downscale = false }) {
   if (!(durS > 0)) return null;
-  const frames = durS * (fps > 0 ? fps : 30), sp = expectedFps({ par2, width, height });
+  const frames = durS * (fps > 0 ? fps : 30), sp = expectedFps({ par2, width, height, downscale });
   const tv = frames / sp.fps * (sceneQ ? SCENE_TIME_FACTOR : 1);
   return { s: 0.5 + tv * 1.03 + 0.5 + (audioMode === 'v4' ? 0.07 * durS : 0), measured: sp.measured, fps: sp.fps, variable: !!sceneQ };
 }
