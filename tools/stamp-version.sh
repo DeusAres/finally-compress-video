@@ -43,11 +43,14 @@ for m in re.finditer(r"from '\./(app/[^'?]+\.js)\?v=[^']*'", html): visit(m.grou
 if not seen: sys.exit('stamp-version: nessun modulo in index.html')
 css = re.findall(r'<link rel="stylesheet" href="(app/[^"?]+\.css)"', html)
 icons = sorted('icons/' + f for f in os.listdir('icons') if f.endswith('.png'))
-local = ['./', 'index.html', 'manifest.webmanifest'] + order + css + icons
+# v0.30: dipendenze in locale come in finally-cool-film (offline su iOS): bundle Mediabunny e font Google copiati in vendor/
+vend = re.findall(r"from '\./(vendor/[^'?]+)'", html)
+fonts = sorted('vendor/fonts/' + f for f in os.listdir('vendor/fonts')) if os.path.isdir('vendor/fonts') else []
+local = ['./', 'index.html', 'manifest.webmanifest'] + order + vend + css + icons + fonts
 missing = [p for p in local if p not in ('./',) and not os.path.exists(p.split('?')[0])]
 if missing: sys.exit('stamp-version: file di precache mancanti: %s' % missing)
 cdn = sorted(set(re.findall(r"from '(https://cdn\.jsdelivr\.net/[^']+)'", html)))
-if not cdn: sys.exit('stamp-version: bundle CDN (Mediabunny) non trovato in index.html')
+if not cdn and not vend: sys.exit('stamp-version: Mediabunny non trovato in index.html (né vendor/ né CDN)')
 sw = rd('sw.js')
 q = lambda l: '[\n' + ''.join("  '%s',\n" % x for x in l) + ']'
 sw, n1 = re.subn(r"^const VERSION = '[^']*';", "const VERSION = '%s';" % build, sw, flags=re.M)

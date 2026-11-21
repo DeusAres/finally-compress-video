@@ -1,7 +1,7 @@
 /* finally-compress-video — tema "Pressa a 16 colori"
    Design tokens pixel art + classi base riutilizzabili (.px-*).
    Palette: Sweetie 16 (GrafxKid, CC0). Contratto documentato in app/ui/README.md. */
-@import url("https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=Pixelify+Sans:wght@400;600;700&family=VT323&display=swap");
+@import url("../../vendor/fonts/fonts.css"); /* font in locale (offline iOS, v0.30) */
 
 :root {
   /* ---- Palette (16 colori, mai usare altri valori grezzi) ---- */

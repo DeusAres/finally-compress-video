@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.29';
-import { sprite, SPRITES } from './sprite.js?v=0.29';
-import { createLogStore } from './logstore.js?v=0.29';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.29';
+import { bus } from './bus.js?v=0.30';
+import { sprite, SPRITES } from './sprite.js?v=0.30';
+import { createLogStore } from './logstore.js?v=0.30';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.30';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
