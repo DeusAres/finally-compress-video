@@ -1,8 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.28';
-import { sprite, SPRITES } from './sprite.js?v=0.28';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.28';
+import { bus } from './bus.js?v=0.29';
+import { sprite, SPRITES } from './sprite.js?v=0.29';
+import { createLogStore } from './logstore.js?v=0.29';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.29';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -215,8 +216,10 @@ function template(opts) {
 
 <details class="px-panel fcv-log" data-ref="logBox">
   <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Log tecnico</b><span class="px-chip count" data-ref="logCount">0</span></summary>
+  <div class="fcv-log-view"><span data-ref="logView" aria-live="off"></span><button class="px-btn fcv-log-all" data-ref="logAll" type="button">Mostra tutto</button></div>
   <pre data-ref="log" tabindex="0"></pre>
-  <div class="fcv-log-actions"><button class="px-btn" data-ref="copy">Copia log</button><span class="fcv-copy-msg" data-ref="copyMsg" aria-live="polite"></span></div>
+  <textarea class="fcv-log-sel" data-ref="logSel" readonly hidden aria-label="Riassunto del log da copiare"></textarea>
+  <div class="fcv-log-actions"><button class="px-btn" data-ref="copy">Copia log</button><button class="px-btn" data-ref="saveLog">Salva log completo (.txt)</button><span class="fcv-copy-msg" data-ref="copyMsg" aria-live="polite"></span></div>
 </details>
 <p class="fcv-foot">HEVC 10-bit · HDR · Dolby Vision · nessun upload</p>`;
 }
@@ -283,7 +286,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.dropMsg.hidden = true; setResume(null);
     st.file = { name: f.name, sizeMB: f.size / 1048576 };
     showFile(st.file);
-    R.log.textContent = ''; st.logLines = 0; R.logCount.textContent = '0';
+    clearLog();
     setStage('ready');
     handlers.onFile?.(f);
   }
@@ -402,7 +405,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   // ---------- avanzamento ----------
   function startProgress() {
     st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = st.settings.par2; st.sceneUsed = st.settings.sceneQ; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
-    R.log.textContent = ''; st.logLines = 0; R.logCount.textContent = '0';
+    clearLog();
     const s = st.settings;
     R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span><span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
@@ -511,7 +514,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       R.pred.hidden = false;
       if (st.sceneUsed) { R.predNote.textContent = 'Qualità per scena: la previsione del peso è il massimo (bitrate scelto come limite); ogni tratto ha ricevuto solo il bitrate che gli serviva.'; R.predNote.hidden = false; }
       else if (Math.abs(dev) > 15) { R.predNote.textContent = 'Scarto peso oltre il 15%: la previsione usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.'; R.predNote.hidden = false; }
-      appendLog(`PREVISIONE: peso ${st.predMB.toFixed(2)} MB previsto · ${r.outMB.toFixed(2)} MB reale · scarto ${dev > 0 ? '+' : ''}${dev.toFixed(1)} %${tl}`);
+      appendLog(`PREVISIONE: peso ${st.predMB.toFixed(2)} MB previsto · ${r.outMB.toFixed(2)} MB reale · scarto ${dev > 0 ? '+' : ''}${dev.toFixed(1)} %${tl}`, 'summary');
     }
     R.outName.textContent = r.fileName || '';
     R.saveMsg.textContent = '';
@@ -539,18 +542,75 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
 
   // ---------- log ----------
-  function appendLog(line) {
-    R.log.append(document.createTextNode((st.logLines ? '\n' : '') + line));
-    st.logLines++;
-    R.logCount.textContent = String(st.logLines);
+  // Archivio in memoria (con categorie e limite) + pannello che mostra solo le ultime righe, aggiornato a lotti.
+  const LOG_TAIL = 300, LOG_ALL_MAX = 3000;
+  const store = createLogStore({ max: 20000, head: 200 });
+  let pend = [], flushT = 0, showAll = false;
+  function scheduleFlush() {
+    if (flushT) return;
+    const go = () => { if (!flushT) return; cancelAnimationFrame(flushT.r); clearTimeout(flushT.t); flushT = 0; flushLog(); };
+    flushT = { r: requestAnimationFrame(go), t: setTimeout(go, 400) }; // rAF si ferma a pagina nascosta: il timer garantisce comunque l'aggiornamento
+  }
+  function renderLogHead() {
+    const tot = store.total, shown = R.log.childNodes.length;
+    R.logCount.textContent = String(tot);
+    R.logView.textContent = tot > shown ? `ultime ${shown} di ${tot} righe` : `${tot} righe`;
+    R.logAll.disabled = !showAll && tot > LOG_ALL_MAX;
+    R.logAll.title = R.logAll.disabled ? `Oltre ${LOG_ALL_MAX} righe: usa «Salva log completo (.txt)»` : '';
+    R.logAll.textContent = showAll ? `Solo ultime ${LOG_TAIL}` : 'Mostra tutto';
+    R.logAll.hidden = tot <= LOG_TAIL;
+  }
+  function flushLog() {
+    if (store.total > LOG_ALL_MAX) showAll = false;
+    const limit = showAll ? LOG_ALL_MAX : LOG_TAIL;
+    if (pend.length > limit) pend = pend.slice(-limit);
+    const frag = document.createDocumentFragment();
+    for (const l of pend) { const d = document.createElement('div'); d.textContent = l; frag.append(d); }
+    pend = [];
+    R.log.append(frag);
+    while (R.log.childNodes.length > limit) R.log.firstChild.remove();
+    renderLogHead();
     if (R.logBox.open) R.log.scrollTop = R.log.scrollHeight;
+  }
+  function renderTail() { // dopo un cambio modalità: ricostruisce da archivio
+    pend = []; R.log.textContent = '';
+    const n = showAll ? LOG_ALL_MAX : LOG_TAIL, frag = document.createDocumentFragment();
+    for (const e of store.tail(n)) { const d = document.createElement('div'); d.textContent = e.line; frag.append(d); }
+    R.log.append(frag); renderLogHead();
+  }
+  function clearLog() { store.clear(); pend = []; R.log.textContent = ''; showAll = false; R.logSel.hidden = true; renderLogHead(); }
+  function appendLog(line, cat, data) { store.add(line, cat, data); pend.push(String(line)); scheduleFlush(); }
+  R.logAll.addEventListener('click', () => { if (R.logAll.disabled) return; showAll = !showAll; renderTail(); });
+
+  function headerText() {
+    const f = st.file || {}, s = st.settings, bits = [];
+    if (f.width) bits.push(`${f.width}×${f.height}`);
+    if (f.durationS) bits.push(`${Math.round(f.durationS)} s`);
+    if (f.fps) bits.push(`${Math.round(f.fps)} fps`);
+    if (f.hdr != null) bits.push(`HDR ${f.hdr ? 'sì' : 'no'}`);
+    if (f.dolbyVision != null) bits.push(`DV ${f.dolbyVision ? 'sì' : 'no'}`);
+    let set = ''; try { set = JSON.stringify(readSettings()); } catch { set = JSON.stringify(s); }
+    return [`Compressore HDR ${opts.version || ''}`.trim(), `UA: ${navigator.userAgent}`,
+      `File: ${f.name || '—'}${f.sizeMB ? ` · ${f.sizeMB.toFixed(1)} MB` : ''}${bits.length ? ' · ' + bits.join(' · ') : ''}`, `Impostazioni: ${set}`].join('\n');
   }
   function copyLog() {
     if (handlers.onCopyLog) { handlers.onCopyLog(); return; }
-    const t = R.log.textContent;
-    const fallback = () => { getSelection().selectAllChildren(R.log); setSaveCopyMsg('Testo selezionato: tocca Copia'); };
-    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(() => setSaveCopyMsg('Copiato!'), fallback); else fallback();
+    const t = store.summaryText(headerText());
+    const fallback = () => { // selezione di un textarea (funziona anche su iOS) con il riassunto
+      R.logSel.value = t; R.logSel.hidden = false; R.logSel.focus(); R.logSel.select(); try { R.logSel.setSelectionRange(0, t.length); } catch {}
+      setSaveCopyMsg('Testo selezionato: tocca Copia');
+    };
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(() => { R.logSel.hidden = true; setSaveCopyMsg(`Copiato! (riassunto, ${t.split('\n').length} righe)`); }, fallback); else fallback();
   }
+  function saveLogFile() { // sincrono nel tap: la share sheet richiede il gesto dell'utente
+    const base = (st.file?.name || 'video').replace(/\.[^.]+$/, '').replace(/[^\w.\-]+/g, '_');
+    const name = `${base}_log_${(opts.version || '').match(/v\d[\w.]*/)?.[0] || 'v'}.txt`;
+    const file = new File([headerText() + '\n\n' + store.fullText() + '\n'], name, { type: 'text/plain' });
+    const dl = () => { const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: name }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 30000); };
+    if (navigator.canShare?.({ files: [file] })) navigator.share({ files: [file] }).catch((e) => { if (e?.name !== 'AbortError') dl(); });
+    else dl();
+  }
+  R.saveLog.addEventListener('click', saveLogFile);
   function setSaveCopyMsg(t) { R.copyMsg.textContent = t; clearTimeout(st.copyT); st.copyT = setTimeout(() => { R.copyMsg.textContent = ''; }, 3000); }
   R.copy.addEventListener('click', copyLog);
   R.errCopy.addEventListener('click', () => { R.logBox.open = true; copyLog(); });
@@ -566,7 +626,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     },
     progress: onProgress,
     result: showResult,
-    log: (d) => appendLog(d.line ?? ''),
+    log: (d) => appendLog(d.line ?? '', d.cat, d.data),
     error: (d) => { st.lastError = d.message; showError(d.message); },
   };
   const listeners = Object.entries(subs).map(([t, fn]) => { const h = (e) => fn(e.detail || {}); bus.addEventListener(t, h); return [t, h]; });
@@ -590,8 +650,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
     setSaveMessage(text) { R.saveMsg.textContent = text || ''; },
     /** Messaggio accanto a "Copia log" (utile se onCopyLog è gestito dall'app). */
     setCopyMessage: setSaveCopyMsg,
-    /** Testo completo del log mostrato. */
-    getLog: () => R.log.textContent,
+    /** Testo completo del log (tutte le righe in archivio). */
+    getLog: () => store.fullText(),
+    /** Riassunto compatto (intestazione + setup + warn/error + segmenti aggregati + PiP al minuto + summary). */
+    getLogSummary: () => store.summaryText(headerText()),
     /** Torna al passo 1 (nessun file). */
     reset() { st.file = null; setResume(null); R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
     destroy() { for (const [t, h] of dndTargets) window.removeEventListener(t, h); listeners.forEach(([t, h]) => bus.removeEventListener(t, h)); root.innerHTML = ''; },

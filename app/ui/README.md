@@ -22,7 +22,7 @@ const ui = mountUI(document.getElementById('app'), {
   onCancel() {},              // l'app interrompe e chiama ui.setBusy(false)
   onPip(wasActive) {},        // (v0.21) tap su «Continua in Picture-in-Picture»; SINCRONO nel tap (requestPictureInPicture richiede il gesto)
   onSave() {},                // chiamato SINCRONO nel tap → navigator.share() funziona
-  onCopyLog() {},             // facoltativo: se assente la UI copia da sola il log mostrato
+  onCopyLog() {},             // facoltativo: se assente la UI copia da sola il RIASSUNTO del log
 }, { version: 'v0.15' });    // opts facoltativo (estensione)
 ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy' });
 ui.setBusy(true); /* … export … */ ui.setBusy(false);
@@ -35,7 +35,7 @@ Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,
 ### Ritorno di `mountUI`
 - `setBusy(bool)` — contratto. `true` mostra il pannello di avanzamento e blocca i controlli; `false` senza `result`/`error` ⇒ torna al passo 2 ("annullato").
 - `setDefaults(settings)` — contratto (accetta anche un oggetto parziale).
-- Estensioni: `getSettings()`, `setSaveMessage(text)` (sotto "Salva nelle Foto"), `setCopyMessage(text)`, `getLog()`, `reset()`, `destroy()`.
+- Estensioni: `getSettings()`, `setSaveMessage(text)` (sotto "Salva nelle Foto"), `setCopyMessage(text)`, `getLog()` (tutte le righe), `getLogSummary()`, `reset()`, `destroy()`.
 - `setResume({name, done, total, settings} | null)` (v0.18): nel passo 3 mostra «Riprendi export di <nome> (segmenti x/y)»; il tap applica `settings` e chiama `onStart({...settings, resume: true})`. Nascosto durante l'export e quando si sceglie un altro file.
 - `setPip(active)` (v0.21): etichetta del pulsante PiP («Continua» / «Chiudi Picture-in-Picture»). Il pulsante (`pipBox`) compare nel pannello di avanzamento dalla fase `video` in poi solo se `document.pictureInPictureEnabled`; in display-mode standalone mostra solo la nota «apri il sito in Safari» (bug WebKit 303885). Logica PiP in `app/lib/pip.js` (`createPip(file, {log, onChange})`: `<video>` muto separato dal video dei seek, `leavepictureinpicture` → chiusura gestita, la ripresa v0.20 resta invariata).
 - `setProgNote(text, kind)` (v0.18): riquadro nel pannello di avanzamento; testo vuoto = «Tieni l'app aperta e lo schermo acceso finché finisce.»; `kind` `warn`/`bad`. Usato per «pausa di N s / ripreso / interrotto, riprendo dal segmento x».
@@ -51,7 +51,7 @@ Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,
 | `progress` | `{phase, done, total, fps, etaS, elapsedS}` (campi mancanti tollerati) | %, barra, restante, trascorso, fps, fotogrammi. Coalescente con rAF: si può emettere spesso |
 | `frame` | `{index}` | ignorato dalla UI |
 | `result` | `{inMB, outMB, savedPct, fileName}` (+ `sceneBr: {min, max, mean}` in Mbps con «qualità per scena») | schermata "Fatto!" con −%, MB prima→dopo, coriandoli una volta; con `sceneBr` la riga «Bitrate per scena: min–max Mbps, medio» |
-| `log` | `{line}` | aggiunge una riga al log tecnico |
+| `log` | `{line, cat?, data?}` | aggiunge una riga al log tecnico. `cat`: `setup\|segment\|pip\|heartbeat\|warn\|error\|summary\|info` (se omessa è dedotta dal prefisso, `logstore.js`); `data` (solo `segment`): `{seg, frames, bytes}` e `{seg, real, target, chosen, scene}` per le righe aggregate |
 | `error` | `{message}` | pannello errore + log aperto + Riprova |
 
 Percentuale complessiva = pesi per fase (analisi 4 %, video 82 %, assemblaggio 4 % — etichetta «Unione» —, audio 7 %, scrittura 3 % — etichetta «File»), mai decrescente. Se `etaS` manca è stimata da `elapsedS`.
@@ -74,3 +74,7 @@ Scala: `--fs-xs` 14 (solo note molto secondarie) · `--fs-sm` 16 · `--fs-md` 18
 Griglia: `--px-unit` (4px), `--px-border`, `--px-gap`, `--px-touch` (48px), `--px-step`.
 Ruoli (ridefiniti in scuro con `prefers-color-scheme` e `[data-theme]`): `--bg --surface --surface-2 --text --muted --line --shadow --accent --accent-text --ok --ok-strong --warn --danger --highlight --log-bg --log-text`.
 Classi: `.px-panel(--inset|--accent)`, `.px-btn(--primary|--ok|--danger|--ghost|--xl|--block)`, `.px-bar` (riempimento con `--p` 0…1 sull'elemento, figlio `<i>`), `.px-chip(--hdr|--dv|--ok|--num)`, `.px-seg`, `.px-title`, `.px-label`, `.px-digits`, `.px-blink`, `.px-bob`, `.px-sr`.
+
+## Log tecnico (v0.29)
+
+`logstore.js`: archivio in memoria (max 20 000 righe: prime 200 + ultime, riga «… N righe omesse …»); setup/warn/error/summary e un record per segmento sono tenuti a parte, quindi il riassunto resta completo anche se il log è troncato. Il pannello mostra solo le ultime 300 righe (aggiornamento a lotti con `requestAnimationFrame`, «Mostra tutto» disattivato oltre 3000 righe). «Copia log» copia il riassunto (intestazione, setup, warn/error, segmenti a blocchi di 10 (più larghi se i blocchi sarebbero >25), PiP ♥ una al minuto, summary); se la clipboard fallisce seleziona un textarea. «Salva log completo (.txt)» salva tutte le righe (`<video>_log_<versione>.txt`, share sheet sul telefono, altrimenti download).

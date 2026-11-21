@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.28</title>
+<title>Compressore HDR v0.29</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -15,31 +15,32 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.28';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.28';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.28';
-import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.28';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.28';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.28';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.28';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.28';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.28';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.28';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.28';
-import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.28';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.28';
-import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary } from './app/lib/scenesearch.js?v=0.28';
-import { mountUI } from './app/ui/ui.js?v=0.28';
-import { bus, emit } from './app/ui/bus.js?v=0.28';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.29';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.29';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.29';
+import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.29';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.29';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.29';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.29';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.29';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.29';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.29';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.29';
+import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.29';
+import { createPip, pipSupported } from './app/lib/pip.js?v=0.29';
+import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary } from './app/lib/scenesearch.js?v=0.29';
+import { mountUI } from './app/ui/ui.js?v=0.29';
+import { bus, emit } from './app/ui/bus.js?v=0.29';
 import * as MB from 'https://cdn.jsdelivr.net/npm/mediabunny@1.65.1/dist/bundles/mediabunny.min.mjs';
 const $ = (id) => document.getElementById(id);
-const log = (s) => emit('log', { line: String(s) });
+// cat: setup | segment | pip | heartbeat | warn | error | summary | info (se omessa la deduce l'archivio dal prefisso); data: numeri per il riassunto
+const log = (s, cat, data) => emit('log', { line: String(s), cat, data });
 const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.28-20261120T205759Z';
-const BUILD_LABEL = 'v0.28 · 20/11 21:57';
+const BUILD_ID = '0.29-20261121T072656Z';
+const BUILD_LABEL = 'v0.29 · 21/11 08:26';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false, sceneQ: false }, NFtot = 0;
 let parOff = false; // fallback a 1 player scattato in questo job (vale anche per le riprese successive)
@@ -94,7 +95,7 @@ function startHeartbeat() {
   hb = setInterval(() => {
     const now = Date.now(), gap = (now - last) / 1000; last = now;
     const d = Math.max(0, progFrame - hbRef); // hbRef è azzerato a ogni nuova run (progFrame riparte dall'ultimo segmento completo)
-    log(`♥ ${clock()} frame ${progFrame}/${NFtot} (+${d}) ${document.visibilityState}${gap > 2.5 ? ` · timer fermo per ${gap.toFixed(1)} s` : ''}${keep ? ' · ' + keep.state() : ''}`);
+    log(`♥ ${clock()} frame ${progFrame}/${NFtot} (+${d}) ${document.visibilityState}${gap > 2.5 ? ` · timer fermo per ${gap.toFixed(1)} s` : ''}${keep ? ' · ' + keep.state() : ''}`, gap > 2.5 ? 'warn' : 'heartbeat');
     hbRef = progFrame;
   }, 1000);
 }
@@ -219,7 +220,7 @@ function startPipWatch() {
   pipTimer = setInterval(() => {
     if (!running || !pip?.active) return;
     const now = performance.now(), st = pipStat, dt = (now - (st.tickAt || now)) / 1000, k = Math.max(0, progFrame - st.tickF);
-    log(`PiP ♥ ${hms()} · ${document.visibilityState === 'visible' ? 'visible' : 'hidden'} · pip aperta ${pip.active ? 'sì' : 'no'} · frame ${progFrame}/${NFtot} (+${k}, ${dt > 0 ? (k / dt).toFixed(1) : '0'} fps)`);
+    log(`PiP ♥ ${hms()} · ${document.visibilityState === 'visible' ? 'visible' : 'hidden'} · pip aperta ${pip.active ? 'sì' : 'no'} · frame ${progFrame}/${NFtot} (+${k}, ${dt > 0 ? (k / dt).toFixed(1) : '0'} fps)`, 'pip');
     st.tickAt = now; st.tickF = progFrame;
   }, 10000);
 }
@@ -295,7 +296,7 @@ async function start(s) {
     }
   } catch (e) {
     failed = true;
-    log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || ''));
+    log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || ''), 'error');
     await cleanupRun();
     if (e?.name === 'Cancelled') { await discardJob(); analysis = null; log('job annullato: segmenti eliminati'); }
     else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); chimeFail(friendlyError(e).slice(0, 120)); }
@@ -453,7 +454,7 @@ async function run({ forceFresh = false } = {}) {
         const pkt = { ts: src.ts - frames[0].ts, dur: src.dur, type: chunk.type, hasRpu: !!rpu };
         if (isStart) enqueue(async () => { segW = await job.beginSegment(s); });
         enqueue(() => segW.add(body, pkt));
-        if (isEnd) enqueue(async () => { const r = await segW.finish(); segW = null; segsSaved++; log(`[${clock()}] segmento ${s + 1}/${nSeg} salvato: ${r.n} fotogrammi, ${fmtMB(r.bytes)}${dvBox ? `, RPU ${r.rpu}` : ''}`); });
+        if (isEnd) enqueue(async () => { const r = await segW.finish(); segW = null; segsSaved++; log(`[${clock()}] segmento ${s + 1}/${nSeg} salvato: ${r.n} fotogrammi, ${fmtMB(r.bytes)}${dvBox ? `, RPU ${r.rpu}` : ''}`, 'segment', { seg: s + 1, frames: r.n, bytes: r.bytes }); });
         nChunks++;
         wBytes += data.length; wDur += src.dur; wN++; sBytes += data.length; sDur += src.dur;
         if (isEnd || wN >= BR_WINDOW) { // misura sul tratto (durate dei frame, non wall clock) e correzione al confine
@@ -462,7 +463,7 @@ async function run({ forceFresh = false } = {}) {
           if (isEnd) {
             const real = realBitrate(sBytes, sDur); sBytes = 0; sDur = 0;
             const rec = sceneQ ? job.manifest.scene?.[s] : null; if (rec) rec.real = Math.round(real); // salvato col manifest a fine segmento
-            enqueue(async () => log(rec ? `[${clock()}] ${sceneLine(s, rec, real)} → encoder ora ${(curBr / 1e6).toFixed(1)} Mbps` : `segmento ${s + 1}: reale ${(real / 1e6).toFixed(1)} Mbps (target ${bt / 1e6}) → encoder ora ${(curBr / 1e6).toFixed(1)} Mbps`));
+            enqueue(async () => log(rec ? `[${clock()}] ${sceneLine(s, rec, real)} → encoder ora ${(curBr / 1e6).toFixed(1)} Mbps` : `segmento ${s + 1}: reale ${(real / 1e6).toFixed(1)} Mbps (target ${bt / 1e6}) → encoder ora ${(curBr / 1e6).toFixed(1)} Mbps`, 'segment', { seg: s + 1, real, target: rec ? rec.b : bt, chosen: rec ? rec.b : curBr, scene: !!rec }));
           }
         }
       } });
@@ -661,7 +662,6 @@ async function saveViaArtifact() {
 
 ui = mountUI(document.getElementById('app'), {
   onFile, onStart: start, onPip, onCancel() { cancelled = true; log('Annullamento richiesto'); }, onSave,
-  onCopyLog() { const t = ui.getLog(); const ok = () => ui.setCopyMessage('Copiato!'); const sel = () => ui.setCopyMessage('Seleziona e copia dal log'); if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(ok, sel); else sel(); },
 }, { version: BUILD_LABEL.startsWith('__') ? VER : BUILD_LABEL });
 ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true });
 // Niente zoom (iOS ignora user-scalable): blocco doppio tocco e pinch.
