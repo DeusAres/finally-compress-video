@@ -41,7 +41,7 @@ export function saveSpeed(o, fps, totalS) {
   try { if (fps > 1 && isFinite(fps)) localStorage.setItem(speedKey(o), String(fps)); if (totalS > 0) localStorage.setItem('fcv.lastTotalS', String(totalS)); } catch {}
 }
 // «Qualità garantita per scena» (v0.28): le prove per segmento portano il tempo a ≈ 1.7× (research/12 §6, stima da misurare su iPhone).
-export const SCENE_TIME_FACTOR = 1.7;
+export const SCENE_TIME_FACTOR = 2.0; // misurato su iPhone (v0.32, IMG_3053): prove 8.3 s + codifica 8.3 s ≈ 2×
 /** Tempo totale previsto in secondi + fonte della velocità. sceneQ: tempo del video × SCENE_TIME_FACTOR (variabile). */
 export function estimateTimeS({ durS, fps = 30, audioMode = 'copy', par2, width, height, sceneQ = false, downscale = false }) {
   if (!(durS > 0)) return null;
