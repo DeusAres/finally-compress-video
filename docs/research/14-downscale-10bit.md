@@ -64,3 +64,20 @@ Prova in Chromium (Chrome 153 headless, Playwright): nessun errore JS; muxer + `
 2. Rieseguire **K0+K1** dopo ogni aggiornamento di Safari (27.3, 28): se K1 diventa Main10 a 1080×1920 l'opzione dell'app funziona così com'è (la verifica `verifyDownscale` resta la garanzia); allora togliere «oggi non funziona» dall'etichetta.
 3. Se compare `I420P10` (K8 ok in «Funzioni»), il percorso K8 è implementabile nell'app (costo: readback GPU + conversione JS per frame, da misurare).
 4. Encoder WASM 10 bit: solo se l'utente accetta tempi molto lunghi; non pianificato.
+
+## Esito sul device (iPhone 17 Pro Max, Safari 27.0.1, IMG_1418 4K HLG DV, 23/11, downscale10.html v1)
+
+| Candidato | Uscita encoder | Note |
+|---|---|---|
+| K0 nessun downscale | **Main10, 10 bit** ✓ | controllo: livelli uscita ~985 su regione 384² |
+| K1 encoder scala | Main, 8 bit ✗ | coded 1088×1920; livelli uscita 255 (= 8 bit) |
+| K2 displayWidth/Height | Main, 8 bit ✗ | identico a K1 (stesso buffer 4K) |
+| K3 visibleRect | Main, 8 bit ✗ | identico a K1 |
+| K4 createImageBitmap resize | Main, 8 bit ✗ | ingresso BGRA 8 bit sRGB |
+| K5 canvas rec2100-hlg float16 | — | TypeError (contesto non supportato) |
+| K6 canvas display-p3 float16 | Main, 8 bit ✗ | ingresso BGRA 8 bit |
+| K7 WebGPU rgba16float extended | Main, 8 bit ✗ | ingresso BGRA 8 bit |
+| K8 VideoFrame I420P10 | — | TypeError: formati P10/P12/P010 non costruibili |
+| K9 VideoTrackGenerator + applyConstraints | Main, 8 bit ✗ | applyConstraints senza effetto (frame ancora 4K) |
+
+Altro: `copyTo` sul frame nativo → NotSupportedError «VideoFrame has no format» (anche con format/rect). **Confermato: su Safari 27.0.1 nessuna via JS per 4K→1080p a 10 bit.** Rieseguire K0/K1 a ogni aggiornamento di Safari.
