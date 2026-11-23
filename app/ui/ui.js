@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.33';
-import { sprite, SPRITES } from './sprite.js?v=0.33';
-import { createLogStore } from './logstore.js?v=0.33';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.33';
+import { bus } from './bus.js?v=0.34.1';
+import { sprite, SPRITES } from './sprite.js?v=0.34.1';
+import { createLogStore } from './logstore.js?v=0.34.1';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.34.1';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -38,7 +38,7 @@ const PHASES = [
   { id: 'scrittura', label: 'File', sub: 'Assemblo il file e i metadati' },
 ];
 const WEIGHT = { analisi: 0.04, video: 0.82, assemblaggio: 0.04, audio: 0.07, scrittura: 0.03 };
-const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: false, apac: true }; // apac: audio spaziale + metadati iPhone (mebx) mantenuti (v0.32/v0.33, solo se la sorgente li ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
+const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: false, apac: true, container: 'mov' }; // container: 'mov' (QuickTime, come gli originali iPhone, v0.34) | 'mp4' // apac: audio spaziale + metadati iPhone (mebx) mantenuti (v0.32/v0.33, solo se la sorgente li ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
 
 const nf1 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 });
@@ -133,6 +133,13 @@ function template(opts) {
     <fieldset class="fcv-field" data-ref="apacBox" hidden>
       <legend class="px-label">Tracce iPhone</legend>
       <label class="fcv-radio"><input type="checkbox" name="fcv-apac" value="1" checked><div><b>Mantieni audio spaziale e metadati iPhone</b><i>(video registrati con iPhone)</i><span>Copia invariate la traccia audio spaziale e le tracce di metadati dell'iPhone (orientamento, volti, Live Photo, luminosità della scena, «cinematic-audio»), come nell'originale: in Foto restano l'audio spaziale e «Mix audio». L'audio spaziale (e la sua traccia «cinematic-audio») solo con l'audio «copia»: con la riparazione dell'eco o la ricodifica viene tolto, i metadati video restano. Audio spaziale ~0,4 Mbps, metadati trascurabili.</span></div></label>
+    </fieldset>
+    <fieldset class="fcv-field">
+      <legend class="px-label">Contenitore</legend>
+      <div class="fcv-radios">
+        <label class="fcv-radio"><input type="radio" name="fcv-container" value="mov" checked><div><b>MOV (come iPhone, consigliato)</b><span>File QuickTime .mov come gli originali dell'iPhone: le tracce di audio spaziale e metadati vengono riconosciute da Foto.</span></div></label>
+        <label class="fcv-radio"><input type="radio" name="fcv-container" value="mp4"><div><b>MP4</b><span>File .mp4 (come fino alla v0.33), per programmi che non leggono il MOV.</span></div></label>
+      </div>
     </fieldset>
     <fieldset class="fcv-field" data-ref="dsBox" hidden>
       <legend class="px-label">Risoluzione</legend>
@@ -349,7 +356,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), sceneQ: !!v('fcv-sceneq'), downscale: !!v('fcv-ds') && dsAvailable(), apac: !!v('fcv-apac') };
+    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), sceneQ: !!v('fcv-sceneq'), downscale: !!v('fcv-ds') && dsAvailable(), apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
@@ -359,6 +366,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (s.sceneQ != null) { const c = root.querySelector('input[name="fcv-sceneq"]'); if (c) c.checked = !!s.sceneQ; }
     if (s.downscale != null) { const c = root.querySelector('input[name="fcv-ds"]'); if (c) c.checked = !!s.downscale; }
     if (s.apac != null) { const c = root.querySelector('input[name="fcv-apac"]'); if (c) c.checked = !!s.apac; }
+    if (s.container) set('fcv-container', s.container);
     syncSettings();
   }
   function syncSettings() {
@@ -368,7 +376,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.brHint.textContent = st.settings.sceneQ ? `Qualità per scena attiva: ${br} Mbps è il limite massimo, ogni tratto riceve il minimo che resta «quasi perfetto».` : info.t;
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
-    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
+    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
     updateEstimate();
   }
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js

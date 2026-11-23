@@ -104,9 +104,12 @@ for (const src of SOURCES) {
     }
     assert.equal(new Set(oT.map((t) => t.trackId)).size, oT.length, 'track_ID univoci');
     const mvNext = (() => { const m = parseBoxes(outMoov)[0]; const mh = childBoxes(outMoov, m).find((b) => b.type === 'mvhd'); const p = mh.start + 8; return new DataView(outMoov.buffer, outMoov.byteOffset).getUint32(p + (outMoov[p] === 1 ? 108 : 96)); })();
-    assert.equal(mvNext, Math.max(...oT.map((t) => t.trackId)) + 1, 'mvhd.next_track_ID');
+    assert.equal(mvNext, Math.max(info.nextTrackId, Math.max(...oT.map((t) => t.trackId)) + 1), 'mvhd.next_track_ID');
+    // v0.34: track_ID and trak order as in the source (video, apac, AAC, mebx... with the source IDs)
+    assert.deepEqual(oT.map((t) => [t.trackId, t.entry]), sT.map((t) => [t.trackId, t.entry]).filter(([id]) => oT.some((t) => t.trackId === id)), name + ': ID/ordine dei trak come la sorgente');
     // 4. decodable (video + AAC), coherent duration, still a valid "moov last" file
-    run('ffmpeg', ['-v', 'error', '-i', out, '-map', '0:v', '-map', '0:a:0', '-f', 'null', '-']);
+    const aacI = probe(out, ['-show_entries', 'stream=index,codec_name']).streams.find((x) => x.codec_name === 'aac').index; // apac may come first (source order)
+    run('ffmpeg', ['-v', 'error', '-i', out, '-map', '0:v', '-map', `0:${aacI}`, '-f', 'null', '-']);
     const dOut = +probe(out, ['-show_entries', 'format=duration']).format.duration, dSrc = +probe(src, ['-show_entries', 'format=duration']).format.duration;
     assert.ok(Math.abs(dOut - dSrc) < 0.1, `${name}: durata ${dOut} vs ${dSrc}`);
     const fo = fileReader(out); await rewriteMoov({ size: fo.size, read: fo.read }, (m) => m); closeSync(fo.fd);

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractNals, appendNals, locateMoov, extractDoviConfigBox, findBox, parseBoxes, childBoxes, boxBytes, videoTrak } from './dovi.js';
-import { insertIntoVideoSampleEntry, moveUdtaMetaToMoov, copySourceMetadata, rewriteMoov } from './mp4-post.js';
+import { insertIntoVideoSampleEntry, moveUdtaMetaToMoov, copySourceMetadata, rewriteMoov, alignToQuickTime } from './mp4-post.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const tmp = mkdtempSync(join(tmpdir(), 'dovi-'));
@@ -76,7 +76,7 @@ const topChildren = (moov) => childBoxes(moov, parseBoxes(moov)[0]).map((b) => b
   console.log('ok nal helpers');
 }
 
-async function pipeline(name, nFramesMax = 120) {
+async function pipeline(name, nFramesMax = 120, container = 'mp4') { // container 'mov' (v0.34): ffmpeg -f mov + alignToQuickTime
   const srcPath = join(ROOT, 'samples', name + '.mov');
   assert.ok(existsSync(srcPath), srcPath + ' missing');
   // 1. source moov / dvvC / RPUs
@@ -107,16 +107,16 @@ async function pipeline(name, nFramesMax = 120) {
 
   // 2. x265 10-bit HLG, moov at the end, metadata in udta/meta (mdta)
   const nFrames = Math.min(nFramesMax, st.n);
-  const encPath = join(tmp, name + '-enc.mp4');
+  const encPath = join(tmp, `${name}-enc.${container}`);
   run('ffmpeg', ['-v', 'error', '-y', '-i', srcPath, '-map', '0:v:0', '-frames:v', String(nFrames), '-vf', 'scale=640:-2', '-c:v', 'libx265', '-pix_fmt', 'yuv420p10le', '-preset', 'ultrafast',
     '-x265-params', 'colorprim=bt2020:transfer=arib-std-b67:colormatrix=bt2020nc:log-level=error:bframes=3', '-tag:v', 'hvc1', '-an', '-movflags', 'use_metadata_tags',
-    '-metadata', 'com.apple.quicktime.creationdate=1999-01-01T00:00:00+0000', '-metadata', 'com.apple.quicktime.model=WRONG', encPath]);
+    '-metadata', 'com.apple.quicktime.creationdate=1999-01-01T00:00:00+0000', '-metadata', 'com.apple.quicktime.model=WRONG', '-f', container, encPath]);
   const enc = new Uint8Array(readFileSync(encPath));
   const top = parseBoxes(enc);
   const mdatB = top.find((b) => b.type === 'mdat'), moovB = top.find((b) => b.type === 'moov');
   assert.ok(moovB.start > mdatB.start, 'ffmpeg output has moov after mdat');
   const encMoov = enc.slice(moovB.start, moovB.end);
-  assert.ok(findBox(encMoov, ['moov', 'udta', 'meta']), 'encoder wrote moov/udta/meta');
+  assert.ok(findBox(encMoov, ['moov', 'udta', 'meta']) || findBox(encMoov, ['moov', 'meta']), 'encoder wrote moov/udta/meta (mp4) or moov/meta (mov)');
   const et = sampleTable(encMoov);
   assert.equal(et.n, nFrames);
 
@@ -157,7 +157,15 @@ async function pipeline(name, nFramesMax = 120) {
     assert.ok(ot, 'trak meta copied');
     assert.deepEqual(boxBytes(moov2, ot).slice(), boxBytes(srcMoov, srcTm).slice(), 'trak meta verbatim');
   }
-  const outPath = join(tmp, name + '-dv.mp4');
+  if (container === 'mov') { // QuickTime alignment keeps dvvC right after hvcC, then colr/amve as in the iPhone file
+    moov2 = alignToQuickTime(srcMoov, moov2).moov;
+    const e2 = childBoxes(moov2, findBox(moov2, ['moov', videoTrak, 'mdia', 'minf', 'stbl', 'stsd']))[0];
+    const srcE = childBoxes(srcMoov, findBox(srcMoov, ['moov', videoTrak, 'mdia', 'minf', 'stbl', 'stsd']))[0];
+    const want = childBoxes(srcMoov, srcE).map((b) => b.type); // ffmpeg also writes 'fiel' (kept, after the source ones)
+    assert.deepEqual(childBoxes(moov2, e2).map((b) => b.type).slice(0, want.length), want, 'hvc1 children as in the source');
+    assert.deepEqual(extractDoviConfigBox(moov2), dv);
+  }
+  const outPath = join(tmp, `${name}-dv.${container}`);
   writeFileSync(outPath, Buffer.concat([head, mdatHdr, mdatPayload, moov2]));
   // browser-style helper must accept the result and be a no-op identity
   const rw = await rewriteMoov(new Uint8Array(readFileSync(outPath)), (m) => m);
@@ -181,7 +189,8 @@ async function pipeline(name, nFramesMax = 120) {
     assert.ok(tags.match(re)?.[1]);
   }
   assert.doesNotMatch(tags, /WRONG|1999/);
-  console.log(`ok ${name}: ffprobe DOVI profile 8 / compat 4, RPU side data x${nSide}/5, clean decode, tags copied`);
+  if (container === 'mov') assert.match(run('ffprobe', ['-v', 'error', '-show_entries', 'format_tags=major_brand', '-of', 'default=nw=1', outPath]), /major_brand=qt/);
+  console.log(`ok ${name} [${container}]: ffprobe DOVI profile 8 / compat 4, RPU side data x${nSide}/5, clean decode, tags copied`);
   return { tags, srcTags, srcMoov, encMoov, outPath };
 }
 
@@ -192,6 +201,8 @@ assert.match(b.tags, /creationdate=.*\+0100/);
 const lens = /lens_model=(.*)/.exec(b.srcTags);
 console.log('source stream/format lens tags via ffprobe:', lens ? lens[1] : '(ffprobe does not expose trak-level mdta tags; verified byte-verbatim instead)');
 if (lens) assert.match(b.tags, /lens_model/);
+const c = await pipeline('IMG_2147', 120, 'mov');
+assert.match(c.tags, /creationdate=.*\+0100/);
 
 // ---- 5b. moveUdtaMetaToMoov on a Mediabunny-like moov (udta/meta) ----
 {

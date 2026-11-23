@@ -205,3 +205,69 @@ Modulo `app/lib/apac.js`, test `app/lib/apac.test.mjs` (in `tools/run-tests.sh`)
 **Verifiche**: Node (ffmpeg come «Mediabunny», moov in coda; varianti normale, co64 forzato, senza apac): ffprobe vede apac + tutte le mebx (IMG_2790: 1+6, IMG_2147: 1+1); per ogni traccia copiata **stesso numero di pacchetti e SHA-256 per pacchetto identici**; tref rimappati (parse dei box: `cinematic-audio cdsc` → nuovo ID apac, `cdep/cdsc/rndr` → video, `fall` → AAC); flag/`alternate_group` come sorgente; `next_track_ID`; decodificabile; durata entro 0,1 s; senza apac la cinematic-audio è saltata e le altre 5 copiate. Chromium (Playwright, app completa con encoder H.264 al posto di HEVC su sorgenti H.264 che portano apac+mebx trapiantate): log e riassunto corretti, hash per pacchetto identici su tutte le tracce copiate, nessun errore in console.
 
 ❓ Da verificare su iPhone: «Mix audio» disponibile in Foto sul file compresso; Live Photo/volti non alterano la riproduzione.
+
+## Contenitore MOV come gli originali iPhone + ID/ordine dei trak della sorgente (v0.34) ✅ misurato su IMG_2147 e IMG_2790
+
+**Problema**: con v0.33 (apac + tutte le mebx copiate byte per byte, tref corretti) Foto **non** offre «Mix audio» sul file compresso. Dato iPhone (IMG_3053, 1080p, Mix audio disponibile sull'originale): la sorgente ha solo 1 `hvc1`, 2 `apac` (abilitata, alt 1, `fall`→3), 3 AAC (disabilitata, alt 1), 4 mebx `scene-illuminance` (`rndr`→1) — **nessuna `cinematic-audio`**: il Mix audio dipende da apac + struttura del file, non dalla mebx cinematic-audio. Differenze principali v0.33 vs originale: contenitore MP4 (`ftyp isom`) invece di QuickTime (`qt  `), ordine/ID dei trak cambiati (mappa `1→1 3→2 2→3 4→4`: AAC traccia 2, apac traccia 3), handler/dinf non QuickTime.
+
+**Decisione**: uscita **QuickTime MOV di default** (opzione avanzata «Contenitore: MOV (come iPhone, consigliato) / MP4», chiave impostazioni `container` = `mov`|`mp4`), estensione `.mov`, `File` con MIME `video/quicktime` per la share sheet e il download; MP4 resta disponibile identico alla v0.33 (salvo ID/ordine dei trak, vedi 2).
+1. **Mediabunny 1.65.1 `MovOutputFormat({fastStart:false, metadataFormat:'mdta'})`** (verificato in Node con `BufferTarget`): `ftyp` major `qt  ` minor 512 compat `qt  `; `hdlr` `mhlr` ma manufacturer vuoto e nome C «MediabunnyVideoHandler»; `minf` senza `hdlr dhlr`, `dref url `; `hvc1` con compressorname «Mediabunny v1.65.1», quality 0, `btrt`; `colr nclc 9/18/9` (HLG BT.2020, nessun flag full range: corretto perché limited); `mp4a` SoundDescription **v1 con campi v1 a zero** e `esds` diretto (niente `wave`); tkhd flags 3; `moov/udta/meta` mdta (poi sostituito dalla nostra `copySourceMetadata` con il `moov/meta` sorgente, come per MP4). `mvhd`/`mdhd` video timescale 57600. `metadataFormat:'mdta'` vale anche per MOV.
+2. **ID e ordine dei trak identici alla sorgente** (`addPassthroughTracks`, anche con zero tracce copiate e anche in MP4): video ← ID del video sorgente, AAC ← ID dell'AAC sorgente (`fall` di apac), tracce copiate ← il proprio ID sorgente; trak nell'ordine del moov sorgente; tref di tutti i trak rimappati; `next_track_ID` = max(sorgente, max ID+1) (= sorgente). Log: `mappa ID 1→1 2→2 3→3 4→4`.
+3. **`alignToQuickTime(srcMoov, moov, {audioCopied})`** (app/lib/mp4-post.js, solo MOV) sui trak video e AAC: `mdia/hdlr` sorgente verbatim (`mhlr`/`appl`/«Core Media Video|Audio» Pascal), extra di `mdia` (`elng`) dopo `mdhd`, `minf` = media header + `hdlr dhlr alis` sorgente + `dinf/dref alis` (self) sorgente + stbl; video: tkhd flags sorgente (0xf), `tapt` (clef/prof/enof = dimensioni tkhd in uscita), `hvc1` quality 512/512 e nome «HEVC» sorgente, figli nell'ordine sorgente (`hvcC dvvC colr amve`: `amve`/`pasp`/`fiel` copiati se assenti), `btrt` tolto; AAC: con audio copiato **`stsd` sorgente verbatim** (v1 + `wave/frma/mp4a/esds`), con audio ricodificato `stsd` sorgente con l'`esds` di Mediabunny dentro `wave`. `ftyp`: quello della sorgente scritto in place se ha la stessa lunghezza (`sourceFtypPatch`: `qt  ` minor 0).
+4. Il resto è invariato e indipendente dal contenitore: `insertIntoVideoSampleEntry` (dvvC subito dopo `hvcC`: la VisualSampleEntry ha lo stesso layout in MOV), `copySourceMetadata`, `setMetaString` (`moov/meta` QuickTime), `rewriteMoov` (moov in coda, secondo mdat, co64/largesize). `finishMoov()` raccoglie le modifiche al moov (usata da index.html e dai test). `tools/stamp-version.sh` non dipende da `.mp4`.
+
+**Verifiche** (`app/lib/mov.test.mjs` in `tools/run-tests.sh`; aggiornati `passthrough.test.mjs` (ID/ordine sorgente) e `dovi.test.mjs` (variante `ffmpeg -f mov` + alignToQuickTime)): x265 10 bit HLG + AAC copiato → **mux reale Mediabunny** (Mov/Mp4OutputFormat, BufferTarget, Node) → finishMoov → ftyp → secondo mdat apac + mebx → moov. ffprobe: `format mov`, brand `qt` (MOV) / `isom` (MP4); hvc1 Main 10, `arib-std-b67`/bt2020/bt2020nc, DOVI record profilo 8 compat 4; AAC con pacchetti identici (tranne i 2-3 di priming a timestamp negativo, scartati dall'app come prima); apac + tutte le mebx con SHA-256 per pacchetto identici (IMG_2790: 1+6, IMG_2147: 1+1); **ID/entry/ordine dei trak, tref e next_track_ID identici alla sorgente**; flag/alt dei trak copiati come sorgente; `hvc1` con figli nell'ordine sorgente e `hdlr` byte-identici; decodifica senza errori; durata entro 0,1 s. Tabella: `MOV_TABLE=1 node app/lib/mov.test.mjs` o `node tools/lab/box-compare.mjs originale.mov uscita.mov`.
+
+**Confronto box IMG_2147** (originale vs uscita MOV del test; video ridotto a 360p dal test):
+
+| box | originale iPhone | uscita MOV | = |
+|---|---|---|---|
+| file: box di primo livello | ftyp wide mdat moov | ftyp mdat mdat moov | ≠ |
+| ftyp | major 'qt  ' minor 0 compat 'qt  ' | major 'qt  ' minor 0 compat 'qt  ' | = |
+| mdat | 1 (32 bit) | 2 (32 bit, 32 bit) | ≠ |
+| moov: figli | mvhd trak trak trak trak meta | mvhd trak trak trak trak meta | = |
+| mvhd | v0 timescale 600 next_track_ID 5 | v0 timescale 57600 next_track_ID 5 | ≠ |
+| moov/meta | QuickTime (senza version/flags): hdlr keys ilst | QuickTime (senza version/flags): hdlr keys ilst | = |
+| trak 1: tkhd | hvc1 · v0 ID 1 flags 0xf alt 0 1920×1080 | hvc1 · v0 ID 1 flags 0xf alt 0 202×360 | ≠ |
+| trak 1: figli | tkhd tapt edts mdia meta | tkhd tapt mdia meta | ≠ |
+| trak 1: mdia | mdhd hdlr minf · mdhd v0 timescale 600 | mdhd hdlr minf · mdhd v0 timescale 57600 | ≠ |
+| trak 1: mdia/hdlr | mhlr/vide/appl «Core Media Video» (Pascal) | mhlr/vide/appl «Core Media Video» (Pascal) | = |
+| trak 1: minf | vmhd hdlr dinf stbl · dhlr/alis/appl «Core Media Data Handler» (Pascal) · dref alis fl1 | vmhd hdlr dinf stbl · dhlr/alis/appl «Core Media Data Handler» (Pascal) · dref alis fl1 | = |
+| trak 1: stsd/hvc1 | 1920×1080 quality 512/512 «HEVC» · hvcC dvvC colr amve · colr nclc 9/18/9 | 202×360 quality 512/512 «HEVC» · hvcC dvvC colr amve · colr nclc 9/18/9 | ≠ |
+| trak 1: stbl | stsd sgpd sgpd sgpd sbgp csgm csgm stts ctts cslg stss sdtp stsc stsz stco | stsd stts ctts cslg stsc stsz stco stss | ≠ |
+| trak 2: tkhd | apac · v0 ID 2 flags 0xf alt 1 | apac · v0 ID 2 flags 0xf alt 1 | = |
+| trak 2: figli | tkhd edts tref mdia | tkhd edts tref mdia | = |
+| trak 2: tref | fall→3 | fall→3 | = |
+| trak 2: mdia | mdhd hdlr minf · mdhd v0 timescale 48000 | mdhd hdlr minf · mdhd v0 timescale 48000 | = |
+| trak 2: mdia/hdlr | mhlr/soun/appl «Core Media Audio» (Pascal) | mhlr/soun/appl «Core Media Audio» (Pascal) | = |
+| trak 2: minf | smhd hdlr dinf stbl · dhlr/alis/appl «Core Media Data Handler» (Pascal) · dref alis fl1 | smhd hdlr dinf stbl · dhlr/alis/appl «Core Media Data Handler» (Pascal) · dref alis fl1 | = |
+| trak 2: stsd/apac | SoundDescription v2 · dapa ngst | SoundDescription v2 · dapa ngst | = |
+| trak 2: stbl | stsd sgpd sbgp stts stss stsc stsz stco | stsd sgpd sbgp stts stss stsc stsz stco | = |
+| trak 3: tkhd | mp4a · v0 ID 3 flags 0xe alt 1 | mp4a · v0 ID 3 flags 0xe alt 1 | = |
+| trak 3: figli | tkhd edts mdia | tkhd edts mdia | = |
+| trak 3: mdia | mdhd hdlr minf · mdhd v0 timescale 48000 | mdhd hdlr minf · mdhd v0 timescale 48000 | = |
+| trak 3: mdia/hdlr | mhlr/soun/appl «Core Media Audio» (Pascal) | mhlr/soun/appl «Core Media Audio» (Pascal) | = |
+| trak 3: minf | smhd hdlr dinf stbl · dhlr/alis/appl «Core Media Data Handler» (Pascal) · dref alis fl1 | smhd hdlr dinf stbl · dhlr/alis/appl «Core Media Data Handler» (Pascal) · dref alis fl1 | = |
+| trak 3: stsd/mp4a | SoundDescription v1 · wave | SoundDescription v1 · wave | = |
+| trak 3: stbl | stsd sgpd sbgp stts stsc stsz stco | stsd stts stsc stsz stco sgpd sbgp | ≠ |
+| trak 4: tkhd | mebx · v0 ID 4 flags 0xf alt 0 | mebx · v0 ID 4 flags 0xf alt 0 | = |
+| trak 4: figli | tkhd edts tref mdia | tkhd edts tref mdia | = |
+| trak 4: tref | rndr→1 | rndr→1 | = |
+| trak 4: mdia | mdhd hdlr minf · mdhd v0 timescale 10000 | mdhd hdlr minf · mdhd v0 timescale 10000 | = |
+| trak 4: mdia/hdlr | mhlr/meta/appl «Core Media Metadata» (Pascal) | mhlr/meta/appl «Core Media Metadata» (Pascal) | = |
+| trak 4: minf | gmhd hdlr dinf stbl · dhlr/alis/appl «Core Media Data Handler» (Pascal) · dref alis fl1 | gmhd hdlr dinf stbl · dhlr/alis/appl «Core Media Data Handler» (Pascal) · dref alis fl1 | = |
+| trak 4: stsd/mebx | keys | keys | = |
+| trak 4: stbl | stsd stts stsc stsz stco | stsd stts stsc stsz stco | = |
+
+| box | originale iPhone | uscita MOV | = |
+
+IMG_2790 (4K, 9 trak): stesse differenze residue (più `free` dopo il moov nell'originale); tutti gli altri trak (`mp4a` 2 con `elng`, `apac` 3 `fall`→2, mebx 4-9 con tref `cdep/cdsc`→1, `cdsc`→3, `rndr`→1) coincidono.
+
+**Differenze residue** (non correggibili senza riscrivere mdat o il muxer, giudicate innocue ma da tenere presenti se Mix audio manca ancora):
+- niente `wide` prima dell'mdat; **due mdat** (Mediabunny + tracce copiate) invece di uno;
+- `mvhd`/`mdhd` video timescale 57600 (iPhone 600); **video senza `edts`** (l'iPhone ha una edit list);
+- `stbl` video senza i sample group Apple (`sgpd`/`sbgp`/`csgm`) né `sdtp`; ordine dei figli di `stbl` diverso (`stss` in fondo, `sgpd/sbgp` AAC in fondo);
+- AAC: i 2-3 pacchetti di priming a timestamp negativo non sono copiati (edit list di Mediabunny al posto di quella sorgente), quindi AAC e apac non hanno esattamente lo stesso numero di campioni come nell'originale;
+- l'apac/le mebx coprono la durata sorgente intera (edit list traslate), il video quella dei fotogrammi codificati.
+
+❓ Da verificare su iPhone: Foto offre «Mix audio» sul .mov v0.34 (IMG_3053 e IMG_2790); share sheet «Salva video» con `video/quicktime`.

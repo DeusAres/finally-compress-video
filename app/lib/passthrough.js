@@ -10,9 +10,9 @@
 // its new ID), extra trak children (udta, meta, ...) verbatim. Pure ES2020, no deps; Safari and Node.
 //
 // Output layout: [ftyp][mdat Mediabunny][mdat passthrough][moov + copied traks]
-import { parseBoxes, childBoxes, boxBytes, trakHandler } from './dovi.js?v=0.33';
-import { makeBox, rebuild } from './mp4-post.js?v=0.33';
-import { trakSampleEntry, kid, tkhdInfo, TK, mvhdInfo, mdhdInfo, readElst, makeElst, shiftEdits, sampleLayout, copyApacData } from './apac.js?v=0.33';
+import { parseBoxes, childBoxes, boxBytes, trakHandler } from './dovi.js?v=0.34.1';
+import { makeBox, rebuild } from './mp4-post.js?v=0.34.1';
+import { trakSampleEntry, kid, tkhdInfo, TK, mvhdInfo, mdhdInfo, readElst, makeElst, shiftEdits, sampleLayout, copyApacData } from './apac.js?v=0.34.1';
 
 const u32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
 const put32 = (b, o, v) => { b[o] = (v >>> 24) & 255; b[o + 1] = (v >>> 16) & 255; b[o + 2] = (v >>> 8) & 255; b[o + 3] = v & 255; };
@@ -70,8 +70,9 @@ function readCopyTrak(src, trak, movieTimescale) {
 }
 
 /**
- * Scan a source moov. Returns {video:{trackId}|null, aac:{trackId, flags, alternateGroup}|null,
- *  apac: track|null, meta: [track...] (every mebx trak, source order), errors:[{trackId, entry, message}]}.
+ * Scan a source moov. Returns {video:{trackId, flags}|null, aac:{trackId, flags, alternateGroup}|null,
+ *  apac: track|null, meta: [track...] (every mebx trak, source order), errors:[{trackId, entry, message}],
+ *  order:[track_ID of every source trak, in moov order], nextTrackId (source mvhd)}.
  * A track = readCopyTrak() result: {trackId, handler, entry, keys, label, tkhd, mdhd, edits, tref, bytes, chunks, totalBytes, ...}.
  * Never throws for a single unreadable trak: it goes to `errors` and is not copied.
  */
@@ -81,9 +82,10 @@ export function readPassthrough(srcMoov) {
   const top = childBoxes(srcMoov, root), mvhd = top.find((b) => b.type === 'mvhd');
   if (!mvhd) return null;
   const movieTs = mvhdInfo(srcMoov, mvhd).timescale, traks = top.filter((b) => b.type === 'trak');
-  const res = { video: null, aac: null, apac: null, meta: [], errors: [] };
+  const mvI = mvhdInfo(srcMoov, mvhd);
+  const res = { video: null, aac: null, apac: null, meta: [], errors: [], order: traks.map((t) => tkhdInfo(srcMoov, kid(srcMoov, t, 'tkhd')).trackId), nextTrackId: mvI.nextTrackId };
   const vt = traks.find((t) => trakHandler(srcMoov, t) === 'vide');
-  if (vt) res.video = { trackId: tkhdInfo(srcMoov, kid(srcMoov, vt, 'tkhd')).trackId };
+  if (vt) { const i = tkhdInfo(srcMoov, kid(srcMoov, vt, 'tkhd')); res.video = { trackId: i.trackId, flags: i.flags }; }
   const take = (t) => { try { return readCopyTrak(srcMoov, t, movieTs); } catch (e) { res.errors.push({ trackId: tkhdInfo(srcMoov, kid(srcMoov, t, 'tkhd')).trackId, entry: trakSampleEntry(srcMoov, t), message: e?.message || String(e) }); return null; } };
   // apac: any trak whose first sample entry is 'apac' (handler 'soun' on iPhone; order apac/AAC varies between files)
   const at = traks.find((t) => trakSampleEntry(srcMoov, t) === 'apac');
@@ -184,66 +186,94 @@ export function buildCopiedTrak(track, { trackId, chunkOffsets, outMovieTs, shif
 }
 
 /**
- * Append the selected tracks to the output moov. tracks/chunkOffsets from selectPassthrough/planPassthroughMdat;
- * info = readPassthrough(srcMoov). New track_IDs from mvhd.next_track_ID in source order; tref remapped through
- * idMap (source video -> output video, source AAC -> output AAC, copied -> new). When apac is copied the output AAC
- * gets the source AAC's tkhd flags and the apac alternate_group (players pick ONE of the two, as in the original).
- * Returns {moov, idMap: Map(srcId -> outId), added:[{label, entry, srcId, outId, tref, flags, alternateGroup}], dropped:[...]}.
+ * Append the selected tracks to the output moov AND lay the moov out like the source (v0.34): every output trak takes
+ * the track_ID of its source counterpart (output video <- source video, output AAC <- source AAC, copied track <- its
+ * own source ID), traks are ordered as in the source moov (e.g. iPhone: video 1, apac 2, AAC 3, mebx 4...), tref of
+ * every trak remapped accordingly, mvhd.next_track_ID = max(source next_track_ID, max ID + 1). Output traks without a
+ * source counterpart get new IDs after all others and go last. `tracks` may be empty (only the ID/order alignment).
+ * tracks/chunkOffsets from selectPassthrough/planPassthroughMdat; info = readPassthrough(srcMoov).
+ * When apac is copied the output AAC gets the source AAC's tkhd flags and the apac alternate_group (players pick ONE
+ * of the two, as in the original).
+ * Returns {moov, idMap: Map(srcId -> outId), outIdMap: Map(old output ID -> new), added:[{label, entry, srcId, outId, tref, flags, alternateGroup}], dropped:[...]}.
  */
-export function addPassthroughTracks(outMoov, info, tracks, { chunkOffsets, shiftS = 0, co64 = null }) {
+export function addPassthroughTracks(outMoov, info, tracks, { chunkOffsets = [], shiftS = 0, co64 = null, keepSourceIds = true } = {}) {
   const root = parseBoxes(outMoov)[0];
   if (!root || root.type !== 'moov' || root.end !== outMoov.length) throw new Error('outMoov must be exactly one moov box');
   const top = childBoxes(outMoov, root);
   const mvhd = top.find((b) => b.type === 'mvhd'); const mv = mvhdInfo(outMoov, mvhd);
   const traks = top.filter((b) => b.type === 'trak');
-  let maxId = 0; for (const t of traks) maxId = Math.max(maxId, tkhdInfo(outMoov, kid(outMoov, t, 'tkhd')).trackId);
-  const vOut = traks.find((t) => trakHandler(outMoov, t) === 'vide');
-  const aOut = traks.find((t) => trakHandler(outMoov, t) === 'soun' && trakSampleEntry(outMoov, t) === 'mp4a');
-  const idMap = new Map();
-  if (info.video && vOut) idMap.set(info.video.trackId, tkhdInfo(outMoov, kid(outMoov, vOut, 'tkhd')).trackId);
-  if (info.aac && aOut) idMap.set(info.aac.trackId, tkhdInfo(outMoov, kid(outMoov, aOut, 'tkhd')).trackId);
-  let next = Math.max(mv.nextTrackId, maxId + 1);
-  for (const t of tracks) idMap.set(t.trackId, next++);
+  const oldIds = traks.map((t) => tkhdInfo(outMoov, kid(outMoov, t, 'tkhd')).trackId);
+  const vIdx = traks.findIndex((t) => trakHandler(outMoov, t) === 'vide');
+  const aIdx = traks.findIndex((t) => trakHandler(outMoov, t) === 'soun' && trakSampleEntry(outMoov, t) === 'mp4a');
+  // srcId of each output trak (null = no source counterpart)
+  const srcOf = traks.map((_, i) => (i === vIdx && info.video ? info.video.trackId : i === aIdx && info.aac ? info.aac.trackId : null));
+  const outIdMap = new Map(); // old output ID -> new output ID
+  const idMap = new Map(); // source ID -> output ID
+  let next;
+  if (keepSourceIds) {
+    let maxId = Math.max(0, ...(info.order || []), ...tracks.map((t) => t.trackId), ...srcOf.filter((x) => x != null));
+    traks.forEach((_, i) => { const n = srcOf[i] != null ? srcOf[i] : ++maxId; outIdMap.set(oldIds[i], n); if (srcOf[i] != null) idMap.set(srcOf[i], n); });
+    for (const t of tracks) idMap.set(t.trackId, t.trackId);
+    next = Math.max(info.nextTrackId || 0, maxId + 1);
+  } else {
+    traks.forEach((_, i) => { outIdMap.set(oldIds[i], oldIds[i]); if (srcOf[i] != null) idMap.set(srcOf[i], oldIds[i]); });
+    let n = Math.max(mv.nextTrackId, Math.max(0, ...oldIds) + 1);
+    for (const t of tracks) idMap.set(t.trackId, n++);
+    next = n;
+  }
   const added = [], dropped = [], newTraks = [];
   let maxDur = 0;
   tracks.forEach((t, i) => {
     const tref = t.tref.map((r) => ({ type: r.type, ids: r.ids.filter((id) => { const ok = idMap.has(id); if (!ok) dropped.push(`${t.label} ${r.type}→${id}`); return ok; }).map((id) => idMap.get(id)) }));
     const { trak, durationMovie } = buildCopiedTrak(t, { trackId: idMap.get(t.trackId), chunkOffsets: chunkOffsets[i], outMovieTs: mv.timescale, shiftS, tref, co64 });
-    maxDur = Math.max(maxDur, durationMovie); newTraks.push(trak);
+    maxDur = Math.max(maxDur, durationMovie); newTraks.push({ srcId: t.trackId, bytes: trak });
     added.push({ label: t.label, entry: t.entry, keys: t.keys, srcId: t.trackId, outId: idMap.get(t.trackId), tref: tref.filter((r) => r.ids.length), flags: t.tkhd.flags, alternateGroup: t.tkhd.alternateGroup, samples: t.sampleCount, bytes: t.totalBytes });
   });
   const apac = tracks.find((t) => t.entry === 'apac');
-  const aacIdx = apac && aOut && info.aac ? traks.indexOf(aOut) : -1, g = apac ? apac.tkhd.alternateGroup : 0;
+  const aacIdx = apac && aIdx >= 0 && info.aac ? aIdx : -1, g = apac ? apac.tkhd.alternateGroup : 0;
+  // output (Mediabunny) traks: new track_ID in tkhd, tref remapped, AAC flags/alternate_group when apac is copied
+  const fixTrak = (bytes, i) => rebuild(bytes, (tk) => tk.map((c) => {
+    if (c.type === 'tkhd') {
+      const b = c.bytes.slice(), v = b[8], F = TK(v);
+      put32(b, 8 + F.trackId, outIdMap.get(oldIds[i]));
+      if (i === aacIdx) {
+        const fl = info.aac.flags;
+        b[9] = (fl >> 16) & 255; b[10] = (fl >> 8) & 255; b[11] = fl & 255;
+        b[8 + F.alt] = (g >> 8) & 255; b[8 + F.alt + 1] = g & 255;
+      }
+      return { type: 'tkhd', bytes: b };
+    }
+    if (c.type === 'tref') {
+      const b = c.bytes.slice();
+      for (const r of parseBoxes(b, 8, b.length)) for (let o = r.start + r.hdr; o + 4 <= r.end; o += 4) { const id = u32(b, o); if (outIdMap.has(id)) put32(b, o, outIdMap.get(id)); }
+      return { type: 'tref', bytes: b };
+    }
+    return c;
+  }));
+  // order key: index of the source trak with that ID (unknown -> after everything, stable)
+  const srcPos = new Map((info.order || []).map((id, k) => [id, k]));
+  const all = [
+    ...traks.map((t, i) => ({ key: srcOf[i] != null && srcPos.has(srcOf[i]) ? srcPos.get(srcOf[i]) : 1e6 + i, bytes: fixTrak(boxBytes(outMoov, t), i) })),
+    ...newTraks.map((t, j) => ({ key: srcPos.has(t.srcId) ? srcPos.get(t.srcId) : 2e6 + j, bytes: t.bytes })),
+  ];
+  if (keepSourceIds) all.sort((x, y) => x.key - y.key);
   const nextId = next;
-  let ti = -1;
   const moov = rebuild(outMoov, (kids) => {
-    const out = []; let lastTrak = -1;
+    const out = []; let placed = false;
     for (const k of kids) {
+      if (k.type === 'trak') { if (!placed) { out.push(...all.map((t) => ({ type: 'trak', bytes: t.bytes }))); placed = true; } continue; }
       let bytes = k.bytes;
       if (k.type === 'mvhd') {
         bytes = bytes.slice(); const p = 8;
         if (mv.version === 1) { put32(bytes, p + 108, nextId); if (maxDur > mv.duration) put64(bytes, p + 24, maxDur); }
         else { put32(bytes, p + 96, nextId); if (maxDur > mv.duration) put32(bytes, p + 16, Math.min(U32MAX, maxDur)); }
       }
-      if (k.type === 'trak') {
-        ti++;
-        if (ti === aacIdx) {
-          bytes = rebuild(bytes, (tk) => tk.map((c) => {
-            if (c.type !== 'tkhd') return c;
-            const b = c.bytes.slice(), v = b[8], F = TK(v), fl = info.aac.flags;
-            b[9] = (fl >> 16) & 255; b[10] = (fl >> 8) & 255; b[11] = fl & 255;
-            b[8 + F.alt] = (g >> 8) & 255; b[8 + F.alt + 1] = g & 255;
-            return { type: 'tkhd', bytes: b };
-          }));
-        }
-        lastTrak = out.length;
-      }
       out.push({ type: k.type, bytes });
     }
-    out.splice(lastTrak + 1, 0, ...newTraks.map((bytes) => ({ type: 'trak', bytes })));
+    if (!placed) out.push(...all.map((t) => ({ type: 'trak', bytes: t.bytes })));
     return out;
   });
-  return { moov, idMap, added, dropped, aacTrackId: aOut && info.aac ? idMap.get(info.aac.trackId) : 0, alternateGroup: g };
+  return { moov, idMap, outIdMap, added, dropped, aacTrackId: aIdx >= 0 && info.aac ? idMap.get(info.aac.trackId) : 0, alternateGroup: g };
 }
 
 /** One-line description of a copied track for the log: "cinematic-audio 5→5 cdsc→3". */
