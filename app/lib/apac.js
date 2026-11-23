@@ -7,8 +7,8 @@
 // Time alignment: the video pipeline rebases timestamps by -frames[0].ts (usually 0) and drops packets with ts<0.
 // For apac NO sample is cut: the same shift is applied through the edit list (media_time += shift, duration -= shift),
 // so the presentation of apac matches the source exactly (priming kept as in the source elst).
-import { parseBoxes, childBoxes, findBox, boxBytes, trakHandler } from './dovi.js?v=0.32';
-import { makeBox, rebuild } from './mp4-post.js?v=0.32';
+import { parseBoxes, childBoxes, findBox, boxBytes, trakHandler } from './dovi.js?v=0.33';
+import { makeBox, rebuild } from './mp4-post.js?v=0.33';
 
 const u16 = (b, o) => (b[o] << 8) | b[o + 1];
 const u32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
@@ -28,10 +28,10 @@ export function trakSampleEntry(buf, trak) {
   const e = parseBoxes(buf, stsd.start + stsd.hdr + 8, stsd.end)[0];
   return e ? e.type : null;
 }
-const kid = (buf, box, t) => childBoxes(buf, box).find((b) => b.type === t) || null;
+export const kid = (buf, box, t) => childBoxes(buf, box).find((b) => b.type === t) || null;
 
 // ---- tkhd / mvhd / mdhd field access (version 0 and 1) ----------------------------------------------------------
-function tkhdInfo(buf, box) {
+export function tkhdInfo(buf, box) {
   const p = box.start + box.hdr, v = buf[p], o = v === 1 ? 8 : 0;
   return {
     version: v, flags: (buf[p + 1] << 16) | (buf[p + 2] << 8) | buf[p + 3],
@@ -41,20 +41,20 @@ function tkhdInfo(buf, box) {
   };
 }
 // payload offsets (from box.start + hdr) of tkhd fields
-const TK = (v) => v === 1 ? { trackId: 20, duration: 28, alt: 46 } : { trackId: 12, duration: 20, alt: 34 };
-function mvhdInfo(buf, box) {
+export const TK = (v) => v === 1 ? { trackId: 20, duration: 28, alt: 46 } : { trackId: 12, duration: 20, alt: 34 };
+export function mvhdInfo(buf, box) {
   const p = box.start + box.hdr, v = buf[p];
   return v === 1 ? { version: 1, timescale: u32(buf, p + 20), duration: u64(buf, p + 24), nextTrackId: u32(buf, p + 108) }
     : { version: 0, timescale: u32(buf, p + 12), duration: u32(buf, p + 16), nextTrackId: u32(buf, p + 96) };
 }
-function mdhdInfo(buf, box) {
+export function mdhdInfo(buf, box) {
   const p = box.start + box.hdr, v = buf[p];
   const lang = u16(buf, p + (v === 1 ? 32 : 20));
   const language = String.fromCharCode(((lang >> 10) & 31) + 0x60, ((lang >> 5) & 31) + 0x60, (lang & 31) + 0x60);
   return v === 1 ? { timescale: u32(buf, p + 20), duration: u64(buf, p + 24), language } : { timescale: u32(buf, p + 12), duration: u32(buf, p + 16), language };
 }
 /** Edit list entries [{segmentDuration (movie ts), mediaTime (media ts, -1 = empty), rate}] or null. */
-function readElst(buf, edts) {
+export function readElst(buf, edts) {
   const elst = edts && kid(buf, edts, 'elst'); if (!elst) return null;
   const p = elst.start + elst.hdr, v = buf[p], n = u32(buf, p + 4), out = [];
   for (let i = 0, q = p + 8; i < n; i++) {
@@ -62,6 +62,31 @@ function readElst(buf, edts) {
     else { out.push({ segmentDuration: u32(buf, q), mediaTime: u32(buf, q + 4) | 0, rate: (u32(buf, q + 8) | 0) / 65536 }); q += 12; }
   }
   return out;
+}
+
+/**
+ * Per-sample sizes/offsets and per-chunk {offset, size, samples} from stsz + stsc + stco/co64 (boxes of buf).
+ * Returns {sampleCount, sampleOffsets (Float64Array), sampleSizes (Uint32Array), chunks, totalBytes}.
+ */
+export function sampleLayout(srcMoov, stsz, stsc, stco, what = 'traccia') {
+  const zp = stsz.start + stsz.hdr, constSize = u32(srcMoov, zp + 4), n = u32(srcMoov, zp + 8);
+  const sampleSizes = new Uint32Array(n);
+  for (let i = 0; i < n; i++) sampleSizes[i] = constSize || u32(srcMoov, zp + 12 + 4 * i);
+  const cp = stco.start + stco.hdr, nChunks = u32(srcMoov, cp + 4), co64 = stco.type === 'co64';
+  const chunkOff = (i) => (co64 ? u64(srcMoov, cp + 8 + 8 * i) : u32(srcMoov, cp + 8 + 4 * i));
+  const scp = stsc.start + stsc.hdr, nsc = u32(srcMoov, scp + 4);
+  const runs = Array.from({ length: nsc }, (_, i) => ({ first: u32(srcMoov, scp + 8 + 12 * i), per: u32(srcMoov, scp + 12 + 12 * i) }));
+  const sampleOffsets = new Float64Array(n), chunks = [];
+  let s = 0;
+  for (let c = 0; c < nChunks && s < n; c++) {
+    let r = 0; while (r + 1 < runs.length && runs[r + 1].first <= c + 1) r++;
+    const per = runs[r]?.per || 0, off0 = chunkOff(c); let off = off0, k = 0;
+    for (; k < per && s < n; k++, s++) { sampleOffsets[s] = off; off += sampleSizes[s]; }
+    chunks.push({ offset: off0, size: off - off0, samples: k });
+  }
+  if (s !== n) throw new Error(`${what}: stsc/stco coprono ${s} campioni su ${n}`);
+  const totalBytes = chunks.reduce((a, c) => a + c.size, 0);
+  return { sampleCount: n, sampleOffsets, sampleSizes, chunks, totalBytes };
 }
 
 /**
@@ -99,24 +124,7 @@ export function readApacTrack(srcMoov) {
   const sdv = u16(srcMoov, sp + 8);
   let channels = u16(srcMoov, sp + 16), sampleRate = u32(srcMoov, sp + 24) / 65536;
   if (sdv === 2) { channels = u32(srcMoov, sp + 40); sampleRate = new DataView(srcMoov.buffer, srcMoov.byteOffset + sp + 32, 8).getFloat64(0); }
-  // per-sample sizes/offsets from stsz + stsc + stco/co64
-  const zp = stsz.start + stsz.hdr, constSize = u32(srcMoov, zp + 4), n = u32(srcMoov, zp + 8);
-  const sampleSizes = new Uint32Array(n);
-  for (let i = 0; i < n; i++) sampleSizes[i] = constSize || u32(srcMoov, zp + 12 + 4 * i);
-  const cp = stco.start + stco.hdr, nChunks = u32(srcMoov, cp + 4), co64 = stco.type === 'co64';
-  const chunkOff = (i) => (co64 ? u64(srcMoov, cp + 8 + 8 * i) : u32(srcMoov, cp + 8 + 4 * i));
-  const scp = stsc.start + stsc.hdr, nsc = u32(srcMoov, scp + 4);
-  const runs = Array.from({ length: nsc }, (_, i) => ({ first: u32(srcMoov, scp + 8 + 12 * i), per: u32(srcMoov, scp + 12 + 12 * i) }));
-  const sampleOffsets = new Float64Array(n), chunks = [];
-  let s = 0;
-  for (let c = 0; c < nChunks && s < n; c++) {
-    let r = 0; while (r + 1 < runs.length && runs[r + 1].first <= c + 1) r++;
-    const per = runs[r]?.per || 0, off0 = chunkOff(c); let off = off0, k = 0;
-    for (; k < per && s < n; k++, s++) { sampleOffsets[s] = off; off += sampleSizes[s]; }
-    chunks.push({ offset: off0, size: off - off0, samples: k });
-  }
-  if (s !== n) throw new Error(`apac: stsc/stco coprono ${s} campioni su ${n}`);
-  const totalBytes = chunks.reduce((a, c) => a + c.size, 0);
+  const { sampleCount: n, sampleOffsets, sampleSizes, chunks, totalBytes } = sampleLayout(srcMoov, stsz, stsc, stco, 'apac');
   return {
     trackId: tkhd.trackId, tkhd, mdhd: mdhdInfo(srcMoov, mdhd), movieTimescale: mvhdInfo(srcMoov, mvhd).timescale,
     channels, sampleRate, edits: readElst(srcMoov, kid(srcMoov, trak, 'edts')), fallbackTrackId,
@@ -149,7 +157,7 @@ export function shiftEdits(edits, { srcMovieTs, outMovieTs, mediaTs, shiftS = 0 
   }
   return out;
 }
-function makeElst(entries) {
+export function makeElst(entries) {
   const v1 = entries.some((e) => e.segmentDuration > U32MAX || e.mediaTime > 2147483647);
   const parts = [new Uint8Array([v1 ? 1 : 0, 0, 0, 0]), be32(entries.length)];
   for (const e of entries) {

@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.32';
-import { sprite, SPRITES } from './sprite.js?v=0.32';
-import { createLogStore } from './logstore.js?v=0.32';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.32';
+import { bus } from './bus.js?v=0.33';
+import { sprite, SPRITES } from './sprite.js?v=0.33';
+import { createLogStore } from './logstore.js?v=0.33';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.33';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -38,7 +38,7 @@ const PHASES = [
   { id: 'scrittura', label: 'File', sub: 'Assemblo il file e i metadati' },
 ];
 const WEIGHT = { analisi: 0.04, video: 0.82, assemblaggio: 0.04, audio: 0.07, scrittura: 0.03 };
-const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: false, apac: true }; // apac: audio spaziale mantenuto (v0.32, solo se la sorgente lo ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
+const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: false, apac: true }; // apac: audio spaziale + metadati iPhone (mebx) mantenuti (v0.32/v0.33, solo se la sorgente li ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
 
 const nf1 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 });
@@ -131,8 +131,8 @@ function template(opts) {
       <p class="fcv-subtle">Le voci "versione precedente" e "diagnostica" servono per confronti tecnici.</p>
     </fieldset>
     <fieldset class="fcv-field" data-ref="apacBox" hidden>
-      <legend class="px-label">Audio spaziale</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-apac" value="1" checked><div><b>Audio spaziale (apac) — mantieni</b><i>(video iPhone con audio spaziale)</i><span>Copia invariata la traccia audio spaziale accanto a quella stereo, come nell'originale: in Foto resta l'audio spaziale (e «Mix audio»). Solo con l'audio «copia»: con la riparazione dell'eco o la ricodifica viene tolta. Aggiunge ~0,4 Mbps.</span></div></label>
+      <legend class="px-label">Tracce iPhone</legend>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-apac" value="1" checked><div><b>Mantieni audio spaziale e metadati iPhone</b><i>(video registrati con iPhone)</i><span>Copia invariate la traccia audio spaziale e le tracce di metadati dell'iPhone (orientamento, volti, Live Photo, luminosità della scena, «cinematic-audio»), come nell'originale: in Foto restano l'audio spaziale e «Mix audio». L'audio spaziale (e la sua traccia «cinematic-audio») solo con l'audio «copia»: con la riparazione dell'eco o la ricodifica viene tolto, i metadati video restano. Audio spaziale ~0,4 Mbps, metadati trascurabili.</span></div></label>
     </fieldset>
     <fieldset class="fcv-field" data-ref="dsBox" hidden>
       <legend class="px-label">Risoluzione</legend>
@@ -308,6 +308,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (fi.hdr) chips.push('<span class="px-chip px-chip--hdr">HDR</span>');
     if (fi.dolbyVision) chips.push('<span class="px-chip px-chip--dv">Dolby Vision</span>');
     if (fi.apac) chips.push('<span class="px-chip">Audio spaziale</span>');
+    if (fi.meta) chips.push('<span class="px-chip">Metadati iPhone</span>');
     if (fi.width && fi.height) chips.push(`<span class="px-chip px-chip--num">${fi.width}×${fi.height}</span>`);
     if (fi.fps) chips.push(`<span class="px-chip px-chip--num">${Math.round(fi.fps)} fps</span>`);
     R.fChips.innerHTML = chips.join('');
@@ -343,7 +344,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   function syncDs() {
     const ok = dsAvailable(), c = root.querySelector('input[name="fcv-ds"]');
     R.dsBox.hidden = !ok; if (c) { c.disabled = !ok; if (!ok) c.checked = false; }
-    R.apacBox.hidden = !st.file?.apac; // «Audio spaziale (apac) — mantieni»: solo se la sorgente ha la traccia apac
+    R.apacBox.hidden = !(st.file?.apac || st.file?.meta); // «Mantieni audio spaziale e metadati iPhone»: solo se la sorgente ha apac o tracce mebx
     syncSettings();
   }
   function readSettings() {
@@ -367,7 +368,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.brHint.textContent = st.settings.sceneQ ? `Qualità per scena attiva: ${br} Mbps è il limite massimo, ogni tratto riceve il minimo che resta «quasi perfetto».` : info.t;
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
-    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}`;
+    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
     updateEstimate();
   }
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js

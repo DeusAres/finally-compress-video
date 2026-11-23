@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.32</title>
+<title>Compressore HDR v0.33</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -15,24 +15,24 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.32';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.32';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.32';
-import { downscaleDims, avgFramerate, verifyDownscale, dsError } from './app/lib/downscale.js?v=0.32';
-import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.32';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.32';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.32';
-import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.32';
-import { readApacTrack, planApacMdat, copyApacData, addApacTrack } from './app/lib/apac.js?v=0.32';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.32';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.32';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.32';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.32';
-import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.32';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.32';
-import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary } from './app/lib/scenesearch.js?v=0.32';
-import { mountUI } from './app/ui/ui.js?v=0.32';
-import { bus, emit } from './app/ui/bus.js?v=0.32';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement } from './app/lib/frames.js?v=0.33';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.33';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.33';
+import { downscaleDims, avgFramerate, verifyDownscale, dsError } from './app/lib/downscale.js?v=0.33';
+import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.33';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.33';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.33';
+import { copySourceMetadata, insertIntoVideoSampleEntry, rewriteMoov, setMetaString } from './app/lib/mp4-post.js?v=0.33';
+import { readPassthrough, selectPassthrough, planPassthroughMdat, copyPassthroughData, addPassthroughTracks, describeAdded } from './app/lib/passthrough.js?v=0.33';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.33';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.33';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.33';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.33';
+import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.33';
+import { createPip, pipSupported } from './app/lib/pip.js?v=0.33';
+import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary } from './app/lib/scenesearch.js?v=0.33';
+import { mountUI } from './app/ui/ui.js?v=0.33';
+import { bus, emit } from './app/ui/bus.js?v=0.33';
 import * as MB from './vendor/mediabunny-1.65.1.min.mjs';
 const $ = (id) => document.getElementById(id);
 // cat: setup | segment | pip | heartbeat | warn | error | summary | info (se omessa la deduce l'archivio dal prefisso); data: numeri per il riassunto
@@ -41,8 +41,8 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.32-20261121T133346Z';
-const BUILD_LABEL = 'v0.32 · 21/11 14:33';
+const BUILD_ID = '0.33-20261123T000313Z';
+const BUILD_LABEL = 'v0.33 · 23/11 01:03';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false, sceneQ: false, downscale: false, apac: true }, NFtot = 0;
 let parOff = false; // fallback a 1 player scattato in questo job (vale anche per le riprese successive)
@@ -126,8 +126,9 @@ async function inspectFile(f) {
     const r = { W: await vt.getDisplayWidth(), H: await vt.getDisplayHeight(), dur: await input.computeDuration(), hdr: false, dv: false, fps: 0 };
     try { const cs = await vt.getColorSpace(); r.hdr = cs?.transfer === 'hlg' || cs?.transfer === 'pq'; } catch {}
     try { const rf = async (o, l) => new Uint8Array(await f.slice(o, o + l).arrayBuffer()); const loc = await locateMoov(rf, f.size); const mv = loc ? await rf(loc.offset, loc.size) : null; r.dv = !!(mv && extractDoviConfigBox(mv));
-      // audio spaziale Apple (traccia 'apac'): copiabile byte per byte accanto all'AAC (app/lib/apac.js, v0.32)
-      try { const t = mv && readApacTrack(mv); r.apac = !!t; r.apacBps = t ? Math.round(t.totalBytes * 8 / Math.max(0.1, t.mdhd.duration / t.mdhd.timescale)) : 0; } catch { r.apac = false; r.apacBps = 0; } } catch {}
+      // tracce iPhone copiabili byte per byte (app/lib/passthrough.js, v0.33): audio spaziale 'apac' + metadati temporizzati 'mebx'
+      try { const pt = mv && readPassthrough(mv), t = pt?.apac; r.apac = !!t; r.apacBps = t ? Math.round(t.totalBytes * 8 / Math.max(0.1, t.mdhd.duration / t.mdhd.timescale)) : 0;
+        r.meta = pt ? pt.meta.map((m) => m.label) : []; r.ptErr = pt ? pt.errors : []; } catch (e) { r.apac = false; r.apacBps = 0; r.meta = []; r.ptErr = [{ message: e?.message || String(e) }]; } } catch {}
     try { const st = await vt.computePacketStats(120); r.fps = st?.averagePacketRate || 0; } catch {}
     // bitrate della traccia AAC sorgente (0 = nessuna AAC; 256 kbps se non misurabile): serve alla stima del peso (app/ui/estimate.js)
     try { r.aacBps = 0; for (const a of await input.getAudioTracks()) if ((await a.getCodec()) === 'aac') { let b = 0; try { b = (await a.computePacketStats(200))?.averageBitrate || 0; } catch {} r.aacBps = b > 0 ? Math.round(b) : 256000; break; } } catch { r.aacBps = undefined; }
@@ -151,8 +152,9 @@ async function onFile(f) {
   log(`${file.name} — ${(file.size / MB_).toFixed(1)} MB`);
   const r = await inspectFile(f); if (f !== file) return; info = r;
   if (r.error) { log('Impossibile leggere il video: ' + r.error); notice('Impossibile leggere il video: ' + r.error, 'bad'); return; }
-  log(`${r.W}×${r.H} · ${fmtT(r.dur)} · HDR ${r.hdr ? 'sì' : 'no'} · Dolby Vision ${r.dv ? 'sì' : 'no'} · audio spaziale ${r.apac ? `sì (apac, ${(r.apacBps / 1000).toFixed(0)} kbps)` : 'no'}${r.fps ? ' · ' + r.fps.toFixed(1) + ' fps' : ''}`);
-  emit('file', { name: f.name, sizeMB: f.size / MB_, durationS: r.dur, width: r.W, height: r.H, hdr: r.hdr, dolbyVision: r.dv, fps: r.fps, aacBps: r.aacBps, apac: !!r.apac, apacBps: r.apacBps || 0 });
+  log(`${r.W}×${r.H} · ${fmtT(r.dur)} · HDR ${r.hdr ? 'sì' : 'no'} · Dolby Vision ${r.dv ? 'sì' : 'no'} · audio spaziale ${r.apac ? `sì (apac, ${(r.apacBps / 1000).toFixed(0)} kbps)` : 'no'} · metadati iPhone ${r.meta?.length ? `${r.meta.length} (${r.meta.join(', ')})` : 'no'}${r.fps ? ' · ' + r.fps.toFixed(1) + ' fps' : ''}`, 'setup');
+  for (const e of r.ptErr || []) log(`tracce iPhone: traccia ${e.trackId ?? '?'} (${e.entry ?? '?'}) non leggibile — ${e.message} → non verrà copiata`, 'warn');
+  emit('file', { name: f.name, sizeMB: f.size / MB_, durationS: r.dur, width: r.W, height: r.H, hdr: r.hdr, dolbyVision: r.dv, fps: r.fps, aacBps: r.aacBps, apac: !!r.apac, apacBps: r.apacBps || 0, meta: r.meta?.length || 0 });
   await refreshResume(); if (f !== file) return;
   await updateEstimate();
 }
@@ -574,14 +576,27 @@ async function run({ forceFresh = false } = {}) {
   const base = file.name.replace(/\.[^.]+$/, ''), brTag = sceneQ ? `autoQ88-max${bitrate / 1e6}M` : `${bitrate / 1e6}M`;
   const dsTag = cfg.downscale && info && downscaleDims(info.W, info.H) ? '_1080p' : '';
   outName = `${base}_${brTag}${dsTag}_k${gopSec}s_${aTag}_${VER}.mp4`;
-  // Audio spaziale (apac, v0.32): copiato byte per byte in un secondo mdat SOLO se l'AAC in uscita è la copia dell'originale.
-  let apacT = null;
-  if (srcMoov) { try { apacT = readApacTrack(srcMoov); } catch (e) { log(`audio spaziale (apac): traccia non leggibile (${e?.message || e}) → non copiata`, 'warn'); } }
-  if (apacT) {
-    const why = !cfg.apac ? 'disattivato nelle opzioni avanzate' : !aac ? 'nessuna traccia AAC in uscita da affiancare' : echoFix ? `audio ricodificato (${aTag}): la traccia spaziale conterrebbe ancora l'audio originale, diverso dall'AAC corretto (e Foto sceglierebbe quella)` : '';
-    if (why) { log(`audio spaziale (apac): NON copiato — ${why}`); apacT = null; }
-    else log(`audio spaziale (apac): sorgente traccia ${apacT.trackId}, ${apacT.sampleCount} campioni, ${apacT.channels} ch ${apacT.sampleRate} Hz, ${fmtMB(apacT.totalBytes)} → copia byte per byte a fine file`);
+  // Passthrough tracce iPhone (v0.33, app/lib/passthrough.js): audio spaziale 'apac' + TUTTE le mebx (video-orientation,
+  // cinematic-audio, detected-face, live-photo-info, scene-illuminance, …), copiate byte per byte in un secondo mdat.
+  // apac (e la mebx 'cinematic-audio' che la riferisce, necessaria a «Mix audio» in Foto) SOLO se l'AAC in uscita è la copia
+  // dell'originale; le mebx che dipendono dal video si copiano sempre. Righe 'setup'/'summary'/'warn': finiscono nel riassunto.
+  let ptInfo = null, ptSel = null;
+  if (!srcMoov) log('tracce iPhone: moov sorgente non letto → nessuna traccia extra copiata', 'warn');
+  else { try { ptInfo = readPassthrough(srcMoov); } catch (e) { log(`tracce iPhone: lettura fallita (${e?.message || e}) → non copiate`, 'warn'); } }
+  if (ptInfo) {
+    for (const e of ptInfo.errors) log(`tracce iPhone: traccia ${e.trackId} (${e.entry}) non leggibile (${e.message}) → non copiata`, 'warn');
+    const has = !!ptInfo.apac || ptInfo.meta.length > 0;
+    const whyApac = !ptInfo.apac ? '' : !cfg.apac ? 'disattivato nelle opzioni avanzate' : !aac ? 'nessuna traccia AAC in uscita da affiancare' : echoFix ? `audio ricodificato (${aTag}): la traccia spaziale conterrebbe ancora l'audio originale, diverso dall'AAC corretto (e Foto sceglierebbe quella)` : '';
+    if (!has) log(`tracce iPhone: la sorgente non ha audio spaziale né metadati mebx (tracce audio lette: ${audios.length})`, 'setup');
+    else {
+      ptSel = selectPassthrough(ptInfo, { apac: !whyApac, meta: !!cfg.apac, aacOut: !!aac });
+      if (ptInfo.apac) log(whyApac ? `audio spaziale (apac): NON copiato — ${whyApac}` : `audio spaziale (apac): sorgente traccia ${ptInfo.apac.trackId}, ${ptInfo.apac.sampleCount} campioni, ${fmtMB(ptInfo.apac.totalBytes)} → copia byte per byte a fine file`, 'setup');
+      for (const x of ptSel.skipped) if (x.track.entry !== 'apac') log(`tracce iPhone: ${x.track.label} (traccia ${x.track.trackId}) NON copiata — ${x.reason}`, 'setup');
+      if (ptSel.tracks.length) log(`tracce iPhone da copiare: ${ptSel.tracks.map((t) => `${t.label} (${t.trackId})`).join(', ')}`, 'setup');
+      else { log(`tracce iPhone: nessuna copiata${!cfg.apac ? ' (opzione «Mantieni audio spaziale e metadati iPhone» disattivata)' : ''}`, 'setup'); ptSel = null; }
+    }
   }
+  const apacT = ptSel?.tracks.find((t) => t.entry === 'apac') || null;
   const label = `${base} · ${sceneQ ? `qualità per scena ≤ ${bitrate / 1e6}` : bitrate / 1e6} Mbps${dsTag ? ' · 1080p' : ''} · key ${gopSec}s · ${aTag} · ${VER}`;
   store = await openOpfsStore(outName);
   const target = new MB.StreamTarget(new WritableStream({ write: (c) => store.write(c.position, c.data) }), { chunked: true, chunkSize: 4 * MB_ });
@@ -660,19 +675,27 @@ async function run({ forceFresh = false } = {}) {
   // moov in coda: lo riscrivo SENZA caricare mdat: leggo solo header + moov dal file OPFS, tronco a prefixLength e appendo il nuovo moov.
   const outSize = await store.size();
   const { prefixLength, moov } = await rewriteMoov({ size: outSize, read: (o, l) => store.read(o, l) }, (m) => { let x = srcMoov ? copySourceMetadata(srcMoov, m) : m; if (dvBox) x = insertIntoVideoSampleEntry(x, dvBox);
-    x = setMetaString(x, 'com.apple.quicktime.displayname', label); x = setMetaString(x, 'com.apple.quicktime.description', `finally-compress-video ${VER} · ${sceneQ ? 'qualità per scena (VMAF stimato ≥ 88), limite' : 'target'} ${bitrate / 1e6} Mbps${dsTag ? ' · ridotto a 1080p' : ''} · keyframe ${gopSec}s · audio ${aTag}${apacT ? ' + spaziale (apac)' : ''}`); return x; });
+    x = setMetaString(x, 'com.apple.quicktime.displayname', label); x = setMetaString(x, 'com.apple.quicktime.description', `finally-compress-video ${VER} · ${sceneQ ? 'qualità per scena (VMAF stimato ≥ 88), limite' : 'target'} ${bitrate / 1e6} Mbps${dsTag ? ' · ridotto a 1080p' : ''} · keyframe ${gopSec}s · audio ${aTag}${apacT ? ' + spaziale (apac)' : ''}${ptSel && ptSel.tracks.some((t) => t.entry === 'mebx') ? ' + metadati iPhone' : ''}`); return x; });
   setProg('scrittura', .3, 'riscrittura moov');
   await store.truncate(prefixLength);
   let moovOut = moov, moovPos = prefixLength;
-  if (apacT) { // [mdat Mediabunny][mdat apac (largesize se > 4 GB)][moov + trak apac]: chunk letti dal File sorgente a blocchi, scritti via worker OPFS
-    const plan = planApacMdat(apacT, prefixLength), tA = performance.now();
-    await store.write(prefixLength, plan.header);
-    await copyApacData(apacT, { read: async (o, l) => new Uint8Array(await file.slice(o, o + l).arrayBuffer()), write: (p, u8) => store.write(p, u8), pos: plan.dataStart,
-      check: async () => checkCancel(), onProgress: (f) => setProg('scrittura', .3 + .6 * f, 'audio spaziale') });
-    // trim: stessa traslazione del video (-frames[0].ts) tramite la edit list, nessun campione tagliato
-    const r = addApacTrack(moov, apacT, { chunkOffsets: plan.chunkOffsets, shiftS: frames[0].ts });
-    moovOut = r.moov; moovPos = prefixLength + plan.size;
-    log(`audio spaziale: copiati ${apacT.sampleCount} campioni (${fmtMB(apacT.totalBytes)}), traccia ${r.trackId}, gruppo alternativo ${r.alternateGroup} · ${apacT.chunks.length} chunk${plan.co64 ? ' (co64)' : ''}${plan.header.length === 16 ? ', mdat 64 bit' : ''} in ${((performance.now() - tA) / 1000).toFixed(1)} s · AAC traccia ${r.aacTrackId} ${apacT.sourceAac && !(apacT.sourceAac.flags & 1) ? 'disattivata (riserva, come nell\'originale)' : 'attiva (come nell\'originale)'}${frames[0].ts > 0 ? ` · edit list traslata di ${frames[0].ts.toFixed(4)} s` : ''}`);
+  if (ptSel) { // [mdat Mediabunny][mdat tracce iPhone (largesize se > 4 GB)][moov + trak copiati]: chunk letti dal File sorgente a blocchi (ordine del file), scritti via worker OPFS
+    try {
+      const plan = planPassthroughMdat(ptSel.tracks, prefixLength), tA = performance.now();
+      await store.write(prefixLength, plan.header);
+      await copyPassthroughData(plan, { read: async (o, l) => new Uint8Array(await file.slice(o, o + l).arrayBuffer()), write: (p, u8) => store.write(p, u8),
+        check: async () => checkCancel(), onProgress: (f) => setProg('scrittura', .3 + .6 * f, apacT ? 'audio spaziale e metadati' : 'metadati iPhone') });
+      // trim: stessa traslazione del video (-frames[0].ts) tramite la edit list, nessun campione tagliato
+      const r = addPassthroughTracks(moov, ptInfo, ptSel.tracks, { chunkOffsets: plan.chunkOffsets, shiftS: frames[0].ts });
+      moovOut = r.moov; moovPos = prefixLength + plan.size;
+      const idm = [...r.idMap].map(([a, b]) => `${a}→${b}`).join(' ');
+      log(`tracce iPhone copiate: ${r.added.length} (${fmtMB(plan.totalBytes)}${plan.co64 ? ', co64' : ''}${plan.header.length === 16 ? ', mdat 64 bit' : ''}, ${((performance.now() - tA) / 1000).toFixed(1)} s) · ${r.added.map(describeAdded).join(' · ')} · mappa ID ${idm}${frames[0].ts > 0 ? ` · edit list traslate di ${frames[0].ts.toFixed(4)} s` : ''}`, 'summary');
+      if (apacT) log(`audio spaziale: copiati ${apacT.sampleCount} campioni, traccia ${r.idMap.get(apacT.trackId)}, gruppo alternativo ${r.alternateGroup} · AAC traccia ${r.aacTrackId} ${ptInfo.aac && !(ptInfo.aac.flags & 1) ? 'disattivata (riserva, come nell\'originale)' : 'attiva (come nell\'originale)'}${r.added.some((a) => a.keys.some((k) => /cinematic-audio/.test(k))) ? ' · cinematic-audio collegata (Mix audio)' : ''}`, 'summary');
+      for (const d of r.dropped) log(`tracce iPhone: riferimento ${d} senza traccia corrispondente → rimosso`, 'warn');
+    } catch (e) { // copia fallita: file senza tracce extra (il moov di Mediabunny resta valido), errore nel riassunto
+      if (cancelled) throw e;
+      log(`⚠️ tracce iPhone NON copiate: ${e?.message || e}`, 'warn'); moovOut = moov; moovPos = prefixLength; await store.truncate(prefixLength);
+    }
   }
   await store.write(moovPos, moovOut); await store.flush(); await store.close();
   const f0 = await store.getFile(); store = null;

@@ -9,6 +9,7 @@ run node app/lib/dovi.test.mjs
 run node app/lib/downscale.test.mjs
 run node app/lib/echo.test.mjs
 run node app/lib/apac.test.mjs
+run node app/lib/passthrough.test.mjs
 run node --test app/lib/ratecontrol.test.mjs
 run node tools/lab/brctl-test.mjs
 rm -f /tmp/.fcv-test.$$
