@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.35.1';
-import { sprite, SPRITES } from './sprite.js?v=0.35.1';
-import { createLogStore } from './logstore.js?v=0.35.1';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.1';
+import { bus } from './bus.js?v=0.35.2';
+import { sprite, SPRITES } from './sprite.js?v=0.35.2';
+import { createLogStore } from './logstore.js?v=0.35.2';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.2';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -143,7 +143,7 @@ function template(opts) {
     </fieldset>
     <fieldset class="fcv-field" data-ref="dsBox" hidden>
       <legend class="px-label">Risoluzione</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-ds" value="1"><div><b>Riduci a 1080p (sperimentale)</b><i>(solo video con lato corto oltre 1080)</i><span>Il video esce a 1080×1920 (o 1920×1080) invece che in 4K, sempre HDR a 10 bit: a parità di bitrate la qualità percepita sale. Spetta all'encoder di Safari ridurre i fotogrammi: se non ci riesce mantenendo i 10 bit l'export si ferma con un messaggio (nessun ripiego a 8 bit). Il tempo resta quello del 4K.</span></div></label>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-ds" value="1"><div><b>Riduci a 1080p (sperimentale, oggi non funziona)</b><i>(su Safari 27 l'encoder riduce a 8 bit: HDR perso → oggi l'export si ferma)</i><span>Misurato su iPhone (Safari 27.0.1): quando è l'encoder di Safari a ridurre il 4K a 1080p l'uscita diventa 8 bit (HDR perso), quindi l'app ferma l'export con un messaggio invece di salvare un video senza HDR. Lascia l'opzione spenta: resta qui solo per riprovare dopo un aggiornamento di Safari. Se un giorno funzionasse: video a 1080×1920 (o 1920×1080) HDR a 10 bit, tempo come il 4K.</span></div></label>
     </fieldset>
     <fieldset class="fcv-field">
       <legend class="px-label">Sperimentale</legend>

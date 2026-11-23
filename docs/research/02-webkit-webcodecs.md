@@ -288,3 +288,5 @@ async function reconfigTest() {
 3. `bit depth 8` (profilo 1) ⇒ scala ma perde i 10 bit: job interrotto.
 4. `FALLITO … Dettaglio tecnico: configure()/encode()/flush(): <Errore>` ⇒ configurazione o frame di dimensioni diverse rifiutati.
 In tutti i casi 2–4 l'app mostra il messaggio chiaro e NON ripiega; annotare qui il risultato (modello, iOS, esito) dopo la prova.
+
+**Esito su device (v0.35.1, iPhone 17 Pro Max, Safari 27.0.1, IMG_1418 2160×3840 HLG DV) ✅: caso 3** — l'encoder scala ma esce hvcC profilo 1, bit depth 8, coded 1088×1920 → HDR perso, job interrotto come previsto. Causa nel sorgente (pool VT forzato a NV12 8 bit) e candidati alternativi: `research/14-downscale-10bit.md`, pagina `tools/diag/downscale10.html`.
