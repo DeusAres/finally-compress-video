@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Banco x265 WASM</title>
+<style>
+/* Layout: colonna unica da laboratorio, card impilate (stile di tools/diag/downscale10.html) */
+:root{--bg:#f6f7f9;--fg:#15191f;--mut:#5b6573;--card:#fff;--line:#dde2e8;--acc:#1d5fd1;--ok:#137a3a;--ko:#b3261e;--warn:#9a6700;--mono:ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif;margin:0 auto;padding:20px max(16px,env(safe-area-inset-right)) 40px max(16px,env(safe-area-inset-left));max-width:820px}
+h1{font-size:1.35rem;margin:0 0 4px;text-wrap:balance}h2{font-size:1rem;margin:0}
+p,li{color:var(--mut)}p{margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;display:grid;gap:10px;min-width:0}
+button{font:inherit;background:var(--acc);color:var(--bg);border:0;border-radius:8px;padding:10px 14px;cursor:pointer;justify-self:start}
+button.sec{background:transparent;color:var(--acc);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:default}button:focus-visible{outline:3px solid var(--fg)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+label{display:flex;gap:6px;align-items:center;color:var(--fg)}
+select,input[type=file]{font:inherit;max-width:100%}
+pre{font:12px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:320px;margin:0;white-space:pre-wrap;word-break:break-word}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;font:12px var(--mono);min-width:100%}
+th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+.ok{color:var(--ok)}.ko{color:var(--ko)}.warn{color:var(--warn)}
+#state{font:600 1rem var(--mono)}
+</style>
+</head>
+<body>
+<h1>Banco x265 WASM (HEVC Main10, 1080×1920) <small style="font-size:.55em;opacity:.75">v1 · 23/11</small></h1>
+<p>Misura quanto è veloce un encoder <b>software</b> HEVC 10 bit (x265 dentro ffmpeg.wasm) su questo telefono, codificando frame 1080×1920 yuv420p10le a 8 Mbps con vari preset. Procedura: scegli il video (consigliato: il tuo 4K HDR) oppure lascia «sintetici», premi <b>Esegui</b>, tieni la pagina in primo piano e lo schermo acceso, attendi «finito», poi <b>Copia risultati</b> e incolla in chat. Scarica ~64 MB (encoder) la prima volta; ogni preset ha un limite di tempo.</p>
+
+<div class="card">
+  <h2>Ambiente</h2>
+  <pre id="env">Rilevo…</pre>
+  <div class="row"><button class="sec" id="unreg">Rimuovi il service worker di questa pagina</button></div>
+</div>
+
+<div class="card">
+  <h2>Impostazioni</h2>
+  <div class="row"><label>Sorgente <select id="src"><option value="video">Video scelto (WebGPU → 1080p → YUV 10 bit)</option><option value="synth">Frame sintetici (rumore + gradiente + movimento)</option></select></label></div>
+  <div class="row"><input type="file" id="file" accept="video/*"></div>
+  <div class="row">
+    <label>Frame <select id="nf"><option value="30">30 (0,5 s a 60 fps)</option><option value="60">60 (1 s)</option><option value="120">120 (2 s, ~750 MB di RAM)</option><option value="10">10</option></select></label>
+    <label>Limite per preset <select id="lim"><option value="60">60 s</option><option value="30">30 s</option><option value="120">120 s</option></select></label>
+  </div>
+  <div class="row" id="presets"></div>
+  <div class="row"><label><input type="checkbox" id="st" checked> prova anche single-thread (limite 20 s)</label></div>
+  <div class="row"><button id="go">Esegui</button></div>
+  <div id="state">pronto</div>
+</div>
+
+<div class="card"><h2>Riepilogo</h2><div class="tw" id="sum">Nessun dato.</div>
+<p style="margin:0">«fps enc.» = frame codificati / tempo di codifica (dall'avvio di ffmpeg, compresa l'inizializzazione di x265). «fps x265» = quanto dichiara x265 a fine codifica (senza inizializzazione) o, se interrotto dal limite, la velocità tra il primo e l'ultimo avanzamento. «54 s» = stima per 3240 frame (54 s a 60 fps) alla velocità di regime, solo codifica (la preparazione frame si somma se non è in parallelo).</p></div>
+<div class="card"><h2>Log</h2><pre id="log">In attesa.</pre></div>
+<div class="card"><h2>Risultati</h2><div class="row"><button id="copy">Copia risultati</button><span id="copied" class="ok"></span></div><pre id="oc">{}</pre></div>
+<video id="vsrc" muted playsinline preload="auto" hidden></video>
+
+<script>
+'use strict';
+// ---------- fonte dell'encoder: ffmpeg.wasm (core con libx265 compilato a 10 bit) da CDN, versione esatta ----------
+const CORE_VER = '0.12.10';
+const CDN = {
+  mt: { core: `https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@${CORE_VER}/dist/umd/ffmpeg-core.js`, wasm: `https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@${CORE_VER}/dist/umd/ffmpeg-core.wasm`, worker: `https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@${CORE_VER}/dist/umd/ffmpeg-core.worker.js` },
+  st: { core: `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VER}/dist/umd/ffmpeg-core.js`, wasm: `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VER}/dist/umd/ffmpeg-core.wasm` },
+};
+// ?base=<url> sostituisce jsdelivr (prove locali: stessa struttura di cartelle /core-mt/… e /core/…)
+const BASE = new URLSearchParams(location.search).get('base');
+if (BASE) for (const [k, o] of Object.entries(CDN)) for (const f of Object.keys(o)) o[f] = o[f].replace(/^https:\/\/cdn\.jsdelivr\.net\/npm\/@ffmpeg\/(core(-mt)?)@[^/]+/, `${BASE}/$1`);
+const PRESETS = [['ultrafast', 1], ['superfast', 1], ['veryfast', 1], ['faster', 0], ['medium', 1]];
+const TOTAL_FRAMES = 54 * 60;
+
+const $ = (id) => document.getElementById(id);
+const R = { page: 'tools/diag/x265bench.html v1', ua: navigator.userAgent, when: new Date().toISOString(), encoder: { lib: '@ffmpeg/core(-mt)', version: CORE_VER, urls: CDN }, env: {}, settings: {}, source: {}, runs: [] };
+const show = () => { $('oc').textContent = JSON.stringify(R, null, 1); };
+const T0 = performance.now();
+const log = (s, cls) => { const L = $('log'); if (L.textContent === 'In attesa.') L.textContent = ''; L.textContent += `[${((performance.now() - T0) / 1000).toFixed(1)}s] ${s}\n`; L.scrollTop = L.scrollHeight; if (cls === 'state') $('state').textContent = s; };
+const errStr = (e) => `${e?.name || 'Error'}: ${e?.message || e}`;
+const now = () => performance.timeOrigin + performance.now(); // stessa base nel Worker
+$('presets').innerHTML = 'Preset: ' + PRESETS.map(([p, d]) => `<label><input type="checkbox" data-p="${p}" ${d ? 'checked' : ''}> ${p}</label>`).join('');
+
+// ---------- isolamento (COOP/COEP via service worker limitato a questa pagina) ----------
+async function ensureIsolation() {
+  const E = R.env;
+  E.crossOriginIsolated = !!self.crossOriginIsolated;
+  if (self.crossOriginIsolated || !('serviceWorker' in navigator) || /[?&]nocoi\b/.test(location.search) || !window.isSecureContext) {
+    if (!self.crossOriginIsolated) E.coi = !('serviceWorker' in navigator) ? 'serviceWorker assente' : !window.isSecureContext ? 'contesto non sicuro' : /nocoi/.test(location.search) ? '?nocoi' : '';
+    return;
+  }
+  try {
+    const reg = await navigator.serviceWorker.register('x265bench-sw.js', { scope: './x265bench.html' });
+    E.coi = `sw registrato (scope ${reg.scope})`;
+    let tried = null; try { tried = sessionStorage.getItem('x265coi'); } catch {}
+    if (tried) { E.coi += ' — ricaricata ma ancora non isolata'; try { sessionStorage.removeItem('x265coi'); } catch {} return; }
+    const sw = reg.installing || reg.waiting || reg.active;
+    if (sw && sw.state !== 'activated') await new Promise((res) => { const t = setTimeout(res, 4000); sw.addEventListener('statechange', () => { if (sw.state === 'activated') { clearTimeout(t); res(); } }); });
+    try { sessionStorage.setItem('x265coi', '1'); } catch {}
+    log('service worker attivo: ricarico la pagina per ottenere crossOriginIsolated…', 'state');
+    location.reload();
+    await new Promise(() => {}); // in attesa del ricaricamento
+  } catch (e) { E.coi = 'registrazione sw fallita: ' + errStr(e); }
+}
+$('unreg').onclick = async () => {
+  try { const regs = await navigator.serviceWorker.getRegistrations(); let n = 0; for (const r of regs) if (r.scope.endsWith('/x265bench.html')) { await r.unregister(); n++; } log(`service worker rimossi: ${n}`, 'state'); } catch (e) { log('rimozione: ' + errStr(e), 'state'); }
+};
+
+function simdOk() { try { return WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11])); } catch { return false; } }
+function threadsOk() { try { return typeof SharedArrayBuffer !== 'undefined' && WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 5, 4, 1, 3, 1, 1, 10, 11, 1, 9, 0, 65, 0, 254, 16, 2, 0, 26, 11])); } catch { return false; } }
+async function envInfo() {
+  const E = R.env;
+  Object.assign(E, { crossOriginIsolated: !!self.crossOriginIsolated, sharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined', hardwareConcurrency: navigator.hardwareConcurrency ?? null, deviceMemory: navigator.deviceMemory ?? null, wasmSimd: simdOk(), wasmThreads: threadsOk(), webgpu: !!navigator.gpu, swController: !!navigator.serviceWorker?.controller });
+  $('env').textContent = JSON.stringify(E, null, 1); show();
+}
+
+// ---------- download dei file dell'encoder (una volta, blob URL: stessa origine, funzionano sotto COEP e nei Worker) ----------
+const BLOBS = {};
+async function fetchBlob(url, type) {
+  if (BLOBS[url]) return BLOBS[url];
+  const t = performance.now(), r = await fetch(url, { mode: 'cors', cache: 'force-cache' });
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  const b = await r.blob(); const u = URL.createObjectURL(new Blob([b], { type }));
+  (R.download = R.download || {})[url.split('/@ffmpeg/')[1] || url] = { MB: +(b.size / 1048576).toFixed(1), ms: Math.round(performance.now() - t) };
+  return (BLOBS[url] = u);
+}
+async function coreUrls(mode) {
+  const c = CDN[mode];
+  return { core: await fetchBlob(c.core, 'text/javascript'), wasm: await fetchBlob(c.wasm, 'application/wasm'), worker: c.worker ? await fetchBlob(c.worker, 'text/javascript') : '' };
+}
+
+// ---------- Worker che esegue ffmpeg (exec è bloccante; il core multi-thread non può girare sul main thread) ----------
+const WORKER_SRC = `'use strict';
+const now=()=>performance.timeOrigin+performance.now();
+onmessage=async(e)=>{const d=e.data;
+ try{
+  importScripts(d.core);
+  const t0=now();
+  const M=await createFFmpegCore({mainScriptUrlOrBlob:d.core+'#'+btoa(JSON.stringify({wasmURL:d.wasm,workerURL:d.worker}))});
+  postMessage({type:'ready',ms:now()-t0});
+  M.setLogger(({message})=>postMessage({type:'log',m:message,t:now()}));
+  M.FS.writeFile('in.yuv',new Uint8Array(d.frames),{canOwn:true});
+  postMessage({type:'start',t:now()});
+  const rc=M.exec(...d.args);
+  const te=now();let out=null;try{out=M.FS.readFile('out.hevc')}catch{}
+  postMessage({type:'done',rc,t:te,size:out?out.length:-1,head:out?out.slice(0,4096):null});
+ }catch(err){postMessage({type:'err',m:String(err&&err.message||err)})}
+};`;
+const WORKER_URL = URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' }));
+
+/** Un passaggio di codifica: nuovo Worker (memoria liberata con terminate), limite di tempo duro. */
+function encodeRun({ mode, preset, frames, W, H, fps, N, limitMs, urls }) {
+  return new Promise((resolve) => {
+    const r = { mode, preset, frames: N, limitS: limitMs / 1000, x265: {} }, logs = [], prog = [];
+    const args = ['-loglevel', 'info', '-f', 'rawvideo', '-pix_fmt', 'yuv420p10le', '-s', `${W}x${H}`, '-r', String(fps), '-i', 'in.yuv',
+      '-c:v', 'libx265', '-preset', preset, '-b:v', '8M', '-pix_fmt', 'yuv420p10le', '-x265-params', 'log-level=info', '-progress', 'pipe:1', '-stats_period', '1', '-nostats', '-f', 'hevc', 'out.hevc'];
+    r.args = args.join(' ');
+    const w = new Worker(WORKER_URL); let tReady = null, tStart = null, timer = null, finished = false;
+    const tCreate = now();
+    const finish = (extra) => {
+      if (finished) return; finished = true; clearTimeout(timer); try { w.terminate(); } catch {}
+      Object.assign(r, extra);
+      r.initMs = tReady != null ? Math.round(tReady) : null;
+      for (const m of logs) { // righe utili di x265
+        let k;
+        if (/build info/.test(m)) r.x265.build = m.replace(/^x265 \[info\]: /, '');
+        else if ((k = m.match(/Thread pool created using (\d+) threads?/))) r.x265.poolThreads = +k[1];
+        else if ((k = m.match(/frame threads \/ pool features\s*:\s*(.*)/))) r.x265.frameThreads = k[1].trim();
+        else if ((k = m.match(/(Main[^,]*profile)/)) && !r.x265.profile) r.x265.profile = k[1];
+        else if (/using cpu capabilities/.test(m)) r.x265.cpu = m.replace(/^x265 \[info\]: /, '');
+        else if ((k = m.match(/encoded (\d+) frames in ([\d.]+)s \(([\d.]+) fps\), ([\d.]+) kb\/s/))) Object.assign(r.x265, { encoded: +k[1], s: +k[2], fps: +k[3], kbps: +k[4] });
+      }
+      const fr = prog.filter((p) => p.f > 0); // avanzamento: righe «frame=N» di -progress (una al secondo)
+      const lastF = r.x265.encoded ?? (fr.length ? fr[fr.length - 1].f : 0);
+      r.framesDone = lastF;
+      const tEnd = r.tEnd ?? now(); delete r.tEnd;
+      if (tStart != null) { r.encodeMs = Math.round(tEnd - tStart); r.fpsEnc = lastF ? +(lastF / ((tEnd - tStart) / 1000)).toFixed(3) : 0; }
+      if (fr.length >= 2) { const a = fr[0], b = fr[fr.length - 1]; if (b.f > a.f && b.t > a.t) r.fpsSteady = +((b.f - a.f) / ((b.t - a.t) / 1000)).toFixed(3); r.firstOutMs = Math.round(a.t - tStart); }
+      const best = r.x265.fps || r.fpsSteady || r.fpsEnc; // x265 «encoded N frames in Xs» se finito, altrimenti avanzamento
+      if (best) r.stima54s = { min: +(TOTAL_FRAMES / best / 60).toFixed(1), fps: best };
+      if (r.size > 0) r.kbps = +(r.size * 8 / (Math.max(1, r.framesDone || N) / fps) / 1000).toFixed(0);
+      r.logTail = logs.filter((m) => /x265|rror|fail|abort|memory/i.test(m)).slice(-14);
+      resolve(r);
+    };
+    w.onmessage = (e) => {
+      const d = e.data;
+      if (d.type === 'ready') { tReady = d.ms; log(`  ${mode} ${preset}: core pronto in ${Math.round(d.ms)} ms`); }
+      else if (d.type === 'start') { tStart = d.t; timer = setTimeout(() => { log(`  ${mode} ${preset}: limite ${limitMs / 1000} s raggiunto, interrompo`); finish({ esito: 'limite di tempo' }); }, limitMs); }
+      else if (d.type === 'log') {
+        const k = /^frame=(\d+)$/.exec(d.m);
+        if (k) { prog.push({ f: +k[1], t: d.t }); $('state').textContent = `${mode} ${preset}: frame ${k[1]}/${N} (${((d.t - tStart) / 1000).toFixed(0)} s)`; }
+        else { logs.push(d.m); if (/encoded \d+ frames|Main.*profile|rror/.test(d.m)) log('  ' + d.m); }
+      }
+      else if (d.type === 'done') {
+        r.rc = d.rc; r.size = d.size; r.tEnd = d.t;
+        if (d.head) { try { r.sps = spsFromAnnexB(d.head); } catch (x) { r.sps = 'ERR ' + errStr(x); } }
+        finish({ esito: d.rc === 0 && d.size > 0 ? 'ok' : `rc ${d.rc}` });
+      } else if (d.type === 'err') finish({ esito: 'errore', err: d.m });
+    };
+    w.onerror = (e) => { e.preventDefault?.(); finish({ esito: 'errore worker', err: e.message || 'errore worker' }); };
+    // senza start entro 90 s (download/compilazione/thread) → errore
+    setTimeout(() => { if (tStart == null) finish({ esito: 'core non avviato in 90 s', createToReadyMs: tReady }); }, 90000);
+    const copy = frames.slice(0); // ogni Worker riceve la sua copia (trasferita)
+    w.postMessage({ ...urls, args, frames: copy }, [copy]);
+    void tCreate;
+  });
+}
+
+// ---------- SPS HEVC dall'uscita Annex B (profilo e bit depth effettivi) ----------
+function spsFromAnnexB(b) {
+  for (let i = 0; i + 4 < b.length; i++) {
+    if (b[i] === 0 && b[i + 1] === 0 && b[i + 2] === 1 && ((b[i + 3] >> 1) & 63) === 33) {
+      let j = i + 3; while (j + 3 < b.length && !(b[j] === 0 && b[j + 1] === 0 && (b[j + 2] === 1 || (b[j + 2] === 0 && b[j + 3] === 1)))) j++;
+      return parseSps(b.subarray(i + 3, j));
+    }
+  }
+  return 'SPS non trovato';
+}
+function parseSps(nal) {
+  const u = []; for (let i = 0, z = 0; i < nal.length; i++) { if (z >= 2 && nal[i] === 3) { z = 0; continue; } u.push(nal[i]); z = nal[i] === 0 ? z + 1 : 0; }
+  let p = 16; const bit = () => (u[p >> 3] >> (7 - (p++ & 7))) & 1, rd = (n) => { let v = 0; for (let i = 0; i < n; i++) v = v * 2 + bit(); return v; };
+  const ue = () => { let z = 0; while (bit() === 0 && z < 32) z++; return z ? (2 ** z - 1) + rd(z) : 0; };
+  rd(4); const maxSub = rd(3); rd(1); rd(2); rd(1); const profile = rd(5); rd(32); rd(48); const level = rd(8);
+  const pp = [], lp = []; for (let i = 0; i < maxSub; i++) { pp.push(rd(1)); lp.push(rd(1)); }
+  if (maxSub > 0) for (let i = maxSub; i < 8; i++) rd(2);
+  for (let i = 0; i < maxSub; i++) { if (pp[i]) { rd(32); rd(32); rd(24); } if (lp[i]) rd(8); }
+  ue(); const chroma = ue(); if (chroma === 3) rd(1);
+  const w = ue(), h = ue(); if (rd(1)) { ue(); ue(); ue(); ue(); }
+  return { profile, level, chroma, w, h, bitDepthLuma: ue() + 8, bitDepthChroma: ue() + 8 };
+}
+
+// ---------- frame: sintetici o dal video (WebGPU importExternalTexture → 1080p float → YUV 10 bit BT.2020 limitato) ----------
+const fsz = (W, H) => W * H * 3; // byte per frame yuv420p10le
+function synthFrames(W, H, N) {
+  const buf = new ArrayBuffer(fsz(W, H) * N), ys = W * H, cw = W / 2, ch = H / 2; let s = 12345;
+  const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  const t0 = performance.now();
+  for (let f = 0; f < N; f++) {
+    const a = new Uint16Array(buf, f * fsz(W, H), ys * 1.5), dx = f * 6, dy = f * 3;
+    for (let y = 0; y < H; y++) {
+      const gy = (y + dy) % H;
+      for (let x = 0; x < W; x++) {
+        const gx = (x + dx) % W;
+        let v = 120 + 700 * (gx / W) * 0.6 + 300 * (gy / H) * 0.4 + 60 * Math.sin(gx * 0.05) * Math.sin(gy * 0.03);
+        const cx = x - (300 + f * 9) % W, cy = y - (900 + f * 5) % H; if (cx * cx + cy * cy < 22000) v = 860; // disco in movimento
+        a[y * W + x] = Math.max(64, Math.min(940, Math.round(v + (rnd() - 0.5) * 24)));
+      }
+    }
+    for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+      a[ys + y * cw + x] = Math.round(512 + 120 * Math.sin((x + dx / 2) * 0.01) + (rnd() - 0.5) * 10);
+      a[ys + cw * ch + y * cw + x] = Math.round(512 + 100 * Math.cos((y + dy / 2) * 0.008) + (rnd() - 0.5) * 10);
+    }
+  }
+  return { buf, prepMsPerFrame: +((performance.now() - t0) / N).toFixed(1) };
+}
+const waitEv = (el, ev, ms) => new Promise((res) => { const t = setTimeout(() => { el.removeEventListener(ev, f); res('timeout'); }, ms); const f = () => { clearTimeout(t); res(ev); }; el.addEventListener(ev, f, { once: true }); });
+async function openVideo(el, url) {
+  el.src = url; el.load();
+  if (el.readyState < 1 && (await waitEv(el, 'loadedmetadata', 15000)) === 'timeout') throw new Error('loadedmetadata timeout' + (el.error ? ` (errore ${el.error.code})` : ''));
+  try { await Promise.race([el.play(), new Promise((_, j) => setTimeout(() => j(new Error('play')), 3000))]); el.pause(); } catch {}
+}
+async function seekFrame(el, t, ts) {
+  const pr = new Promise((res) => { const to = setTimeout(() => res(null), 400); el.requestVideoFrameCallback ? el.requestVideoFrameCallback((_, md) => { clearTimeout(to); res(md.mediaTime); }) : res(null); });
+  el.currentTime = t;
+  if ((await waitEv(el, 'seeked', 5000)) === 'timeout') throw new Error(`seek timeout @${t.toFixed(3)}s`);
+  const mt = await pr;
+  return { vf: new VideoFrame(el, { timestamp: ts, duration: 16667 }), mt };
+}
+function outDims(W, H) { // lato corto 1080 (come app/lib/downscale.js)
+  const s = Math.min(W, H), l = Math.max(W, H), short = s > 1080 ? 1080 : Math.max(2, Math.round(s / 4) * 2);
+  const lo = Math.round(l * short / s / 2) * 2; return H >= W ? { w: short, h: lo } : { w: lo, h: short };
+}
+const WGSL = `struct U{size:vec2f,pad:vec2f,K:vec4f};
+@group(0)@binding(0) var t:texture_external;@group(0)@binding(1) var s:sampler;@group(0)@binding(2) var<uniform> u:U;
+struct O{@builtin(position) p:vec4f};
+@vertex fn vs(@builtin(vertex_index) i:u32)->O{var q=array(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:O;o.p=vec4f(q[i],0,1);return o;}
+@fragment fn fs(o:O)->@location(0) vec4f{let c=clamp(textureSampleBaseClampToEdge(t,s,o.p.xy/u.size).rgb,vec3f(0),vec3f(1));
+let y=dot(c,u.K.xyz);let cb=(c.b-y)/(2.0*(1.0-u.K.z));let cr=(c.r-y)/(2.0*(1.0-u.K.x));
+return vec4f(64.0+876.0*y,512.0+896.0*cb,512.0+896.0*cr,1.0);}`;
+const WGSL2 = WGSL.replace('var t:texture_external;', 'var t:texture_2d<f32>;').replace('textureSampleBaseClampToEdge(t,s,o.p.xy/u.size)', 'textureSampleLevel(t,s,o.p.xy/u.size,0.0)');
+const KOF = { 'bt2020-ncl': [0.2627, 0.678, 0.0593], bt709: [0.2126, 0.7152, 0.0722], smpte170m: [0.299, 0.587, 0.114], bt470bg: [0.299, 0.587, 0.114] };
+let G = null, EXT = true;
+async function gpu() {
+  if (G && G.lost) G = null; // device perso (es. dopo un import fallito): se ne crea uno nuovo
+  if (G) return G;
+  if (!navigator.gpu) throw new Error('navigator.gpu assente');
+  const ad = await navigator.gpu.requestAdapter(); if (!ad) throw new Error('nessun adapter WebGPU');
+  const dev = await ad.requestDevice();
+  const mk = (code) => { const m = dev.createShaderModule({ code }); return dev.createRenderPipeline({ layout: 'auto', vertex: { module: m, entryPoint: 'vs' }, fragment: { module: m, entryPoint: 'fs', targets: [{ format: 'rgba32float' }] } }); };
+  const g = { dev, pExt: mk(WGSL), pCopy: mk(WGSL2), smp: dev.createSampler({ minFilter: 'linear', magFilter: 'linear' }) };
+  dev.lost.then(() => { g.lost = true; }); return (G = g);
+}
+/** Ripiego senza WebGPU: canvas 2D scalato → RGB 8 bit → YUV 10 bit (velocità indicativa, NON 10 bit veri). */
+let CV = null;
+function frameToYuvCanvas(vf, w, h, dst, K) {
+  const t0 = performance.now(); if (!CV || CV.width !== w || CV.height !== h) CV = new OffscreenCanvas(w, h);
+  const c = CV.getContext('2d', { willReadFrequently: true }); c.drawImage(vf, 0, 0, w, h);
+  const d = c.getImageData(0, 0, w, h).data, t1 = performance.now(), ys = w * h, cw = w / 2, cb = new Float32Array(ys), cr = new Float32Array(ys);
+  const cl = (v) => v < 0 ? 0 : v > 1023 ? 1023 : (v + 0.5) | 0;
+  for (let i = 0; i < ys; i++) { const r = d[4 * i] / 255, g = d[4 * i + 1] / 255, b = d[4 * i + 2] / 255, y = K[0] * r + K[1] * g + K[2] * b; dst[i] = cl(64 + 876 * y); cb[i] = (b - y) / (2 * (1 - K[2])); cr[i] = (r - y) / (2 * (1 - K[0])); }
+  for (let y = 0; y < h / 2; y++) for (let x = 0; x < cw; x++) { const a = 2 * y * w + 2 * x, j = y * cw + x; dst[ys + j] = cl(512 + 224 * (cb[a] + cb[a + 1] + cb[a + w] + cb[a + w + 1])); dst[ys + ys / 4 + j] = cl(512 + 224 * (cr[a] + cr[a + 1] + cr[a + w] + cr[a + w + 1])); }
+  return { gpuMs: t1 - t0, jsMs: performance.now() - t1 };
+}
+let NOGPU = false;
+async function frameToYuvAny(vf, w, h, dst, K) {
+  if (!NOGPU) {
+    for (let k = 0; k < 2; k++) { // secondo tentativo con un device nuovo (e il percorso copia) se il primo perde il device
+      try { return await frameToYuv(vf, w, h, dst, K); } catch (e) { if (k === 1 || !(G && G.lost)) { NOGPU = true; R.source.gpuPath = 'canvas 2D 8 bit (WebGPU non utilizzabile: ' + errStr(e) + ') — velocità indicativa, NON 10 bit'; break; } }
+    }
+  }
+  return frameToYuvCanvas(vf, w, h, dst, K);
+}
+/** VideoFrame → (dentro dst a offset frame) yuv420p10le w×h. Ritorna i ms di GPU+readback e di conversione JS. */
+async function frameToYuv(vf, w, h, dst, K) {
+  const g = await gpu(), dev = g.dev, bpr = Math.ceil(w * 16 / 256) * 256, t0 = performance.now();
+  const tex = dev.createTexture({ size: [w, h], format: 'rgba32float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+  const buf = dev.createBuffer({ size: bpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const ub = dev.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }); let tmp = null;
+  try {
+    dev.queue.writeBuffer(ub, 0, new Float32Array([w, h, 0, 0, K[0], K[1], K[2], 0]));
+    let pipe, res0;
+    if (EXT) { try { res0 = dev.importExternalTexture({ source: vf }); pipe = g.pExt; } catch (e) { EXT = false; R.source.gpuPath = 'copyExternalImageToTexture rgba16float (importExternalTexture fallito: ' + errStr(e) + ')'; } }
+    if (!EXT) {
+      tmp = dev.createTexture({ size: [vf.displayWidth, vf.displayHeight], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+      dev.queue.copyExternalImageToTexture({ source: vf }, { texture: tmp }, [vf.displayWidth, vf.displayHeight]); res0 = tmp.createView(); pipe = g.pCopy;
+    }
+    const bg = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: res0 }, { binding: 1, resource: g.smp }, { binding: 2, resource: { buffer: ub } }] });
+    const ce = dev.createCommandEncoder(), p = ce.beginRenderPass({ colorAttachments: [{ view: tex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 0] }] });
+    p.setPipeline(pipe); p.setBindGroup(0, bg); p.draw(3); p.end();
+    ce.copyTextureToBuffer({ texture: tex }, { buffer: buf, bytesPerRow: bpr }, [w, h]); dev.queue.submit([ce.finish()]);
+    await buf.mapAsync(GPUMapMode.READ);
+    const t1 = performance.now(), src = new Float32Array(buf.getMappedRange()), rf = bpr / 4, ys = w * h, cw = w / 2;
+    const cl = (v) => v < 0 ? 0 : v > 1023 ? 1023 : (v + 0.5) | 0;
+    for (let y = 0; y < h; y++) { const o = y * rf; for (let x = 0; x < w; x++) dst[y * w + x] = cl(src[o + 4 * x]); }
+    for (let y = 0; y < h / 2; y++) {
+      const o0 = 2 * y * rf, o1 = o0 + rf;
+      for (let x = 0; x < cw; x++) {
+        const a = 8 * x; // 2 pixel × 4 canali
+        dst[ys + y * cw + x] = cl((src[o0 + a + 1] + src[o0 + a + 5] + src[o1 + a + 1] + src[o1 + a + 5]) / 4);
+        dst[ys + ys / 4 + y * cw + x] = cl((src[o0 + a + 2] + src[o0 + a + 6] + src[o1 + a + 2] + src[o1 + a + 6]) / 4);
+      }
+    }
+    buf.unmap();
+    return { gpuMs: t1 - t0, jsMs: performance.now() - t1 };
+  } finally { buf.destroy(); tex.destroy(); ub.destroy(); tmp?.destroy(); }
+}
+async function videoFrames(file, N) {
+  const v = $('vsrc'), S = R.source, url = URL.createObjectURL(file);
+  await openVideo(v, url);
+  S.name = file.name; S.sizeMB = +(file.size / 1048576).toFixed(1); S.duration = v.duration; S.videoSize = [v.videoWidth, v.videoHeight];
+  const { w, h } = outDims(v.videoWidth, v.videoHeight); S.out = [w, h];
+  const buf = new ArrayBuffer(fsz(w, h) * N), mts = new Set(); let seekMs = 0, gpuMs = 0, jsMs = 0;
+  S.gpuPath = S.gpuPath || 'importExternalTexture';
+  for (let i = 0; i < N; i++) {
+    const t = Math.min(Math.max(0, v.duration - 0.01), (6.5 + i) / 60), t0 = performance.now();
+    const { vf, mt } = await seekFrame(v, t, Math.round(i * 16667)); seekMs += performance.now() - t0; mts.add(mt ?? t);
+    try {
+      if (i === 0) { const cs = vf.colorSpace?.toJSON ? vf.colorSpace.toJSON() : {}; S.frame = { format: vf.format, coded: [vf.codedWidth, vf.codedHeight], colorSpace: cs }; }
+      const K = KOF[vf.colorSpace?.matrix] || KOF['bt2020-ncl'];
+      const r = await frameToYuvAny(vf, w, h, new Uint16Array(buf, i * fsz(w, h), w * h * 1.5), K); gpuMs += r.gpuMs; jsMs += r.jsMs;
+    } finally { vf.close(); }
+    if (i % 5 === 0) $('state').textContent = `preparo frame ${i + 1}/${N}`;
+  }
+  v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url);
+  S.uniqueFrames = mts.size;
+  S.prepMsPerFrame = { seek: +(seekMs / N).toFixed(1), gpuReadback: +(gpuMs / N).toFixed(1), jsYuv: +(jsMs / N).toFixed(1), totale: +((seekMs + gpuMs + jsMs) / N).toFixed(1) };
+  // livelli: quanti codici luma non multipli di 4 (≈10 bit veri) nel frame 0
+  const y0 = new Uint16Array(buf, 0, w * h); let m4 = 0; const lv = new Set(); for (let i = 0; i < y0.length; i += 7) { if (y0[i] % 4 === 0) m4++; lv.add(y0[i]); }
+  S.livelliY = { campioni: Math.ceil(y0.length / 7), multipli4: +(m4 / Math.ceil(y0.length / 7)).toFixed(3), distinti: lv.size };
+  return { buf, w, h };
+}
+
+// ---------- riepilogo ----------
+function renderSummary() {
+  const rows = R.runs.map((r) => {
+    const cls = r.esito === 'ok' ? 'ok' : /limite/.test(r.esito) ? 'warn' : 'ko';
+    const sps = r.sps && typeof r.sps === 'object' ? `prof ${r.sps.profile} · ${r.sps.bitDepthLuma}/${r.sps.bitDepthChroma} bit · ${r.sps.w}×${r.sps.h}` : (r.sps || '—');
+    return `<tr><td>${r.mode}</td><td><b>${r.preset}</b></td><td class="${cls}">${r.esito}${r.err ? `<br><small>${String(r.err).replace(/</g, '&lt;').slice(0, 160)}</small>` : ''}</td><td>${r.framesDone ?? 0}/${r.frames}</td><td>${r.fpsEnc ?? '—'}</td><td>${r.x265.fps ?? r.fpsSteady ?? '—'}</td><td>${r.stima54s ? r.stima54s.min + ' min' : '—'}</td><td>${r.size > 0 ? (r.size / 1024).toFixed(0) + ' KB' : '—'}</td><td>${r.x265.poolThreads ?? '—'} / ${r.x265.frameThreads ?? '—'}</td><td>${sps}</td><td>${r.initMs ?? '—'}</td></tr>`;
+  });
+  $('sum').innerHTML = `<table><thead><tr><th>modo</th><th>preset</th><th>esito</th><th>frame</th><th>fps enc.</th><th>fps x265</th><th>54 s</th><th>uscita</th><th>thread pool / frame thr.</th><th>SPS uscita</th><th>init ms</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+}
+
+// ---------- flusso ----------
+$('go').onclick = async () => {
+  $('go').disabled = true; R.runs = []; R.source = {}; renderSummary();
+  const N = +$('nf').value, limitMs = +$('lim').value * 1000, presets = PRESETS.map(([p]) => p).filter((p) => document.querySelector(`input[data-p="${p}"]`).checked);
+  const srcMode = $('src').value, file = $('file').files[0];
+  R.settings = { source: srcMode, frames: N, fps: 60, bitrateMbps: 8, limitS: limitMs / 1000, presets, singleThread: $('st').checked };
+  try {
+    let fr;
+    if (srcMode === 'video' && file) {
+      log('preparo i frame dal video (WebGPU)…', 'state');
+      try { fr = await videoFrames(file, N); R.source.kind = 'video'; }
+      catch (e) { R.source.videoErr = errStr(e); log('video: ' + R.source.videoErr + ' → uso frame sintetici'); }
+    } else if (srcMode === 'video') log('nessun video scelto → frame sintetici');
+    if (!fr) { log('genero frame sintetici…', 'state'); const s = synthFrames(1080, 1920, N); fr = { buf: s.buf, w: 1080, h: 1920 }; Object.assign(R.source, { kind: 'sintetici', out: [1080, 1920], prepMsPerFrame: { totale: s.prepMsPerFrame } }); }
+    R.source.bufferMB = +(fr.buf.byteLength / 1048576).toFixed(0);
+    log(`frame pronti: ${N} × ${fr.w}×${fr.h} (${R.source.bufferMB} MB), preparazione ${JSON.stringify(R.source.prepMsPerFrame)} ms/frame`); show();
+    const modes = [];
+    if (self.crossOriginIsolated) modes.push('mt'); else log('niente crossOriginIsolated → multi-thread impossibile (SharedArrayBuffer assente)');
+    if ($('st').checked || !modes.length) modes.push('st');
+    for (const mode of modes) {
+      log(`scarico encoder ${mode === 'mt' ? '@ffmpeg/core-mt' : '@ffmpeg/core'} ${CORE_VER}…`, 'state');
+      let urls; try { urls = await coreUrls(mode); } catch (e) { R.runs.push({ mode, preset: '—', esito: 'download fallito', err: errStr(e), x265: {}, frames: N }); renderSummary(); continue; }
+      const list = mode === 'st' ? [presets[0] || 'ultrafast'] : presets;
+      for (const preset of list) {
+        log(`${mode} ${preset}: codifica…`, 'state');
+        const r = await encodeRun({ mode, preset, frames: fr.buf, W: fr.w, H: fr.h, fps: 60, N, limitMs: mode === 'st' ? Math.min(20000, limitMs) : limitMs, urls });
+        if (mode === 'st' && !r.framesDone && r.esito === 'limite di tempo') r.nota = 'nessun frame: il core single-thread si blocca in x265 (x265 richiede thread)';
+        R.runs.push(r); renderSummary(); show();
+        log(`${mode} ${preset}: ${r.esito} · ${r.framesDone}/${N} frame · fps ${r.x265.fps ?? r.fpsSteady ?? r.fpsEnc ?? '—'}${r.stima54s ? ` · 54 s ≈ ${r.stima54s.min} min` : ''}`);
+        await new Promise((res) => setTimeout(res, 500));
+      }
+    }
+    log('finito: premi «Copia risultati» e incolla in chat', 'state');
+  } catch (e) { R.fatal = errStr(e); log('ERRORE: ' + R.fatal, 'state'); }
+  show(); $('go').disabled = false;
+};
+$('copy').onclick = () => {
+  const s = JSON.stringify(R);
+  const done = () => { $('copied').textContent = 'Copiato'; }, fail = () => { getSelection().selectAllChildren($('oc')); $('copied').textContent = 'Seleziona e copia a mano'; };
+  try { navigator.clipboard ? navigator.clipboard.writeText(s).then(done, fail) : fail(); } catch { fail(); }
+};
+(async () => { await ensureIsolation(); await envInfo(); log(self.crossOriginIsolated ? 'crossOriginIsolated: sì (multi-thread possibile)' : 'crossOriginIsolated: no', 'state'); })();
+show();
+</script>
+</body>
+</html>

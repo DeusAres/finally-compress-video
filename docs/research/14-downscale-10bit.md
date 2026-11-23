@@ -42,7 +42,7 @@ Pagina di prova: **`tools/diag/downscale10.html`** (online: `https://deusares.gi
 | K7 | WebGPU → canvas rgba16float extended → `VideoFrame(canvas)` | ✗ già misurato 8 bit (run 4, senza scalatura) | molto bassa | idem |
 | K4 | `createImageBitmap(frame,{resizeWidth,resizeHeight})` → `VideoFrame` | ✗ atteso RGB 8 bit | molto bassa | idem |
 | K0 | Nessun downscale (controllo) | ✓ Main10 (run 3) | ✓ | riferimento |
-| — | Encoder WASM (x265 10 bit) con pixel letti in WebGPU | non provato | possibile ma lentissimo | WebGPU legge i 10 bit (`importExternalTexture` → formato Metal YCbCr10, research/02 §7; la pagina lo verifica col controllo livelli della sorgente); x265 WASM su iPhone: ordini di grandezza sotto VT, niente HW |
+| — | Encoder WASM (x265 10 bit) con pixel letti in WebGPU | misura in corso (§7, `x265bench.html`) | possibile ma lentissimo | WebGPU legge i 10 bit (`importExternalTexture` → formato Metal YCbCr10, research/02 §7; la pagina lo verifica col controllo livelli della sorgente); x265 WASM su iPhone: ordini di grandezza sotto VT, niente HW |
 | — | `VideoDecoder` che scala | non esiste | — | `VideoDecoderConfig` non ha dimensioni di uscita (spec); decoder rilasciato = NV12 8 bit (run 4) |
 | — | Ricodifica in due passaggi (4K Main10 → di nuovo `<video>`) | inutile | — | il frame decodificato torna 4K: stesso problema |
 
@@ -81,3 +81,34 @@ Prova in Chromium (Chrome 153 headless, Playwright): nessun errore JS; muxer + `
 | K9 VideoTrackGenerator + applyConstraints | Main, 8 bit ✗ | applyConstraints senza effetto (frame ancora 4K) |
 
 Altro: `copyTo` sul frame nativo → NotSupportedError «VideoFrame has no format» (anche con format/rect). **Confermato: su Safari 27.0.1 nessuna via JS per 4K→1080p a 10 bit.** Rieseguire K0/K1 a ogni aggiornamento di Safari.
+
+## 7. Encoder software x265 in WASM (prova di velocità)
+
+Domanda: visto che WebGPU (`importExternalTexture`) legge i frame HLG nativi con più di 8 bit, si può ridurre a 1080p in GPU e codificare HEVC Main10 **in software** (x265 in WebAssembly)? Serve la velocità misurata su iPhone.
+
+Pagina: **`tools/diag/x265bench.html`** (online: `https://deusares.github.io/finally-compress-video/tools/diag/x265bench.html`).
+
+**Fonte dell'encoder** ✅: ffmpeg.wasm **`@ffmpeg/core-mt@0.12.10`** (multi-thread) e `@ffmpeg/core@0.12.10` (single-thread) da `cdn.jsdelivr.net/npm/` (versione esatta, ~31 MB di `.wasm` ciascuno, nulla nel repo). Verificato sul binario e nel log: `--enable-libx265`, x265 `build info [Unk-OS][clang 17.0.0][32 bit][noasm] 10bit` → **il libx265 di ffmpeg.wasm è compilato a 10 bit** (`Main 10 profile`; l'SPS dell'uscita ha profilo 2, 10/10 bit). Limiti del build: `noasm` (nessuna routine SIMD scritta a mano di x265; solo l'autovettorizzazione `-msimd128`), memoria WASM condivisa **fissa 1 GiB**, pool di 32 Worker pthread creati all'avvio.
+
+- ✅ **Il core single-thread non funziona con x265**: si blocca subito dopo «Thread pool created using 1 threads» (anche con `pools=none:frame-threads=1`), in Chromium nessun frame in 20 s anche a 256×256. x265 ha bisogno di thread veri → serve **`crossOriginIsolated`** (SharedArrayBuffer).
+- GitHub Pages non manda COOP/COEP: la pagina registra un service worker **solo suo** (`tools/diag/x265bench-sw.js`, scope `./x265bench.html`) che aggiunge `COOP: same-origin` + `COEP: require-corp` alla navigazione e ricarica una volta. Non tocca `sw.js` dell'app né le altre pagine (pulsante per rimuoverlo). In Chromium funziona (`crossOriginIsolated: true`). ❓ Su Safari iOS da verificare (la pagina riporta `crossOriginIsolated`, `sharedArrayBuffer`, `wasmThreads`, `wasmSimd`, `hardwareConcurrency`).
+- ffmpeg gira in un Worker (con pthread `Atomics.wait` sul main thread è vietato); ogni preset in un Worker nuovo, chiuso con `terminate()` al limite di tempo (default 60 s).
+- Ingresso: `N` frame (30/60/120) 1080×1920 **yuv420p10le** in memoria. Dal video: seek + rVFC a passo 1/60 s, `importExternalTexture` → render a 1080×1920 in `rgba32float` con conversione Y'CbCr BT.2020 limitato 10 bit nello shader (campionamento bilineare = media 2×2 da 4K), readback, sottocampionamento croma in JS. Tempi separati: seek, GPU+readback, conversione JS. Senza WebGPU usa un ripiego canvas 2D 8 bit (segnalato, solo velocità). Oppure frame sintetici (gradiente + rumore + disco in movimento + pan).
+- Codifica: `-c:v libx265 -preset P -b:v 8M -pix_fmt yuv420p10le`, uscita HEVC Annex B; fps da x265 («encoded N frames in Xs (Y fps)») o, se interrotto, dalle righe `frame=N` di `-progress pipe:1 -stats_period 1`. Verifica SPS dell'uscita (profilo, bit depth).
+
+**Misure nel container** ✅ (Linux, 4 vCPU x86, Chromium/Chrome headless di Playwright, multi-thread: pool x265 4 thread, 2 frame thread; NON è l'iPhone, solo riferimento):
+
+| Preset | fps (60 frame sintetici) | fps (30 frame da video 4K → 1080p, testsrc) | 54 s a 60 fps (3240 frame) con i sintetici |
+|---|---|---|---|
+| ultrafast | 7,3 | 11,6 | ~7,4 min |
+| superfast | 5,7 | — | ~9,5 min |
+| veryfast | 3,3 | — | ~16 min |
+| faster | 3,3 | — | ~16 min |
+| medium | 2,0 (2,8 su 120 frame con limite 30 s) | 5,5 | ~27 min |
+| single-thread (qualunque) | **0: bloccato** | 0 | — |
+
+Uscita sempre Main10 10/10 bit (SPS). Preparazione frame nel container (canvas 2D, WebGPU assente): ~0,5 s/frame (seek ~280 ms) → per il video intero va sommata se non sovrapposta alla codifica.
+
+**Stima per l'iPhone** 🟡: l'A19 Pro ha 2 core P molto più veloci di un vCPU del container, ma `noasm` + WASM pesa su entrambi allo stesso modo; ordine di grandezza atteso **2–10 fps in ultrafast** → 54 s a 60 fps = **5–25 min solo di codifica** (VT HW lo fa in tempo reale o meglio). Più la memoria: 1 GiB fisso per il core + i frame (6 MB/frame) → l'app dovrebbe passare i frame a flusso (non in un file MEMFS) e funzionerebbe solo con `crossOriginIsolated`, cioè con COOP/COEP anche per l'app (service worker che aggiunge le intestazioni, con effetti su Mediabunny/CDN da verificare).
+
+**Cosa misurare su iPhone** ❓ (pagina `x265bench.html`, video IMG_1418, 30 frame, preset predefiniti): `crossOriginIsolated` dopo il ricaricamento, `hardwareConcurrency`, `wasmSimd`; se il core multi-thread parte (1 GiB condiviso + 32 Worker possono fallire su iOS: l'esito sarà «errore»/«core non avviato»); fps per preset e stima 54 s; `poolThreads`/frame thread usati da x265; tempi di preparazione frame (seek, GPU+readback, JS); `livelliY.multipli4` basso (≪ 0,85) = i 10 bit arrivano davvero all'encoder; SPS dell'uscita 10 bit. Decisione: se ultrafast < ~5 fps (54 s → >10 min) l'encoder WASM non è un'opzione pratica per l'app; resta l'attesa della Safari con encoder VT nuovo (§3).
