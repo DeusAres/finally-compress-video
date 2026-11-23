@@ -31,8 +31,8 @@
 // Memoria: la cache della luma sorgente è Uint8 a ½ risoluzione e solo frame pari (1080×1920 → 0.5 MB × 30 =
 // 15 MB per finestra), liberata a fine segmento; chunk di prova ≈ 1–3 MB; encoder/decoder di prova sempre chiusi
 // (finally) PRIMA dell'encode finale, che non coesiste mai con loro (research/12 §7.9, research/03).
-import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.35.0';
-import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.35.0';
+import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.35.1';
+import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.35.1';
 
 export const SCENE = Object.freeze({
   targetVmaf: RC.targetVmaf,   // 88 (BIBBIA §12)
@@ -239,7 +239,8 @@ export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorS
   makeDecoder = (init) => new VideoDecoder(init), live = true, now = () => performance.now(), players = () => 0, lumaFn = null, decodeFn = decodeChunks }) {
   // «Riduci a 1080p»: W×H = frame nativi (4K), encW×encH = dimensioni dell'encoder. La luma si prende SEMPRE a 1/factor di encW×encH:
   // sorgente 4K (drawImage ridimensiona) e frame decodificato 1080p finiscono nella stessa griglia → confronto a risoluzione comune.
-  const luma = lumaFn ?? makeCanvasLuma(encW, encH, factor); // lumaFn/decodeFn/makeDecoder: solo per i test in Node
+  let luma = lumaFn ?? makeCanvasLuma(encW, encH, factor); // lumaFn/decodeFn/makeDecoder: solo per i test in Node
+  let lumaPath = 'cpu';
   const cache = new Map(); // finestra → luma sorgente (solo indici multipli di stride)
   const keyOf = (w) => `${w.startIdx}-${w.endIdx}`;
   const T = { extract: 0, frames: 0, players: 0, lumaSrc: 0, nSrc: 0, encWait: 0, setup: 0, decWait: 0, lumaDec: 0, nDec: 0, ssim: 0, lumaLive: 0, nLive: 0, ssimLive: 0, liveTail: 0, liveOff: '' };
@@ -361,6 +362,24 @@ export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorS
       try { out.quarter = med(makeCanvasLuma(encW, encH, factor * 2)); } catch { out.quarter = NaN; }
       try { const a = luma(vf); const t = now(); for (let i = 0; i < reps; i++) frameScore(a, a); out.ssim = (now() - t) / reps; } catch { out.ssim = NaN; }
       return out;
+    },
+    /**
+     * v0.35.1: su iPhone la luma da canvas CPU (willReadFrequently) costa ~72 ms/frame, da canvas GPU ~8 ms (banco v0.35, IMG_1634):
+     * era il collo di bottiglia delle prove. Autotest sullo stesso frame nativo: se la luma GPU coincide con quella CPU
+     * (differenza media ≤ maxMad livelli, max ≤ maxAbs) ed è più veloce, si usa la GPU per TUTTE le prove (sorgente e decodificati
+     * passano sempre dalla stessa funzione). Da chiamare PRIMA di qualsiasi prova (la cache della sorgente deve essere omogenea).
+     */
+    chooseLuma(vf, { maxMad = 1.0, maxAbs = 24, reps = 3 } = {}) {
+      if (lumaFn || cache.size) return { path: lumaPath, reason: 'fisso' };
+      let gpu; try { gpu = makeCanvasLuma(encW, encH, factor, { gpu: true }); } catch (e) { return { path: lumaPath, reason: `GPU non disponibile (${e?.message || e})` }; }
+      const med = (fn) => { const v = []; let r; for (let i = 0; i < reps; i++) { const t = now(); r = fn(vf); v.push(now() - t); } v.sort((a, b) => a - b); return { ms: v[v.length >> 1], r }; };
+      const c = med(luma), g = med(gpu);
+      let sum = 0, mx = 0; const a = c.r.data, b = g.r.data;
+      if (a.length !== b.length) return { path: lumaPath, reason: 'dimensioni diverse' };
+      for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); sum += d; if (d > mx) mx = d; }
+      const mad = sum / a.length, ok = mad <= maxMad && mx <= maxAbs && g.ms < c.ms;
+      if (ok) { luma = gpu; lumaPath = 'gpu'; }
+      return { path: lumaPath, cpuMs: c.ms, gpuMs: g.ms, mad, max: mx, reason: ok ? 'coincide ed è più veloce' : g.ms >= c.ms ? 'GPU non più veloce' : 'GPU diversa dalla CPU' };
     },
     timing: () => ({ ...T }),
     release() { cache.clear(); },

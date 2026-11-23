@@ -276,3 +276,10 @@ Chromium headless (H.264 al posto di HEVC, 720p60, 2 segmenti al limite): v0.34.
 - **Bitrate da statistiche gratuite della sorgente** (dimensioni pacchetti/QP) con modello appreso, prove solo per i segmenti incerti: nei dati di §4 il bitrate sorgente non predice il necessario dentro un clip; servono più clip e feature (moto, rumore) prima di saltare prove.
 - **Luma/SSIM in un Worker** (VideoFrame e OffscreenCanvas trasferibili): toglierebbe il lavoro dal thread dei seek; da fare solo se `prove: tempi` mostra che l'estrazione rallenta per colpa della misura in diretta.
 - **¼ di risoluzione** con autotest del filtro di `drawImage` (12.2).
+
+### 12.6 v0.35.1 — misura iPhone (IMG_1634, 1080×1920 54 s, 14 segmenti) e luma via GPU
+
+- v0.35.0 sul device: prove 47.8 s (3.4 s/segmento) contro 27.2 s di codifica finale → totale 75.8 s (2.7× la sola codifica). Player riscaldati ok, nessun ripiego.
+- Banco: luma ½ canvas CPU (`willReadFrequently`) **72 ms/frame**, ½ canvas GPU **8 ms**, ¼ CPU 71 ms (il costo è la conversione del frame HLG nel canvas CPU, non la dimensione), SSIM 3.7 ms. → il readback CPU era il collo di bottiglia (~60 luma per segmento ≈ 4 s).
+- v0.35.1: `chooseLuma` (autotest sul primo frame nativo prima delle prove): se la luma GPU coincide con la CPU (differenza media ≤ 1 livello, max ≤ 24) ed è più veloce, tutte le prove usano la GPU. Log: «prove: luma via canvas GPU — …».
+- Caso IMG_1634: tutti i 14 segmenti al limite di 8 Mbps con VMAF stimato 73.6–77.9 (contenuto che per la stima richiederebbe più di 8 Mbps; taratura poco affidabile fra clip diversi, §12).

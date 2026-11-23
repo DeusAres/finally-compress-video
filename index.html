@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.35.0</title>
+<title>Compressore HDR v0.35.1</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -15,24 +15,24 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers } from './app/lib/frames.js?v=0.35.0';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.35.0';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.35.0';
-import { downscaleDims, avgFramerate, verifyDownscale, dsError } from './app/lib/downscale.js?v=0.35.0';
-import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.35.0';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.35.0';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.35.0';
-import { finishMoov, rewriteMoov, sourceFtypPatch } from './app/lib/mp4-post.js?v=0.35.0';
-import { readPassthrough, selectPassthrough, planPassthroughMdat, copyPassthroughData, addPassthroughTracks, describeAdded } from './app/lib/passthrough.js?v=0.35.0';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.35.0';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.35.0';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.35.0';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.35.0';
-import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.35.0';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.35.0';
-import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, SCENE } from './app/lib/scenesearch.js?v=0.35.0';
-import { mountUI } from './app/ui/ui.js?v=0.35.0';
-import { bus, emit } from './app/ui/bus.js?v=0.35.0';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers } from './app/lib/frames.js?v=0.35.1';
+import { estimateOutBytes } from './app/ui/estimate.js?v=0.35.1';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.35.1';
+import { downscaleDims, avgFramerate, verifyDownscale, dsError } from './app/lib/downscale.js?v=0.35.1';
+import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.35.1';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.35.1';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.35.1';
+import { finishMoov, rewriteMoov, sourceFtypPatch } from './app/lib/mp4-post.js?v=0.35.1';
+import { readPassthrough, selectPassthrough, planPassthroughMdat, copyPassthroughData, addPassthroughTracks, describeAdded } from './app/lib/passthrough.js?v=0.35.1';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.35.1';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.35.1';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.35.1';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.35.1';
+import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.35.1';
+import { createPip, pipSupported } from './app/lib/pip.js?v=0.35.1';
+import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, SCENE } from './app/lib/scenesearch.js?v=0.35.1';
+import { mountUI } from './app/ui/ui.js?v=0.35.1';
+import { bus, emit } from './app/ui/bus.js?v=0.35.1';
 import * as MB from './vendor/mediabunny-1.65.1.min.mjs';
 const $ = (id) => document.getElementById(id);
 // cat: setup | segment | pip | heartbeat | warn | error | summary | info (se omessa la deduce l'archivio dal prefisso); data: numeri per il riassunto
@@ -41,8 +41,8 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.35.0-20261123T022240Z';
-const BUILD_LABEL = 'v0.35.0 · 23/11 03:22';
+const BUILD_ID = '0.35.1-20261123T092132Z';
+const BUILD_LABEL = 'v0.35.1 · 23/11 10:21';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false, sceneQ: false, downscale: false, apac: true, container: 'mov' }, NFtot = 0;
 let parTrialOff = false; // v0.34.1: un intoppo durante le prove (più video attivi) non spegne la parallela della codifica finale
@@ -443,9 +443,11 @@ async function run({ forceFresh = false } = {}) {
         try {
           let bench = null, vf0 = null;
           const wr = await warmPlayers(vids, at, vidRun.signal, { keep: (p, vf) => { if (p === 0) vf0 = vf; else vf.close(); } });
-          if (vf0) { try { deps.warm(vf0); bench = deps.bench(vf0); } catch {} finally { vf0.close(); } } // dopo i seek: il lavoro di canvas non ritarda le rVFC dei player
+          let lc = null;
+          if (vf0) { try { deps.warm(vf0); bench = deps.bench(vf0); lc = deps.chooseLuma(vf0); } catch {} finally { vf0.close(); } } // dopo i seek: il lavoro di canvas non ritarda le rVFC dei player
           log(`[${clock()}] prove: player riscaldati ${wr.map((r, p) => `${p + 1}: ${r.skipped ? 'saltato' : r.ok ? `ok (${r.tries} ${r.tries === 1 ? 'tentativo' : 'tentativi'}, ${Math.round(r.ms)} ms)` : 'NON verificato'}`).join(' · ')}`);
           if (bench) log(`[${clock()}] prove: banco luma per frame ½ (in uso) ${bench.half.toFixed(1)} ms · ½ canvas GPU ${bench.halfGpu.toFixed(1)} ms · ¼ ${bench.quarter.toFixed(1)} ms · SSIM ½ ${bench.ssim.toFixed(1)} ms`);
+          if (lc) log(`[${clock()}] prove: luma via ${lc.path === 'gpu' ? 'canvas GPU' : 'canvas CPU'} — ${lc.reason}${Number.isFinite(lc.mad) ? ` (CPU ${lc.cpuMs.toFixed(1)} ms · GPU ${lc.gpuMs.toFixed(1)} ms · differenza media ${lc.mad.toFixed(2)}, max ${lc.max})` : ''}`);
           if (vids.length > 1 && wr[1] && !wr[1].ok && !wr[1].skipped) { parTrialOff = true; log(`[${clock()}] ⚠️ 2° player non verificato dopo il riscaldamento → 1 player per le prove; la codifica finale riprova con 2 player`); }
         } catch (e) { if (e?.name === 'BackgroundInterrupt') throw e; log(`[${clock()}] prove: riscaldamento non riuscito (${e?.message || e}), proseguo`); }
       }
