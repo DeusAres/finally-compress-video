@@ -3,7 +3,7 @@
 // from saved records, fallback on trial errors, per-segment closed-loop controller, summary/log lines.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planSceneSegments, centerWindow, runSceneSearch, sceneSummary, sceneLine, lumaU8FromRGBA, warmPrior, timingLine, createTrialDeps, toRecord } from './scenesearch.js';
+import { planSceneSegments, centerWindow, runSceneSearch, sceneSummary, sceneLine, lumaU8FromRGBA, warmPrior, timingLine, createTrialDeps, toRecord, lumaTestLine } from './scenesearch.js';
 import { searchBitrate } from './ratecontrol.js';
 import { planSegments } from './jobstore.js';
 import { nextBitrate, createSegmentRate } from './brctl.js';
@@ -277,4 +277,59 @@ test('createTrialDeps: a decoder that cannot be created switches the live measur
   assert.match(d.timing().liveOff, /decoder non disponibile/);
   const res = await searchBitrate({ trialWindow: { startIdx: 0, endIdx: 60, srcBitrate: 20e6 }, prior: 8e6 }, d, { maxBitrate: 8e6 });
   assert.ok(res.stats.measures >= 1 && res.stats.streamed === 0);
+});
+
+// v0.35.2 autotestLuma: keyframe del frame nativo a 2 bitrate, ssimDb via CPU e via GPU sullo stesso decodificato
+function lumaWorld({ gpuGain = 1, gpuNoise = 1, gpuOffset = 3, cpuMs = 70, gpuMs = 8, encErr = null, verify } = {}) {
+  const A = fakeWorld(); let clock = 0; const calls = { cpu: 0, gpu: 0 }; const encs = [], decs = [];
+  const lumaAmp = (id, amp, gain, off) => { const d = new Float32Array(16 * 16); for (let i = 0; i < d.length; i++) d[i] = off + gain * (100 + ((i * 7 + id * 13) % 50)) + amp * (((i * 31 + id) % 5) - 2); return { data: d, width: 16, height: 16 }; };
+  const lumaFn = (f) => { clock += cpuMs; calls.cpu++; return lumaAmp(f.id, f.noise ? 1 : 0, 1, 0); };
+  const gpuLumaFn = (f) => { clock += gpuMs; calls.gpu++; return lumaAmp(f.id, f.noise ? gpuNoise : 0, gpuGain, gpuOffset); };
+  const makeEncoder = (o) => { const e = A.common.makeEncoder(o); const w = { ...e, closed: false, encode(vf, k) { if (encErr) { o.onError(encErr); return; } e.encode(vf, k); }, close() { w.closed = true; } }; encs.push(w); return w; };
+  const makeDecoder = (init) => { const d = A.common.makeDecoder(init); decs.push(d); return d; };
+  const deps = createTrialDeps({ ...A.common, lumaFn, gpuLumaFn, makeEncoder, makeDecoder, now: () => clock, verifyOutput: verify });
+  const vf = { id: 5, noise: false, closed: false, close() { this.closed = true; } };
+  return { deps, vf, calls, encs, decs };
+}
+
+test('autotestLuma: GPU coherent on ssimDb (despite different absolute luma) → GPU for every trial, codecs closed', async () => {
+  const W = lumaWorld();
+  const lc = await W.deps.autotestLuma(W.vf, [8e6, 8e6 / 3]);
+  assert.equal(lc.path, 'gpu'); assert.equal(lc.cpu.length, 2); assert.equal(lc.gpu.length, 2);
+  assert.ok(lc.delta <= 0.3, `delta ${lc.delta}`); assert.equal(lc.cpu[0], 60); assert.ok(lc.cpu[1] < 60);
+  assert.equal(lc.cpuMs, 70); assert.equal(lc.gpuMs, 8);
+  assert.equal(W.encs.length, 2); assert.ok(W.encs.every((e) => e.closed)); assert.ok(W.decs.every((d) => d.state === 'closed'));
+  assert.equal(W.vf.closed, false, 'the caller owns the warm-up frame');
+  assert.match(lumaTestLine(lc), /^prove: luma via canvas GPU — autotest SSIM CPU 60\.00\/\d+\.\d\d dB · GPU 60\.00\/\d+\.\d\d dB \(Δ max 0\.\d\d\) · CPU 70 ms · GPU 8\.0 ms$/);
+  const before = { ...W.calls };
+  await W.deps.encodeTrial({ startIdx: 0, endIdx: 60 }, [4e6], { stream: [true] });
+  assert.equal(W.calls.cpu, before.cpu, 'trials use the GPU path only'); assert.ok(W.calls.gpu > before.gpu);
+  assert.match((await W.deps.autotestLuma(W.vf, [8e6])).reason, /fisso/, 'never switches once trials started');
+});
+
+test('autotestLuma: GPU treats decoded frames differently (Δ ssimDb > 0.3) → CPU', async () => {
+  const W = lumaWorld({ gpuNoise: 2 });
+  const lc = await W.deps.autotestLuma(W.vf, [8e6, 8e6 / 3]);
+  assert.equal(lc.path, 'cpu'); assert.ok(lc.delta > 0.3); assert.match(lc.reason, /Δ SSIM > 0\.3 dB/);
+  assert.match(lumaTestLine(lc), /^prove: luma via canvas CPU — autotest SSIM .* · CPU 70 ms · GPU 8\.0 ms · Δ SSIM > 0\.3 dB$/);
+  assert.ok(W.encs.every((e) => e.closed) && W.decs.every((d) => d.state === 'closed'));
+});
+
+test('autotestLuma: GPU not faster → CPU', async () => {
+  const W = lumaWorld({ gpuMs: 90 });
+  const lc = await W.deps.autotestLuma(W.vf, [8e6, 8e6 / 3]);
+  assert.equal(lc.path, 'cpu'); assert.match(lc.reason, /non più veloce/);
+});
+
+test('autotestLuma: non-fatal encoder error → CPU with reason; downscale error stays fatal', async () => {
+  const W = lumaWorld({ encErr: new Error('boom') });
+  const lc = await W.deps.autotestLuma(W.vf, [8e6]);
+  assert.equal(lc.path, 'cpu'); assert.match(lc.reason, /autotest non riuscito \(boom\)/); assert.ok(W.encs.every((e) => e.closed));
+  assert.match(lumaTestLine(lc), /^prove: luma via canvas CPU — CPU 70 ms · GPU 8\.0 ms · autotest non riuscito/);
+  const ds = Object.assign(new Error('uscita 3840×2160'), { name: 'DownscaleError' });
+  const V = lumaWorld({ verify: () => { throw ds; } });
+  await assert.rejects(V.deps.autotestLuma(V.vf, [8e6]), (e) => e === ds);
+  assert.ok(V.encs.every((e) => e.closed)); assert.equal(V.decs.length, 0, 'no decoder after a failed verify');
+  const E = lumaWorld({ encErr: ds });
+  await assert.rejects(E.deps.autotestLuma(E.vf, [8e6]), (e) => e === ds);
 });

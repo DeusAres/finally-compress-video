@@ -205,6 +205,17 @@ export function timingLine(T, totalMs, nSeg) {
     + ` · altro ${sec(Math.max(0, totalMs - serial))} s${T.liveOff ? ` · misura in diretta disattivata (${T.liveOff})` : ''}`;
 }
 
+/** Riga di log dell'autotest luma (v0.35.2): «prove: luma via canvas GPU|CPU — autotest SSIM CPU a/b dB · GPU c/d dB (Δ max x) · CPU n ms · GPU m ms». */
+export function lumaTestLine(lc) {
+  const f2 = (v) => v.map((x) => x.toFixed(2)).join('/'), ms = (x) => (x >= 10 ? Math.round(x) : x.toFixed(1));
+  const head = `prove: luma via canvas ${lc.path === 'gpu' ? 'GPU' : 'CPU'}`;
+  const parts = [];
+  if (lc.cpu?.length) parts.push(`autotest SSIM CPU ${f2(lc.cpu)} dB · GPU ${f2(lc.gpu)} dB${Number.isFinite(lc.delta) ? ` (Δ max ${lc.delta.toFixed(2)})` : ''}`);
+  if (Number.isFinite(lc.cpuMs)) parts.push(`CPU ${ms(lc.cpuMs)} ms · GPU ${ms(lc.gpuMs)} ms`);
+  if (lc.path !== 'gpu' && lc.reason) parts.push(lc.reason);
+  return parts.length ? `${head} — ${parts.join(' · ')}` : head;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Parte browser (WebCodecs + canvas)
 // ---------------------------------------------------------------------------------------------
@@ -213,7 +224,7 @@ export function timingLine(T, totalMs, nSeg) {
 export function makeCanvasLuma(W, H, factor = SCENE.factor, { gpu = false } = {}) {
   const w = Math.max(8, Math.floor(W / factor)), h = Math.max(8, Math.floor(H / factor));
   const cv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
-  const ctx = cv.getContext('2d', { willReadFrequently: !gpu, alpha: false }); // gpu: solo per il banco di misura (v0.35), non usato nelle prove
+  const ctx = cv.getContext('2d', { willReadFrequently: !gpu, alpha: false }); // gpu: banco di misura (v0.35) e prove se l'autotest a coppie lo consente (v0.35.2, autotestLuma)
   if (!ctx) throw new Error('canvas 2D non disponibile');
   return (frame) => { ctx.drawImage(frame, 0, 0, w, h); return lumaU8FromRGBA(ctx.getImageData(0, 0, w, h).data, w, h); };
 }
@@ -225,7 +236,7 @@ export function makeCanvasLuma(W, H, factor = SCENE.factor, { gpu = false } = {}
  *  makeEncoder({width,height,bitrate,framerate,onChunk,onError}) → wrapper come encode.createHevcEncoder (encode/drain/flush/close);
  *  colorSpace: VideoColorSpaceInit da forzare sul decoder di prova (HLG come il file finale), facoltativo.
  *  encW/encH (default W/H): dimensioni dell'encoder se diverse dai frame nativi (v0.31 «Riduci a 1080p»); verifyOutput(decoderConfig): lancia se l'uscita non è quella chiesta.
- *  makeDecoder(init) (default new VideoDecoder), lumaFn, decodeFn: iniettabili per i test; live (default true): misura in diretta (v0.35).
+ *  makeDecoder(init) (default new VideoDecoder), lumaFn, gpuLumaFn (luma GPU per autotestLuma), decodeFn: iniettabili per i test; live (default true): misura in diretta (v0.35).
  *
  * v0.35 «misura in diretta»: per i bitrate con stream[i] (ratecontrol: quelli da misurare subito) un VideoDecoder riceve i chunk
  * MENTRE l'encoder di prova li produce; luma (stessa funzione canvas) + SSIM del frame decodificato i contro la luma sorgente i
@@ -236,7 +247,7 @@ export function makeCanvasLuma(W, H, factor = SCENE.factor, { gpu = false } = {}
  * la diretta si spegne per il resto del job.
  */
 export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorSpace, stride = SCENE.stride, factor = SCENE.factor, onStat = () => {}, encW = W, encH = H, framerate, verifyOutput,
-  makeDecoder = (init) => new VideoDecoder(init), live = true, now = () => performance.now(), players = () => 0, lumaFn = null, decodeFn = decodeChunks }) {
+  makeDecoder = (init) => new VideoDecoder(init), live = true, now = () => performance.now(), players = () => 0, lumaFn = null, gpuLumaFn = null, decodeFn = decodeChunks }) {
   // «Riduci a 1080p»: W×H = frame nativi (4K), encW×encH = dimensioni dell'encoder. La luma si prende SEMPRE a 1/factor di encW×encH:
   // sorgente 4K (drawImage ridimensiona) e frame decodificato 1080p finiscono nella stessa griglia → confronto a risoluzione comune.
   let luma = lumaFn ?? makeCanvasLuma(encW, encH, factor); // lumaFn/decodeFn/makeDecoder: solo per i test in Node
@@ -364,22 +375,61 @@ export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorS
       return out;
     },
     /**
-     * v0.35.1: su iPhone la luma da canvas CPU (willReadFrequently) costa ~72 ms/frame, da canvas GPU ~8 ms (banco v0.35, IMG_1634):
-     * era il collo di bottiglia delle prove. Autotest sullo stesso frame nativo: se la luma GPU coincide con quella CPU
-     * (differenza media ≤ maxMad livelli, max ≤ maxAbs) ed è più veloce, si usa la GPU per TUTTE le prove (sorgente e decodificati
-     * passano sempre dalla stessa funzione). Da chiamare PRIMA di qualsiasi prova (la cache della sorgente deve essere omogenea).
+     * v0.35.2 autotest a coppie (sostituisce chooseLuma v0.35.1). Su iPhone la luma da canvas CPU (willReadFrequently) costa
+     * 72 ms/frame a 1080p e 289 ms con sorgente 4K, da canvas GPU 8–19 ms: è il collo di bottiglia delle prove. La luma GPU NON
+     * coincide con la CPU in assoluto (IMG_1418 4K: differenza media 2.6 livelli, max 76: tone mapping/dither diversi) e non serve:
+     * serve che tratti in modo COERENTE frame nativo e frame decodificato, cioè che la ssimDb misurata via GPU sia quella via CPU,
+     * su cui è tarata la mappatura ssimDb→VMAF (research/12 §3: ~4.1 VMAF per dB d'intercetta).
+     * Prova: il frame nativo di riscaldamento viene codificato come keyframe (stesso makeEncoder/verifyOutput delle prove) a
+     * ciascun bitrate di `rates` (es. limite e limite/3), decodificato (colorSpace forzato come nelle prove) e confrontato con
+     * la sorgente sia via CPU sia via GPU: GPU se |Δ ssimDb| ≤ maxDelta su TUTTE le coppie ed è più veloce.
+     * maxDelta 0.3 dB ≈ 1.2 VMAF stimati: metà dello s.d. residuo della taratura (2.48) e meno di metà del margine +1 s.d.
+     * già nel bersaglio; un errore più grande sposterebbe il bitrate scelto di ≳ 10 % (pendenza ~10 VMAF per raddoppio).
+     * Encoder e decoder sempre chiusi (finally), uno alla volta, prima di qualsiasi prova. Errori fatali (isFatal: downscale non
+     * riuscito, annullamento) rilanciati; ogni altro errore → resta la CPU con il motivo. Da chiamare PRIMA delle prove.
      */
-    chooseLuma(vf, { maxMad = 1.0, maxAbs = 24, reps = 3 } = {}) {
-      if (lumaFn || cache.size) return { path: lumaPath, reason: 'fisso' };
-      let gpu; try { gpu = makeCanvasLuma(encW, encH, factor, { gpu: true }); } catch (e) { return { path: lumaPath, reason: `GPU non disponibile (${e?.message || e})` }; }
-      const med = (fn) => { const v = []; let r; for (let i = 0; i < reps; i++) { const t = now(); r = fn(vf); v.push(now() - t); } v.sort((a, b) => a - b); return { ms: v[v.length >> 1], r }; };
-      const c = med(luma), g = med(gpu);
-      let sum = 0, mx = 0; const a = c.r.data, b = g.r.data;
-      if (a.length !== b.length) return { path: lumaPath, reason: 'dimensioni diverse' };
-      for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); sum += d; if (d > mx) mx = d; }
-      const mad = sum / a.length, ok = mad <= maxMad && mx <= maxAbs && g.ms < c.ms;
+    async autotestLuma(vf, rates, { maxDelta = 0.3, reps = 3, isFatal = (e) => ['DownscaleError', 'Cancelled', 'BackgroundInterrupt'].includes(e?.name) } = {}) {
+      if (cache.size) return { path: lumaPath, reason: 'fisso (prove già iniziate)' };
+      let gpu; try { gpu = gpuLumaFn ?? makeCanvasLuma(encW, encH, factor, { gpu: true }); } catch (e) { return { path: lumaPath, reason: `GPU non disponibile (${e?.message || e})` }; }
+      const out = { path: lumaPath, cpu: [], gpu: [], delta: NaN, cpuMs: NaN, gpuMs: NaN };
+      const med = (fn, f) => { const v = []; let r; for (let i = 0; i < reps; i++) { const t = now(); r = fn(f); v.push(now() - t); } v.sort((x, y) => x - y); return { ms: v[v.length >> 1], r }; };
+      try {
+        const c = med(luma, vf), g = med(gpu, vf); out.cpuMs = c.ms; out.gpuMs = g.ms;
+        for (const r of rates) {
+          // 1) un keyframe codificato con lo stesso encoder delle prove (encoder chiuso prima di creare il decoder)
+          const chunks = []; let config = null, err = null, enc = null;
+          try {
+            enc = makeEncoder({ width: encW, height: encH, framerate, bitrate: r0(r),
+              onChunk: (ch, meta) => { if (meta?.decoderConfig && !config) config = meta.decoderConfig; chunks.push(ch); },
+              onError: (e) => { err ||= e; } });
+            enc.encode(vf, true);
+            await enc.flush();
+            if (err) throw err;
+          } finally { try { enc?.close(); } catch {} }
+          if (!config || !chunks.length) throw new Error('nessun pacchetto o decoderConfig');
+          verifyOutput?.(config); // downscale errato: fatale come nelle prove
+          // 2) decodifica + luma CPU e GPU dello stesso frame decodificato
+          let dec = null, derr = null, n = 0, chain = Promise.resolve(), dbC = NaN, dbG = NaN;
+          try {
+            dec = makeDecoder({ output: (f) => { const i = n++; chain = chain.then(() => { if (i > 0) return; dbC = frameScore(c.r, luma(f)).db; dbG = frameScore(g.r, gpu(f)).db; }).catch((e) => { derr ||= e; }).finally(() => f.close()); },
+              error: (e) => { derr ||= e; } });
+            dec.configure(decConfig(config));
+            for (const ch of chunks) dec.decode(ch);
+            await dec.flush();
+            await chain;
+          } finally { try { if (dec && dec.state !== 'closed') dec.close(); } catch {} }
+          if (derr) throw derr;
+          if (!Number.isFinite(dbC) || !Number.isFinite(dbG)) throw new Error('nessun frame decodificato');
+          out.cpu.push(dbC); out.gpu.push(dbG);
+        }
+        out.delta = Math.max(...out.cpu.map((x, i) => Math.abs(x - out.gpu[i])));
+      } catch (e) {
+        if (isFatal(e)) throw e;
+        return { ...out, reason: `autotest non riuscito (${String(e?.message || e).slice(0, 80)})` };
+      }
+      const ok = out.delta <= maxDelta && out.gpuMs < out.cpuMs;
       if (ok) { luma = gpu; lumaPath = 'gpu'; }
-      return { path: lumaPath, cpuMs: c.ms, gpuMs: g.ms, mad, max: mx, reason: ok ? 'coincide ed è più veloce' : g.ms >= c.ms ? 'GPU non più veloce' : 'GPU diversa dalla CPU' };
+      return { ...out, path: lumaPath, reason: ok ? 'SSIM coerente e più veloce' : !(out.delta <= maxDelta) ? `Δ SSIM > ${maxDelta} dB` : 'GPU non più veloce' };
     },
     timing: () => ({ ...T }),
     release() { cache.clear(); },

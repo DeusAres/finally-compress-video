@@ -30,7 +30,7 @@ import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, 
 import { startKeepAlive } from './app/lib/keepalive.js?v=0.35.1';
 import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.35.1';
 import { createPip, pipSupported } from './app/lib/pip.js?v=0.35.1';
-import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, SCENE } from './app/lib/scenesearch.js?v=0.35.1';
+import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, lumaTestLine, SCENE } from './app/lib/scenesearch.js?v=0.35.1';
 import { mountUI } from './app/ui/ui.js?v=0.35.1';
 import { bus, emit } from './app/ui/bus.js?v=0.35.1';
 import * as MB from './vendor/mediabunny-1.65.1.min.mjs';
@@ -441,15 +441,16 @@ async function run({ forceFresh = false } = {}) {
         const w0 = plan.find((p) => p.k >= doneSeg && !job.manifest.scene[p.k]).trialWindow, vids = video2 && !parOff ? [video, video2] : [video];
         const at = (p) => { const i = w0.startIdx - 6 - p >= 0 ? w0.startIdx - 6 - p : w0.endIdx + 6 + p < NF ? w0.endIdx + 6 + p : -1; return i < 0 ? null : { ts: Math.round(frames[i].ts * 1e6), dur: Math.round(frames[i].dur * 1e6) }; };
         try {
-          let bench = null, vf0 = null;
+          let vf0 = null, lc = null;
           const wr = await warmPlayers(vids, at, vidRun.signal, { keep: (p, vf) => { if (p === 0) vf0 = vf; else vf.close(); } });
-          let lc = null;
-          if (vf0) { try { deps.warm(vf0); bench = deps.bench(vf0); lc = deps.chooseLuma(vf0); } catch {} finally { vf0.close(); } } // dopo i seek: il lavoro di canvas non ritarda le rVFC dei player
           log(`[${clock()}] prove: player riscaldati ${wr.map((r, p) => `${p + 1}: ${r.skipped ? 'saltato' : r.ok ? `ok (${r.tries} ${r.tries === 1 ? 'tentativo' : 'tentativi'}, ${Math.round(r.ms)} ms)` : 'NON verificato'}`).join(' · ')}`);
-          if (bench) log(`[${clock()}] prove: banco luma per frame ½ (in uso) ${bench.half.toFixed(1)} ms · ½ canvas GPU ${bench.halfGpu.toFixed(1)} ms · ¼ ${bench.quarter.toFixed(1)} ms · SSIM ½ ${bench.ssim.toFixed(1)} ms`);
-          if (lc) log(`[${clock()}] prove: luma via ${lc.path === 'gpu' ? 'canvas GPU' : 'canvas CPU'} — ${lc.reason}${Number.isFinite(lc.mad) ? ` (CPU ${lc.cpuMs.toFixed(1)} ms · GPU ${lc.gpuMs.toFixed(1)} ms · differenza media ${lc.mad.toFixed(2)}, max ${lc.max})` : ''}`);
+          // dopo i seek (il lavoro di canvas non ritarda le rVFC dei player). v0.35.2: autotest a coppie CPU/GPU sulla ssimDb (research/12 §12.6):
+          // 1 keyframe del frame nativo al limite e a limite/3 con lo stesso encoder delle prove (chiuso subito, mai insieme all'encoder finale).
+          // Errori di downscale/annullamento: rilanciati (fatali come nelle prove); altri errori → luma CPU, motivo nel log.
+          if (vf0) { try { try { deps.warm(vf0); } catch {} lc = await deps.autotestLuma(vf0, [...new Set([bitrate, Math.min(bitrate, Math.max(SCENE.floor, bitrate / 3))])]); } finally { vf0.close(); } }
+          if (lc) log(`[${clock()}] ${lumaTestLine(lc)}`);
           if (vids.length > 1 && wr[1] && !wr[1].ok && !wr[1].skipped) { parTrialOff = true; log(`[${clock()}] ⚠️ 2° player non verificato dopo il riscaldamento → 1 player per le prove; la codifica finale riprova con 2 player`); }
-        } catch (e) { if (e?.name === 'BackgroundInterrupt') throw e; log(`[${clock()}] prove: riscaldamento non riuscito (${e?.message || e}), proseguo`); }
+        } catch (e) { if (['BackgroundInterrupt', 'Cancelled', 'DownscaleError'].includes(e?.name)) throw e; log(`[${clock()}] prove: riscaldamento non riuscito (${e?.message || e}), proseguo`); }
       }
       await runSceneSearch({ plan, from: doneSeg, saved: job.manifest.scene, deps, ceiling: bitrate,
         isFatal: (e) => e?.name === 'BackgroundInterrupt' || e?.name === 'Cancelled' || e?.name === 'DownscaleError' || cancelled || !!vidRun?.signal.aborted,
