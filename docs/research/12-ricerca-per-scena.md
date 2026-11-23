@@ -208,3 +208,71 @@ Opzione «Qualità garantita per scena (sperimentale)» nelle avanzate (`sceneQ`
 Verifica in Chromium (Playwright, localhost, nessun HEVC: harness di test con encoder H.264 SOLO per il test, clip ffmpeg 12 s 1280×720 60 fps = testsrc2 + rumore + barre statiche): autotest a 20 Mbps ssimDb 30.8 (allineamento ok); scelti 2.0 / 12.0 (limite) / 2.0 Mbps, reali nell'encode finale 2.0 / 12.7 / 0.1 Mbps (statico: l'encoder non spende); ripresa senza nuove prove; ripiego su errore verificato. `index.html` in Chromium: UI e stime ok, prove HEVC fallite → ripiego all'utente come previsto, poi l'encoder finale HEVC non esiste (atteso).
 
 Da provare su iPhone ❓: drawImage di frame nativi HLG e di frame NV12 decodificati su canvas 2D → stessa conversione (tone mapping) sui due lati? (autotest 20 Mbps: ssimDb medio ≥ ~20); due sessioni VT di prova + `VideoDecoder` HEVC Main10 per segmento (memoria, jetsam); tempo reale delle prove (stima 1.7×); qualità finale per segmento contro la stima nel log (VMAF in laboratorio).
+
+## 12. v0.35 — prove più veloci (stessa regola di decisione)
+
+Data: 2026-11-23. Punto di partenza (iPhone, v0.34.1, IMG_3053 1080p60 8 s, 2 segmenti da 4 s, limite 8 Mbps): prove **8.8 s** (≈ 4.4 s per segmento) contro **4.2 s** di codifica finale a 120 fps; entrambi i segmenti «al limite»; le prove erano finite a 1 player («player 1: frame 2 non verificato dopo 3 tentativi (mediaTime assente)»). Unico criterio: tempo, con VMAF stimato ancora ≥ 88 e stima validata. Codice: `ratecontrol.searchBitrate` (politica `fast`, default), `scenesearch.js` (misura in diretta, partenza a caldo, tempi), `frames.js` (riscaldamento, rVFC tardiva), `index.html` §3b; test `scenesearch.test.mjs` (+10), laboratorio `tools/lab/scene_speed_lab.mjs`.
+
+### 12.1 Cosa cambia ✅ (test Node + Chromium)
+
+1. **Misura in diretta** (`createTrialDeps`): per i bitrate da misurare subito un `VideoDecoder` di prova riceve i chunk mentre l'encoder di prova li produce; luma (stessa funzione canvas) + SSIM del frame decodificato *i* contro la luma sorgente *i* (catturata prima di `encode(i)`, quindi sempre pronta). Niente secondo passaggio decode + canvas dopo la prova: la lettura del canvas si sovrappone alle attese di seek/rVFC. Ripiego: errore del decoder in diretta → i chunk sono ancora lì e si misura dopo come in v0.34; decoder non creabile → diretta spenta per il job. Encoder **e decoder** di prova sono comunque chiusi prima dell'encoder finale (§7.9). Chromium (H.264 al posto di HEVC, solo test): ssimDb in diretta **identici** a quelli misurati dopo; coda dopo la prova 0.01–0.02 s.
+2. **Limite per primo**: se `prior × 1.3 ≥ limite` (la forchetta toccherebbe comunque il limite) il giro 1 codifica `[limite, prior/1.3]` in parallelo ma misura **solo il limite** (in diretta). Se lì il VMAF stimato (media o guardia p5, con margine) non basta → `clamped-max` subito: la prova più bassa non viene mai decodificata. Se basta, si misura anche quella (nessuna estrazione in più) e la decisione è la stessa di v0.34.
+3. **Contenuto facile**: se la risposta sta sotto il punto più basso provato (che quindi supera già la soglia) si scende da quel punto con pendenza `max(misurata, 10 VMAF/raddoppio)` — più lenta = prudente — e si accetta **senza 2° giro** se si resta entro un dimezzamento o si tocca il minimo; altrimenti 2° giro come prima. Corretto anche un caso limite di v0.34: una pendenza misurata troppo piatta poteva dare `clamped-min` estrapolando senza verifica.
+4. **2° giro** solo quando serve davvero: risposta sopra la forchetta (estrapolare verso l'alto non è sicuro) e sotto il limite.
+5. **Partenza a caldo**: prior del segmento k = media geometrica fra il bitrate scelto per k−1 e 0.4 × sorgente (se k−1 era al limite: il limite → «limite per primo»). È solo il centro della forchetta; decide la misura. Non si **riusa** il risultato senza prova: dentro un clip il bitrate sorgente non predice il necessario (§4, correlazione −0.03), quindi «segmenti simili» non è un criterio sicuro.
+6. **Riscaldamento** prima delle prove: ogni player estrae con verifica rVFC un frame che NON è il primo che gli verrà chiesto (stesso istante = nessuna nuova presentazione = rVFC che non scatta); poi un primo `drawImage` del frame nativo HLG (shader/conversione) e il banco di misura (punto 8). Se il 2° player non si verifica, le prove passano a 1 player subito (senza perdere 4 tentativi a frame).
+7. **rVFC tardiva** (`frames.js`, vale anche per la codifica finale): dopo i 250 ms si concedono altri 60 ms; un timer scaduto mentre il thread principale era occupato passava prima del passo di rendering in cui gira la rVFC → falso «mediaTime assente». Prima di ogni nuovo tentativo il player si sposta su un frame vicino (con attesa della sua presentazione): rifare il seek allo **stesso** istante non presenta nulla e la rVFC non scatta più — spiegazione probabile dei 3 tentativi persi nel log di IMG_3053. La verifica resta identica (mediaTime nel frame atteso).
+8. **Log per misurare sul device**: per segmento `· (1 giro, 2 enc/1 misura, 1 in diretta, limite per primo, partenza dal segmento prima)`; a fine prove `prove: tempi … · estrazione · luma sorgente · attese encoder · avvio enc/dec · misura in diretta: luma + SSIM, coda · misura dopo: decode, luma, SSIM · altro`; al riscaldamento `prove: banco luma per frame ½ (in uso) · ½ canvas GPU · ¼ · SSIM` (solo misura, nessuna scelta automatica). A/B di debug: `localStorage['fcv.sceneLive']='0'` = misura dopo, come v0.34.
+
+### 12.2 Metrica più economica: laboratorio ✅ — NON adottata
+
+`TMPDIR=/tmp/claude-0/lab/tmp node tools/lab/scene_speed_lab.mjs`. VMAF vero `vmaf_v0.6.1` per frame. Dati: IMG_7440 con le uscite **reali VideoToolbox** dell'app (v0.13, 4–12 Mbps) e, come controllo, 4 clip (2 privati, solo letti) codificati con x265 «simil-VT» (veryfast, senza B-frame, 2/3.5/6/10 Mbps, timestamp passthrough). Taratura sulle finestre con VMAF 65–97. (A) stima della finestra vs VMAF della finestra; (B) stima dalla finestra centrata vs VMAF dell'intero segmento d'export da 4 s (ciò che conta); (C) errore sul bitrate necessario per 88 (rmse log2).
+
+IMG_7440 VT (34 finestre in taratura):
+
+| variante | (A) PLCC / RMSE | (B) PLCC / RMSE | (C) rmse log2 | taratura a + b·x |
+|---|---|---|---|---|
+| **1 s, stride 2, ½ (in uso)** | **0.957 / 2.38** | **0.893 / 4.22** | **0.304** | 29.3 + 4.43 x |
+| 1 s, stride 3, ½ | 0.961 / 2.26 | 0.878 / 4.90 | 0.300 | |
+| 1 s, stride 4, ½ | 0.948 / 2.60 | 0.891 / 4.47 | 0.299 | |
+| 0.5 s, stride 2, ½ | 0.931 / 2.98 | 0.804 / 5.59 | 0.477 | |
+| 0.5 s, stride 3, ½ | 0.923 / 3.15 | 0.781 / 6.10 | 0.503 | |
+| 1 s, stride 2, ¼ box | 0.938 / 2.83 | 0.938 / 3.27 | 0.277 | 22.2 + 3.70 x |
+| 1 s, stride 2, ¼ «bilineare» (2×2 centrali, = drawImage senza mipmap) | 0.957 / 2.37 | 0.900 / 4.14 | 0.295 | 24.6 + 4.29 x |
+| 0.5 s, stride 3, ¼ bilineare | 0.925 / 3.11 | 0.792 / 6.01 | 0.493 | |
+| 0.5 s, stride 4, ¼ bilineare | 0.935 / 2.90 | 0.816 / 5.32 | 0.486 | |
+
+Clip x265, taratura per clip, PLCC / RMSE (A) per IMG_2147 · IMG_7440 · privato A (facile, VMAF ≥ 95 a 2 Mbps) · privato B: oggi 0.850/5.24 · 0.953/2.71 · 0.744/0.34 · 0.874/2.53; 0.5 s 0.854/4.84 · 0.938/3.08 · 0.732/0.39 · 0.827/2.56; ¼ bilineare 0.852/5.21 · 0.950/2.80 · 0.738/0.35 · 0.896/2.31.
+
+Decisioni:
+- **Finestra 0.5 s: no.** Sul segmento intero (B) l'errore sale da 4.2 a 5.6–6.1 VMAF e quello sul bitrate da ×1.23 a ×1.40 (C). In più su device una prova da 0.5 s darebbe il doppio di peso all'IDR iniziale e al tempo di assestamento del rate control VT (~1 s), che il laboratorio non vede.
+- **Stride 3–4: no.** (A) pari o leggermente migliore, ma (B) peggiora (4.2 → 4.5–4.9) e risparmierebbe solo 1/3–1/2 delle luma.
+- **¼ di risoluzione: equivalente in laboratorio, ma non adottabile senza il device.** Con campionamento «bilineare» la qualità della stima è identica alla ½, ma la taratura dipende dal filtro con cui Safari ridimensiona `drawImage` di un frame video a 4×: fra box e bilineare la soglia per VMAF 88 passa da 17.8 a 14.8 dB (≈ 13 punti VMAF di differenza): usare la taratura sbagliata sovrastimerebbe la qualità. A ½ box e bilineare coincidono (campioni al centro di ogni 2×2), per questo la ½ è robusta. Prossimo passo: il banco `prove: banco luma` dice quanto si guadagnerebbe; se conviene, autotest del filtro sul device (motivo a righe di 1 px disegnato come VideoFrame) e taratura per filtro.
+- Avvertenza, non nuova: con una sola taratura per tutti i contenuti la relazione ssimDb → VMAF **non generalizza** fra clip diversi (tutti i clip insieme: PLCC 0.62). Oggi la taratura è quella di IMG_7440 (§3); i limiti di §3 restano.
+
+### 12.3 Simulazione delle politiche (v0.34 vs v0.35) ✅
+
+Uscite reali rigiocate per segmento d'export da 4 s, taratura per clip (uguale per le due politiche), VMAF vero interpolato sull'intero segmento; 7 segmenti (IMG_7440 VT ×2, IMG_2147, IMG_7440 x265 ×2, privati A e B):
+
+| limite | politica | Mbps medi | VMAF vero min | encoder | misure | giri |
+|---|---|---|---|---|---|---|
+| 8 | v0.34 | 5.97 | 86.4 | 16 | 16 | 9 |
+| 8 | **v0.35** | **5.98** | **86.4** | 15 | **14** | 8 |
+| 12 | v0.34 | 6.49 | 86.2 | 17 | 17 | 10 |
+| 12 | **v0.35** | **6.49** | **86.2** | 16 | **16** | 9 |
+
+Stessi bitrate e stessa qualità vera: la nuova politica non cambia le decisioni, toglie lavoro. Il minimo 86.4 è lo stesso segmento di IMG_7440 in entrambe le versioni: la finestra di 1 s al centro non rappresenta del tutto i 4 s del segmento (B, RMSE 4.2) — limite noto, non introdotto qui. Nei dati di laboratorio pochi segmenti sono al limite; sul device (IMG_3053: tutti al limite, 1 misura invece di 2) il guadagno in misure è maggiore.
+
+### 12.4 Tempi attesi (🟡, da misurare ❓)
+
+Chromium headless (H.264 al posto di HEVC, 720p60, 2 segmenti al limite): v0.34.1 8.9 s → v0.35 7.6 s (misura dopo, stessa politica: 8.8 s). Qui domina l'estrazione headless (58 ms/frame), non rappresentativa. Sul device la v0.34.1 spendeva ~1 s di estrazione e ~3.4 s di misura per segmento: con 2 player riscaldati, misura in diretta e una sola misura per i segmenti al limite la stima è **1.0–2.0 s per segmento**:
+- IMG_3053: prove 8.8 s → **≈ 2.5–4 s**; totale 13 s → **≈ 7–8 s** (fattore sulla sola codifica da ≈ 3.1 a ≈ 1.6–1.9).
+- Video lungo (60 s, 15 segmenti misti, codifica 30 s): prove ≈ 66 s → **≈ 20–30 s**; totale ≈ 96 s → **≈ 50–60 s**.
+`SCENE.timeFactor` = `SCENE_TIME_FACTOR` = **1.6** (UI e quota della barra). Da verificare sul device: righe `prove: banco luma`, `prove: player riscaldati`, `prove: tempi …`, e per segmento `(1 giro, … in diretta …)`; nessuna `estrazione parallela (prove)` di ripiego; memoria con 2 encoder + 1–2 decoder di prova vivi insieme (mai con l'encoder finale).
+
+### 12.5 Idee valutate e non adottate (prossimi passi)
+
+- **Verifica sull'uscita finale + ricodifica del solo segmento sotto soglia**: misura esatta (non una finestra, risolverebbe il limite di 12.3) e nessuna prova per i segmenti che passano; ma richiede decoder + luma durante la codifica finale (memoria con l'encoder finale vivo, §7.9; rallenta i 120 fps) e la riscrittura di un segmento nel jobstore con lo stesso hvcC. Da provare su device.
+- **Bitrate da statistiche gratuite della sorgente** (dimensioni pacchetti/QP) con modello appreso, prove solo per i segmenti incerti: nei dati di §4 il bitrate sorgente non predice il necessario dentro un clip; servono più clip e feature (moto, rumore) prima di saltare prove.
+- **Luma/SSIM in un Worker** (VideoFrame e OffscreenCanvas trasferibili): toglierebbe il lavoro dal thread dei seek; da fare solo se `prove: tempi` mostra che l'estrazione rallenta per colpa della misura in diretta.
+- **¼ di risoluzione** con autotest del filtro di `drawImage` (12.2).

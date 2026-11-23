@@ -10,6 +10,13 @@
 //   measure:     VideoDecoder sui chunk di prova → stessa funzione canvas → SSIM (quality.frameScore) → ssimDb
 //   ratecontrol.searchBitrate: ssimDb → VMAF stimato (taratura research/12 §3) → interpolazione log-rate →
 //                bitrate minimo con VMAF stimato ≥ 88 (+1 s.d.) e p5 ≥ 72 (+1 s.d.); 2° giro se estrapolato.
+// v0.35 (research/12 §12) — stesse regole di decisione, molto meno lavoro:
+//   · misura IN DIRETTA: il decoder di prova riceve i chunk mentre l'encoder li produce (niente secondo passaggio dopo);
+//   · «limite per primo»: se il prior è a ridosso del limite si misura prima il limite; se già lì il VMAF stimato non basta
+//     → clamped-max subito (la prova più bassa, codificata in parallelo, non viene misurata);
+//   · contenuto facile: discesa prudente (pendenza ≥ standard, ≤ un dimezzamento) senza 2° giro;
+//   · partenza a caldo: il prior di k usa il bitrate scelto per k−1; player e via canvas riscaldati prima delle prove (index.html);
+//   · riga «prove: tempi …» nel log con la ripartizione (estrazione, luma, SSIM, attese) da misurare sul device.
 // Il bitrate di ogni punto è quello REALE prodotto dalla prova (byte × 8 / durata), non quello configurato:
 // il rate control VT segue il tempo reale (brctl.js) e l'encode finale è corretto a circuito chiuso verso il
 // bitrate REALE del segmento, quindi prove e finale parlano della stessa grandezza.
@@ -24,8 +31,8 @@
 // Memoria: la cache della luma sorgente è Uint8 a ½ risoluzione e solo frame pari (1080×1920 → 0.5 MB × 30 =
 // 15 MB per finestra), liberata a fine segmento; chunk di prova ≈ 1–3 MB; encoder/decoder di prova sempre chiusi
 // (finally) PRIMA dell'encode finale, che non coesiste mai con loro (research/12 §7.9, research/03).
-import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.34.1';
-import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.34.1';
+import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.35.0';
+import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.35.0';
 
 export const SCENE = Object.freeze({
   targetVmaf: RC.targetVmaf,   // 88 (BIBBIA §12)
@@ -33,7 +40,7 @@ export const SCENE = Object.freeze({
   stride: 2,                   // metrica su un frame ogni 2 (PLCC 0.958 → 0.956, research/12 §2)
   factor: 2,                   // luma a ½ risoluzione (540×960 per 1080×1920)
   floor: 2e6,                  // bitrate minimo (ratecontrol DEFAULTS.minBitrate)
-  timeFactor: 1.7,             // tempo totale ≈ 1.7× (research/12 §6): usato dalla stima in UI
+  timeFactor: 1.6,             // tempo totale ≈ 1.6× la sola codifica (v0.35, stima research/12 §12; v0.34.1 misurato ≈ 3× su IMG_3053): UI e barra
   maxFails: 2,                 // dopo N segmenti consecutivi falliti le prove si spengono per il resto del job
 });
 
@@ -74,8 +81,10 @@ export function planSceneSegments(frames, segStarts, ceiling, o = {}) {
 const r2 = (x) => Math.round(x * 100) / 100;
 const v100 = (q) => r2(Math.min(100, q)); // la taratura è lineare: oltre 100 (contenuti statici/facili) il valore non ha senso, si mostra 100
 /** Record compatto salvato nel manifest della ripresa per il segmento (bitrate in bit/s, VMAF stimati). */
-export function toRecord(res, ms) {
-  return { b: res.bitrate, why: res.reason, prior: Math.round(res.prior),
+export function toRecord(res, ms, priorFrom) {
+  const st = res.stats;
+  return { b: res.bitrate, why: res.reason, prior: Math.round(res.prior), ...(priorFrom ? { pf: priorFrom } : {}),
+    ...(st ? { n: { e: st.encoders, m: st.measures, s: st.streamed, r: res.rounds, ...(st.ceilingFirst ? { cf: 1 } : {}), ...(st.easy ? { ez: 1 } : {}) } } : {}),
     pts: res.points.map((p) => ({ b: Math.round(p.bitrate), req: Math.round(p.requested ?? p.bitrate), q: v100(p.q), ql: v100(p.qLow), db: r2(p.pooled.mean) })),
     est: estAtChoice(res), ms: Math.round(ms) };
 }
@@ -139,6 +148,7 @@ export async function runSceneSearch({ plan, from = 0, saved = {}, deps, ceiling
   const recs = plan.map((s, k) => saved[k] || null); let fails = 0, off = false;
   const todo = plan.filter((s) => s.k >= from && !saved[s.k]).length; let done = 0;
   if (from < plan.length && todo < plan.length - from) log(`ripresa: prove già fatte per ${plan.length - from - todo} segmenti (dal manifest), da fare ${todo}`);
+  const tAll = now();
   for (const seg of plan) {
     if (seg.k < from || recs[seg.k]) continue;
     await check();
@@ -146,9 +156,10 @@ export async function runSceneSearch({ plan, from = 0, saved = {}, deps, ceiling
     if (off) rec = { ...fallbackRecord(ceiling, 'prove disattivate dopo errori ripetuti', 0), why: 'off' };
     else {
       try {
-        const res = await searchBitrate({ trialWindow: seg.trialWindow, prior: seg.prior }, deps,
+        const wp = warmPrior(recs[seg.k - 1], ceiling, opts.minBitrate ?? SCENE.floor, seg.prior);
+        const res = await searchBitrate({ trialWindow: seg.trialWindow, prior: wp ?? seg.prior }, deps,
           { ...opts, minBitrate: Math.min(opts.minBitrate ?? SCENE.floor, ceiling), maxBitrate: ceiling });
-        rec = toRecord(res, now() - t0); fails = 0;
+        rec = toRecord(res, now() - t0, wp != null ? 'prev' : 'src'); fails = 0;
       } catch (e) {
         if (isFatal(e)) throw e;
         rec = fallbackRecord(ceiling, e, now() - t0); fails++;
@@ -157,10 +168,41 @@ export async function runSceneSearch({ plan, from = 0, saved = {}, deps, ceiling
       } finally { try { deps.release?.(); } catch {} }
     }
     recs[seg.k] = rec; await save(seg.k, rec); done++;
-    log(`${sceneLine(seg.k, rec)}${rec.ms ? ` · prove ${(rec.ms / 1000).toFixed(1)} s` : ''}`);
+    log(`${sceneLine(seg.k, rec)}${rec.ms ? ` · prove ${(rec.ms / 1000).toFixed(1)} s` : ''}${workNote(rec)}`);
     onProgress(done, todo, seg.k);
   }
+  if (done && deps.timing) { try { log(timingLine(deps.timing(), now() - tAll, done)); } catch {} }
   return recs;
+}
+
+/**
+ * v0.35 partenza «a caldo»: il prior del segmento k tiene conto del bitrate scelto per k−1 (stessa clip, misurato), non solo di 0.4 × sorgente
+ * (research/12 §4: dentro un clip il bitrate sorgente non predice il necessario, il segmento precedente sì meglio). È solo il
+ * CENTRO della prima forchetta: la decisione resta della misura. null → si usa il prior dalla sorgente.
+ */
+export function warmPrior(prev, ceiling, floor = SCENE.floor, srcPrior = null) {
+  if (!prev || !(prev.b > 0) || !['searched', 'clamped-max', 'clamped-min'].includes(prev.why)) return null;
+  // clamped-max: il precedente voleva PIÙ del limite → si parte dal limite (prova «limite per primo»); altrimenti media geometrica
+  // con il prior dalla sorgente (copre i salti di contenuto tra segmenti), o il solo precedente se il prior manca
+  const b = prev.why === 'clamped-max' || !(srcPrior > 0) ? prev.b : Math.sqrt(prev.b * srcPrior);
+  return Math.min(ceiling, Math.max(Math.min(floor, ceiling), b));
+}
+// « · 1 giro, 2 enc/1 misura, limite prima» — quanto lavoro ha fatto la ricerca del segmento (record.n)
+function workNote(rec) {
+  const n = rec.n; if (!n) return '';
+  return ` · (${n.r} ${n.r === 1 ? 'giro' : 'giri'}, ${n.e} enc/${n.m} ${n.m === 1 ? 'misura' : 'misure'}${n.s ? `, ${n.s} in diretta` : ''}${n.cf ? ', limite per primo' : ''}${n.ez ? ', facile: niente 2° giro' : ''}${rec.pf === 'prev' ? ', partenza dal segmento prima' : ''})`;
+}
+const sec = (ms) => (ms / 1000).toFixed(2);
+/**
+ * Riga compatta di ripartizione dei tempi delle prove (v0.35, da leggere nel log del device):
+ * T = createTrialDeps().timing(): ms per voce + conteggi. «altro» = totale − somma delle voci misurate in serie.
+ */
+export function timingLine(T, totalMs, nSeg) {
+  const serial = T.extract + T.lumaSrc + T.encWait + T.decWait + T.lumaDec + T.ssim + T.setup + T.liveTail;
+  return `prove: tempi ${sec(totalMs)} s per ${nSeg} segmenti · estrazione ${sec(T.extract)} s (${T.frames} frame, ${T.players || '?'} player; include la misura in diretta) · luma sorgente ${sec(T.lumaSrc)} s (${T.nSrc}) · attese encoder ${sec(T.encWait)} s · avvio enc/dec ${sec(T.setup)} s`
+    + ` · misura in diretta: luma ${sec(T.lumaLive)} s (${T.nLive}) + SSIM ${sec(T.ssimLive)} s, coda ${sec(T.liveTail)} s`
+    + ` · misura dopo: decode attese ${sec(T.decWait)} s, luma ${sec(T.lumaDec)} s (${T.nDec}), SSIM ${sec(T.ssim)} s`
+    + ` · altro ${sec(Math.max(0, totalMs - serial))} s${T.liveOff ? ` · misura in diretta disattivata (${T.liveOff})` : ''}`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -168,10 +210,10 @@ export async function runSceneSearch({ plan, from = 0, saved = {}, deps, ceiling
 // ---------------------------------------------------------------------------------------------
 
 /** Luma via canvas 2D a 1/factor di W×H. Funziona con frame nativi (format null) e con frame di VideoDecoder. */
-export function makeCanvasLuma(W, H, factor = SCENE.factor) {
+export function makeCanvasLuma(W, H, factor = SCENE.factor, { gpu = false } = {}) {
   const w = Math.max(8, Math.floor(W / factor)), h = Math.max(8, Math.floor(H / factor));
   const cv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
-  const ctx = cv.getContext('2d', { willReadFrequently: true, alpha: false });
+  const ctx = cv.getContext('2d', { willReadFrequently: !gpu, alpha: false }); // gpu: solo per il banco di misura (v0.35), non usato nelle prove
   if (!ctx) throw new Error('canvas 2D non disponibile');
   return (frame) => { ctx.drawImage(frame, 0, 0, w, h); return lumaU8FromRGBA(ctx.getImageData(0, 0, w, h).data, w, h); };
 }
@@ -183,54 +225,144 @@ export function makeCanvasLuma(W, H, factor = SCENE.factor) {
  *  makeEncoder({width,height,bitrate,framerate,onChunk,onError}) → wrapper come encode.createHevcEncoder (encode/drain/flush/close);
  *  colorSpace: VideoColorSpaceInit da forzare sul decoder di prova (HLG come il file finale), facoltativo.
  *  encW/encH (default W/H): dimensioni dell'encoder se diverse dai frame nativi (v0.31 «Riduci a 1080p»); verifyOutput(decoderConfig): lancia se l'uscita non è quella chiesta.
+ *  makeDecoder(init) (default new VideoDecoder), lumaFn, decodeFn: iniettabili per i test; live (default true): misura in diretta (v0.35).
+ *
+ * v0.35 «misura in diretta»: per i bitrate con stream[i] (ratecontrol: quelli da misurare subito) un VideoDecoder riceve i chunk
+ * MENTRE l'encoder di prova li produce; luma (stessa funzione canvas) + SSIM del frame decodificato i contro la luma sorgente i
+ * (catturata nel ciclo prima di encode(i), quindi sempre già pronta). La misura finisce quasi insieme alla prova invece di
+ * richiedere un secondo passaggio (decode + canvas) dopo: la parte lenta (readback del canvas) si sovrappone alle attese del
+ * seek/rVFC. Solo encoder e decoder DI PROVA (l'encoder finale non esiste ancora, research/12 §7.9). Qualsiasi errore del
+ * decoder in diretta → i chunk sono ancora lì e si misura dopo come prima (measure); se il decoder non si crea/configura,
+ * la diretta si spegne per il resto del job.
  */
-export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorSpace, stride = SCENE.stride, factor = SCENE.factor, onStat = () => {}, encW = W, encH = H, framerate, verifyOutput }) {
+export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorSpace, stride = SCENE.stride, factor = SCENE.factor, onStat = () => {}, encW = W, encH = H, framerate, verifyOutput,
+  makeDecoder = (init) => new VideoDecoder(init), live = true, now = () => performance.now(), players = () => 0, lumaFn = null, decodeFn = decodeChunks }) {
   // «Riduci a 1080p»: W×H = frame nativi (4K), encW×encH = dimensioni dell'encoder. La luma si prende SEMPRE a 1/factor di encW×encH:
   // sorgente 4K (drawImage ridimensiona) e frame decodificato 1080p finiscono nella stessa griglia → confronto a risoluzione comune.
-  const luma = makeCanvasLuma(encW, encH, factor);
+  const luma = lumaFn ?? makeCanvasLuma(encW, encH, factor); // lumaFn/decodeFn/makeDecoder: solo per i test in Node
   const cache = new Map(); // finestra → luma sorgente (solo indici multipli di stride)
   const keyOf = (w) => `${w.startIdx}-${w.endIdx}`;
-  return {
-    async encodeTrial(w, rates) {
-      const key = keyOf(w), capture = !cache.has(key), src = capture ? [] : null;
-      let durS = 0; for (let i = w.startIdx; i < w.endIdx; i++) durS += frames[i].dur;
-      const outs = rates.map((r) => ({ r, chunks: [], bytes: 0, config: null, err: null, enc: null }));
+  const T = { extract: 0, frames: 0, players: 0, lumaSrc: 0, nSrc: 0, encWait: 0, setup: 0, decWait: 0, lumaDec: 0, nDec: 0, ssim: 0, lumaLive: 0, nLive: 0, ssimLive: 0, liveTail: 0, liveOff: '' };
+  let liveOn = !!live;
+  const decConfig = (c) => { const config = { ...c, codedWidth: c.codedWidth || encW, codedHeight: c.codedHeight || encH }; if (colorSpace) config.colorSpace = colorSpace; return config; };
+  // misura in diretta di un'uscita di prova: decoder creato al primo chunk (serve il decoderConfig), frame → luma → SSIM
+  const startLive = (src) => {
+    const L = { dec: null, dbs: [], idx: 0, chain: Promise.resolve(), err: null };
+    L.feed = (chunk, config) => {
+      if (L.err) return;
       try {
+        if (!L.dec) {
+          const t = now();
+          L.dec = makeDecoder({
+            output: (f) => { const i = L.idx++; L.chain = L.chain.then(() => {
+              if (i % stride || !src[i]) return;
+              let t0 = now(); const d = luma(f); T.lumaLive += now() - t0; T.nLive++;
+              t0 = now(); L.dbs[i / stride] = frameScore(src[i], d).db; T.ssimLive += now() - t0;
+            }).catch((e) => { L.err ||= e; }).finally(() => f.close()); },
+            error: (e) => { L.err ||= e; } });
+          L.dec.configure(decConfig(config));
+          T.setup += now() - t;
+        }
+        L.dec.decode(chunk);
+      } catch (e) {
+        L.err ||= e;
+        if (!L.dec || L.dec.state === 'unconfigured') { liveOn = false; T.liveOff ||= String(e?.message || e).slice(0, 80); } // decoder non creabile insieme agli encoder: diretta spenta
+      }
+    };
+    L.finish = async (n) => { // dopo il flush degli encoder: ritorna dbs o null (→ misura dopo)
+      const t = now();
+      try { if (L.dec && !L.err) await L.dec.flush(); } catch (e) { L.err ||= e; }
+      await L.chain;
+      T.liveTail += now() - t;
+      L.close();
+      if (L.err && L.idx === 0 && liveOn) { liveOn = false; T.liveOff ||= String(L.err?.message || L.err).slice(0, 80); } // il decoder non ha mai dato frame: diretta spenta per il job
+      const dbs = L.dbs.filter((x) => Number.isFinite(x));
+      return !L.err && L.idx === n && dbs.length >= 2 ? dbs : null;
+    };
+    L.close = () => { try { if (L.dec && L.dec.state !== 'closed') L.dec.close(); } catch {} };
+    return L;
+  };
+  return {
+    /** encodeTrial(w, rates, {stream}) → [{bitrate, requested, bytes, encoded, dbs?}] (dbs = misura in diretta riuscita). */
+    async encodeTrial(w, rates, { stream = [] } = {}) {
+      const key = keyOf(w), capture = !cache.has(key), src = capture ? [] : cache.get(key);
+      let durS = 0; for (let i = w.startIdx; i < w.endIdx; i++) durS += frames[i].dur;
+      const outs = rates.map((r, i) => ({ r, chunks: [], bytes: 0, config: null, err: null, enc: null, live: stream[i] && liveOn ? startLive(src) : null }));
+      try {
+        let t = now();
         for (const o of outs) o.enc = makeEncoder({ width: encW, height: encH, framerate, bitrate: r0(o.r),
-          onChunk: (c, meta) => { if (meta?.decoderConfig && !o.config) o.config = meta.decoderConfig; o.chunks.push(c); o.bytes += c.byteLength; },
+          onChunk: (c, meta) => {
+            if (meta?.decoderConfig && !o.config) {
+              o.config = meta.decoderConfig;
+              if (o.live) { try { verifyOutput?.(o.config); } catch (e) { o.err ||= e; o.live.close(); o.live = null; } } // downscale errato: fatale, niente diretta
+            }
+            o.chunks.push(c); o.bytes += c.byteLength;
+            if (o.live && o.config) o.live.feed(c, o.config);
+          },
           onError: (e) => { o.err ||= e; } });
-        let j = 0;
+        T.setup += now() - t;
+        let j = 0; t = now();
         for await (const vf of frameSource(w.startIdx, w.endIdx)) {
+          T.extract += now() - t;
           try {
             for (const o of outs) { if (o.err) throw o.err; o.enc.encode(vf, j === 0); }
-            if (capture && j % stride === 0) src[j] = luma(vf);
+            if (capture && j % stride === 0) { const t0 = now(); src[j] = luma(vf); T.lumaSrc += now() - t0; T.nSrc++; }
           } finally { vf.close(); }
-          j++;
-          for (const o of outs) await o.enc.drain(2);
+          j++; T.frames++;
+          const t1 = now(); for (const o of outs) await o.enc.drain(2); T.encWait += now() - t1;
+          t = now();
         }
-        for (const o of outs) await o.enc.flush();
+        T.players = Math.max(T.players, players() || 0);
+        const t2 = now(); for (const o of outs) await o.enc.flush(); T.encWait += now() - t2;
         for (const o of outs) if (o.err) throw o.err;
         if (j !== w.endIdx - w.startIdx) throw new Error(`prova: ${j} frame su ${w.endIdx - w.startIdx}`);
-      } finally { for (const o of outs) { try { o.enc?.close(); } catch {} } }
+      } catch (e) { for (const o of outs) o.live?.close(); throw e; }
+      finally { for (const o of outs) { try { o.enc?.close(); } catch {} } }
       if (capture) cache.set(key, src);
-      return outs.map((o) => {
-        if (!o.config || !o.chunks.length) throw new Error('prova: l\'encoder non ha prodotto pacchetti o decoderConfig');
-        verifyOutput?.(o.config); // downscale: dimensioni/10 bit dell'uscita (errore fatale, mai assorbito dalle prove)
-        const config = { ...o.config, codedWidth: o.config.codedWidth || encW, codedHeight: o.config.codedHeight || encH };
-        if (colorSpace) config.colorSpace = colorSpace;
-        onStat({ requested: o.r, bytes: o.bytes, real: o.bytes * 8 / durS });
-        return { bitrate: o.bytes * 8 / durS, requested: o.r, bytes: o.bytes, encoded: { chunks: o.chunks, config, n: o.chunks.length } };
-      });
+      const res = [];
+      try {
+        for (const o of outs) {
+          if (!o.config || !o.chunks.length) throw new Error('prova: l\'encoder non ha prodotto pacchetti o decoderConfig');
+          verifyOutput?.(o.config); // downscale: dimensioni/10 bit dell'uscita (errore fatale, mai assorbito dalle prove)
+          const dbs = o.live ? await o.live.finish(o.chunks.length) : null;
+          onStat({ requested: o.r, bytes: o.bytes, real: o.bytes * 8 / durS, live: !!dbs });
+          const encoded = { chunks: dbs ? [] : o.chunks, config: decConfig(o.config), n: o.chunks.length }; // misurata in diretta: chunk liberati subito
+          res.push({ bitrate: o.bytes * 8 / durS, requested: o.r, bytes: o.bytes, encoded, ...(dbs ? { dbs } : {}) });
+        }
+      } finally { for (const o of outs) o.live?.close(); } // nessun decoder di prova sopravvive alla chiamata
+      return res;
     },
     async measure(w, encoded) {
       const src = cache.get(keyOf(w)); if (!src) throw new Error('misura: luma sorgente assente');
-      const dbs = [];
-      const n = await decodeChunks(encoded.config, encoded.chunks, (f, i) => { if (i % stride === 0 && src[i]) dbs.push(frameScore(src[i], luma(f)).db); });
+      const dbs = []; let tIn = 0;
+      const t = now();
+      const n = await decodeFn(encoded.config, encoded.chunks, (f, i) => {
+        if (i % stride !== 0 || !src[i]) return;
+        let t0 = now(); const d = luma(f); const t1 = now(); T.lumaDec += t1 - t0; T.nDec++;
+        dbs.push(frameScore(src[i], d).db); const t2 = now(); T.ssim += t2 - t1; tIn += t2 - t0;
+      });
+      T.decWait += now() - t - tIn;
       encoded.chunks.length = 0; // i chunk di prova non servono più
       if (n !== encoded.n) throw new Error(`misura: decodificati ${n} frame su ${encoded.n}`);
       if (dbs.length < 2) throw new Error('misura: troppo pochi frame confrontati');
       return dbs;
     },
+    /** Riscalda la via canvas (primo drawImage di un frame nativo HLG: shader/conversione) prima delle prove. */
+    warm(vf) { const t = now(); luma(vf); T.setup += now() - t; },
+    /**
+     * v0.35 banco di misura (solo log, nessuna scelta automatica): ms mediani per frame della luma attuale (½, canvas CPU
+     * willReadFrequently) e di due alternative non adottate (½ su canvas GPU, ¼ su canvas CPU) sullo stesso frame nativo.
+     * Serve a decidere sul device se la lettura del canvas è il collo di bottiglia (research/12 §12).
+     */
+    bench(vf, reps = 3) {
+      const med = (fn) => { const v = []; for (let i = 0; i < reps; i++) { const t = now(); fn(vf); v.push(now() - t); } v.sort((a, b) => a - b); return v[v.length >> 1]; };
+      const out = { half: med(luma) };
+      try { out.halfGpu = med(makeCanvasLuma(encW, encH, factor, { gpu: true })); } catch { out.halfGpu = NaN; }
+      try { out.quarter = med(makeCanvasLuma(encW, encH, factor * 2)); } catch { out.quarter = NaN; }
+      try { const a = luma(vf); const t = now(); for (let i = 0; i < reps; i++) frameScore(a, a); out.ssim = (now() - t) / reps; } catch { out.ssim = NaN; }
+      return out;
+    },
+    timing: () => ({ ...T }),
     release() { cache.clear(); },
   };
 }

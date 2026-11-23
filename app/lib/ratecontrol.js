@@ -10,8 +10,8 @@
 // Everything browser-dependent is INJECTED (deps), so this module runs in Node with stubs
 // (app/lib/ratecontrol.test.mjs). No WebCodecs/DOM access here.
 
-import { segmentScenes, pickTrialWindow } from './scenes.js?v=0.34.1';
-import { DEFAULT_CALIBRATION, pool, estimateVmaf } from './quality.js?v=0.34.1';
+import { segmentScenes, pickTrialWindow } from './scenes.js?v=0.35.0';
+import { DEFAULT_CALIBRATION, pool, estimateVmaf } from './quality.js?v=0.35.0';
 
 export const DEFAULTS = Object.freeze({
   targetVmaf: 88,        // user decision 2026-11-19 (BIBBIA §12): ≈ the verified 8 Mbps file
@@ -95,51 +95,92 @@ export function solveRate(points, t, slopePerDoubling = DEFAULTS.slopePerDoublin
 
 /**
  * Search the minimum bitrate for one segment.
- * deps (injected, browser implementations described in docs/research/12 §6):
- *   encodeTrial(window, bitrates[]) → Promise<[{bitrate, bytes, encoded}]>
+ * deps (injected, browser implementations described in docs/research/12 §6/§12):
+ *   encodeTrial(window, bitrates[], {stream?: boolean[]}) → Promise<[{bitrate, requested?, bytes, encoded, dbs?}]>
  *       encode frames [window.startIdx, window.endIdx) once per bitrate with a separate
- *       VideoEncoder (first frame keyFrame), ideally all bitrates in parallel from the same frames.
+ *       VideoEncoder (first frame keyFrame), all bitrates in parallel from the same frames.
+ *       stream[i] = true asks the implementation to measure that bitrate WHILE encoding (v0.35: decoder fed
+ *       with the chunks as they come out) and return the per-frame ssimDb in `dbs`; if it cannot (or `dbs`
+ *       is missing) the search falls back to measure().
  *   measure(window, encoded) → Promise<number[]>   per-frame ssimDb vs source (quality.frameScore().db)
  *   (decodeTrial is folded into measure: measure decodes `encoded` itself.)
- * @returns {{bitrate:number, points:Array, rounds:number, reason:string, est:{mean,low}}}
+ *
+ * v0.35 «fast» policy (opts.fast, default true; research/12 §12) — fewer measurements, same decision rule:
+ *  · ceiling-first: if the prior is within one bracket of the ceiling (round-1 upper rate would be the ceiling anyway),
+ *    round 1 = [ceiling, prior/bracket] but ONLY the ceiling is measured first (streamed); if it already misses the
+ *    target (mean or p5 guard) the answer is clamped-max at once and the lower trial is never measured.
+ *  · easy content: if the answer lies below the lowest tested rate (that point already clears the target), extrapolate
+ *    down from the lowest point with a slope ≥ the standard one (slower descent = conservative); accepted WITHOUT a 2nd
+ *    round when that stays within one halving of the tested point or reaches the floor anyway, otherwise verified by a
+ *    2nd round as before (also below the floor: the old code took clamped-min from a possibly too flat measured slope).
+ *  · a 2nd round when the answer is ABOVE the tested bracket (upward extrapolation is never trusted) and below the ceiling.
+ * @returns {{bitrate:number, points:Array, rounds:number, reason:string, est:{mean,low}, prior:number, stats:{encoders,measures,streamed,ceilingFirst,easy}}}
  */
 export async function searchBitrate(segment, deps, opts = {}) {
-  const o = { ...DEFAULTS, ...opts }, cal = o.calibration;
+  const o = { ...DEFAULTS, ...opts }, cal = o.calibration, fast = o.fast !== false;
   const w = segment.trialWindow;
   const tMean = o.targetVmaf + o.marginSd * cal.sd, tLow = o.lowVmaf + o.marginSd * cal.sdLow;
   const prior = clamp(opts.priorBitrate ?? segment.prior ?? predictBitrate(w.srcBitrate, o), o.minBitrate, o.maxBitrate);
-  const points = [];
-  const run = async (rates) => {
-    rates = [...new Set(rates.map((r) => Math.round(clamp(r, o.minBitrate, o.maxBitrate) / 1e4) * 1e4))]
-      .filter((r) => !points.some((p) => Math.abs(p.bitrate - r) / r < 0.03));
-    if (!rates.length) return;
-    const enc = await deps.encodeTrial(w, rates);
-    for (const e of enc) {
-      const dbs = await deps.measure(w, e.encoded);
-      const pooled = pool(dbs), est = estimateVmaf(pooled, cal);
-      points.push({ bitrate: e.bitrate, requested: e.requested ?? e.bitrate, bytes: e.bytes, pooled, q: est.mean, qLow: est.low });
-    }
+  const points = [], stats = { encoders: 0, measures: 0, streamed: 0, ceilingFirst: false, easy: false };
+  const addPoint = async (e) => {
+    const dbs = Array.isArray(e.dbs) && e.dbs.length >= 2 ? e.dbs : await deps.measure(w, e.encoded);
+    if (e.dbs === dbs) stats.streamed++;
+    stats.measures++;
+    const pooled = pool(dbs), est = estimateVmaf(pooled, cal);
+    points.push({ bitrate: e.bitrate, requested: e.requested ?? e.bitrate, bytes: e.bytes, pooled, q: est.mean, qLow: est.low });
   };
+  const norm = (rates) => [...new Set(rates.map((r) => Math.round(clamp(r, o.minBitrate, o.maxBitrate) / 1e4) * 1e4))]
+    .filter((r) => !points.some((p) => Math.abs(p.bitrate - r) / r < 0.03));
+  // encode `rates` in one call; the first `nNow` are measured now (streamed when possible), the rest are returned unmeasured
+  const run = async (rates, nNow = rates.length) => {
+    rates = norm(rates); if (!rates.length) return [];
+    const stream = rates.map((_, i) => fast && i < nNow);
+    const enc = await deps.encodeTrial(w, rates, { stream });
+    stats.encoders += enc.length;
+    const later = [];
+    for (let i = 0; i < enc.length; i++) { if (i < nNow) await addPoint(enc[i]); else later.push(enc[i]); }
+    return later;
+  };
+  const passes = (p) => p.q >= tMean && p.qLow >= tLow;
   const need = () => {
     const m = solveRate(points.map((p) => ({ bitrate: p.bitrate, q: p.q })), tMean, o.slopePerDoubling);
     const l = solveRate(points.map((p) => ({ bitrate: p.bitrate, q: p.qLow })), tLow, o.slopePerDoubling);
     return Math.max(m, l);
   };
-  await run([prior / o.bracket, prior * o.bracket]);
-  let rounds = 1, b = need();
-  const lo = Math.min(...points.map((p) => p.bitrate)), hi = Math.max(...points.map((p) => p.bitrate));
-  // Refine once if the answer was extrapolated well outside the tested bracket (and is not clamped).
-  if (rounds < o.maxRounds && (b > hi * 1.15 || b < lo / 1.15) && b > o.minBitrate && b < o.maxBitrate) {
-    await run([b]); rounds++; b = need();
+  let b, reason = null;
+  if (fast && prior * o.bracket >= o.maxBitrate * 0.999 && o.maxBitrate / o.bracket > o.minBitrate) {
+    stats.ceilingFirst = true;
+    const later = await run([o.maxBitrate, prior / o.bracket], 1);
+    const top = points.find((p) => Math.abs(p.bitrate - o.maxBitrate) / o.maxBitrate < 0.03) ?? points[0];
+    if (top && points.length === 1 && !passes(top)) { b = o.maxBitrate; reason = 'clamped-max'; } // al limite manca già: inutile misurare sotto
+    else for (const e of later) await addPoint(e);
+  } else await run([prior / o.bracket, prior * o.bracket]);
+  let rounds = 1;
+  if (reason == null) {
+    b = need();
+    const sorted = [...points].sort((x, y) => x.bitrate - y.bitrate), lo = sorted[0].bitrate, hi = sorted[sorted.length - 1].bitrate;
+    let easy = false;
+    if (fast && b < lo / 1.15 && passes(sorted[0])) {
+      // contenuto facile: discesa dal punto più basso con pendenza ≥ standard (più lenta = prudente). Si accetta senza 2° giro
+      // se resta entro un dimezzamento dal punto provato o se tocca comunque il minimo; altrimenti si verifica come prima.
+      const p0 = sorted[0], p1 = sorted[1];
+      const sl = (k) => Math.max(o.slopePerDoubling, p1 ? (p1[k] - p0[k]) / Math.max(1e-6, log2(p1.bitrate / p0.bitrate)) : 0);
+      const bc = Math.max(p0.bitrate * 2 ** ((tMean - p0.q) / sl('q')), p0.bitrate * 2 ** ((tLow - p0.qLow) / sl('qLow')));
+      if (bc >= p0.bitrate / 2 || bc <= o.minBitrate) { b = bc; easy = stats.easy = true; }
+    }
+    if (!easy && rounds < o.maxRounds && (b > hi * 1.15 || b < lo / 1.15) && b > o.minBitrate * (fast ? 0 : 1) && b < o.maxBitrate) {
+      // Refine once if the answer was extrapolated well outside the tested bracket (and is not clamped).
+      await run([b]); rounds++; b = need();
+    }
+    reason = b >= o.maxBitrate ? 'clamped-max' : b <= o.minBitrate ? 'clamped-min' : 'searched';
   }
-  const reason = b >= o.maxBitrate ? 'clamped-max' : b <= o.minBitrate ? 'clamped-min' : 'searched';
   const bitrate = Math.round(clamp(b, o.minBitrate, o.maxBitrate) / 1e4) * 1e4;
   // estimate at the chosen rate (log-linear between the points) for logging
   const at = (key) => { const pts = points.map((p) => ({ x: log2(p.bitrate), y: p[key] })).sort((a, c) => a.x - c.x); const x = log2(bitrate);
     if (pts.length === 1) return pts[0].y + (x - pts[0].x) * o.slopePerDoubling;
     let i = 0; while (i < pts.length - 2 && x > pts[i + 1].x) i++; // interpolate, or extrapolate from the nearest pair
     return pts[i].y + (x - pts[i].x) / (pts[i + 1].x - pts[i].x) * (pts[i + 1].y - pts[i].y); };
-  return { bitrate, points, rounds, reason, est: { mean: at('q'), low: at('qLow') }, prior };
+  return { bitrate, points, rounds, reason, est: { mean: at('q'), low: at('qLow') }, prior, stats };
 }
 
 /**

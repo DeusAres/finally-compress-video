@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.34.1';
-import { sprite, SPRITES } from './sprite.js?v=0.34.1';
-import { createLogStore } from './logstore.js?v=0.34.1';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.34.1';
+import { bus } from './bus.js?v=0.35.0';
+import { sprite, SPRITES } from './sprite.js?v=0.35.0';
+import { createLogStore } from './logstore.js?v=0.35.0';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.0';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -147,7 +147,7 @@ function template(opts) {
     </fieldset>
     <fieldset class="fcv-field">
       <legend class="px-label">Sperimentale</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-sceneq" value="1"><div><b>Qualità garantita per scena (sperimentale)</b><i>(più lento: ~1,7× il tempo)</i><span>Prova più bitrate per ogni tratto e sceglie il minimo che resta «quasi perfetto» (VMAF stimato ≥ 88); più lento. Il bitrate scelto sopra diventa il limite massimo: il file non pesa mai più della stima.</span></div></label>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-sceneq" value="1"><div><b>Qualità garantita per scena (sperimentale)</b><i>(più lento: ~1,6× il tempo)</i><span>Prova più bitrate per ogni tratto e sceglie il minimo che resta «quasi perfetto» (VMAF stimato ≥ 88); più lento. Il bitrate scelto sopra diventa il limite massimo: il file non pesa mai più della stima.</span></div></label>
       <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b><i>(sperimentale: su iOS 27 non mantiene la decodifica in background)</i><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
       <label class="fcv-radio"><input type="checkbox" name="fcv-par2" value="1"><div><b>Estrazione parallela (2 player)</b><i>(~1,7× più veloce; se un player si blocca torna a 1 da solo)</i></div></label>
     </fieldset>
@@ -387,7 +387,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (!d) { R.est.innerHTML = R.estT.innerHTML = st.file ? '…' : '—'; return; }
     const est = predictMB();
     const pct = src ? (1 - est / src) * 100 : null;
-    const vary = st.settings.sceneQ; // qualità per scena: peso variabile (al massimo quello a bitrate fisso), tempo ≈ ×2
+    const vary = st.settings.sceneQ; // qualità per scena: peso variabile (al massimo quello a bitrate fisso), tempo ≈ ×1.6
     R.est.innerHTML = `${vary ? 'variabile, ≤' : '≈'} ${fmtMB(est)} <small>MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${vary ? 'almeno ' : ''}${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
     const tt = predictTime();
     R.estT.innerHTML = `${vary ? 'variabile, ≈' : '≈'} ${fmtTime(tt.s)} <small>m:ss</small>`;

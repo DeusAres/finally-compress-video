@@ -12,8 +12,8 @@ run node app/lib/apac.test.mjs
 run node app/lib/passthrough.test.mjs
 run node app/lib/mov.test.mjs
 run node --test app/lib/ratecontrol.test.mjs
+run node --test app/lib/scenesearch.test.mjs
 run node tools/lab/brctl-test.mjs
 rm -f /tmp/.fcv-test.$$
 [ $fail = 0 ] && echo "TUTTI I TEST OK" || echo "ALCUNI TEST FALLITI"
 exit $fail
-node app/lib/scenesearch.test.mjs

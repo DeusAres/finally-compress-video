@@ -16,6 +16,7 @@ export const waitEvent = (el, ev, ms, signal) => new Promise((res) => {
   el.addEventListener(ev, onEv, { once: true }); signal?.addEventListener('abort', onAb, { once: true });
 });
 
+export const RVFC_GRACE_MS = 60;
 export const SEEK_TIMEOUT_MS = 4000; // solo per guasti reali: il passaggio in background interrompe via AbortSignal
 
 export async function openVideoElement(file, signal) {
@@ -42,7 +43,13 @@ export const newStats = () => ({ n: 0, dup: 0, off: 0, noCallback: 0, retried: 0
  */
 async function grabFrame(video, f, ps, signal) {
   const target = (f.ts + f.dur / 2) / 1e6;
-  const pr = ps ? new Promise((res) => { const t = setTimeout(() => res(null), 250); video.requestVideoFrameCallback((_, md) => { clearTimeout(t); res(md.mediaTime); }); }) : null;
+  // v0.35: dopo i 250 ms si concede ancora RVFC_GRACE_MS: se il thread principale era occupato (primo drawImage HLG, configure
+  // degli encoder di prova…) il timer scaduto passa prima del passo di rendering in cui gira la callback rVFC → falso «assente».
+  const pr = ps ? new Promise((res) => {
+    let done = false; const fin = (v) => { if (!done) { done = true; res(v); } };
+    const t = setTimeout(() => setTimeout(() => fin(null), RVFC_GRACE_MS), 250);
+    video.requestVideoFrameCallback((_, md) => { clearTimeout(t); fin(md.mediaTime); });
+  }) : null;
   if (signal?.aborted) throw interruptError();
   video.currentTime = target;
   let ev = await waitEvent(video, 'seeked', SEEK_TIMEOUT_MS, signal);
@@ -64,6 +71,38 @@ async function grabFrame(video, f, ps, signal) {
     }
   }
   return { vf: new VideoFrame(video, { timestamp: f.ts, duration: f.dur }), bad, mt };
+}
+
+/** Sposta il player su un frame vicino (precedente, o successivo per il primo) e attende la sua presentazione (rVFC prima del seek). */
+async function nudge(video, f, signal) {
+  const t = (f.ts > f.dur ? f.ts - f.dur / 2 : f.ts + 1.5 * f.dur) / 1e6;
+  const rv = new Promise((res) => { const to = setTimeout(res, 150); video.requestVideoFrameCallback(() => { clearTimeout(to); res(); }); });
+  if (signal?.aborted) throw interruptError();
+  video.currentTime = t;
+  const ev = await waitEvent(video, 'seeked', SEEK_TIMEOUT_MS, signal);
+  if (ev === 'abort') throw interruptError();
+  await rv;
+}
+
+/**
+ * v0.35 riscaldamento dei player prima delle prove per scena: ogni player estrae (con verifica rVFC) un frame che NON è tra i
+ * primi che gli verranno chiesti (stesso istante = nessuna nuova presentazione = rVFC che non scatta). Fino a `tries` tentativi.
+ * frameFor(p) → {ts, dur} in µs, o null per saltare. keep(p, vf): facoltativo, riceve il frame (ne diventa proprietario);
+ * altrimenti il frame è chiuso. Ritorna per player {ok, tries, ms, mt}.
+ */
+export async function warmPlayers(videos, frameFor, signal = null, { tries = 4, keep = null } = {}) {
+  return Promise.all(videos.map(async (v, p) => {
+    const f = frameFor(p), t0 = performance.now(); if (!f) return { ok: false, tries: 0, ms: 0, skipped: true };
+    const ps = newStats(); let k = 0, r = null;
+    for (; k < tries; k++) {
+      if (k) await nudge(v, f, signal);
+      r = await grabFrame(v, f, ps, signal);
+      if (!r.bad) break;
+      r.vf.close(); r = null;
+    }
+    if (r) { if (keep) keep(p, r.vf); else r.vf.close(); }
+    return { ok: !!r, tries: Math.min(k + 1, tries), ms: performance.now() - t0, mt: r?.mt ?? null };
+  }));
 }
 
 /**
@@ -106,6 +145,9 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
         // fino a 3 volte prima di arrendersi (prima: fallback immediato al primo mediaTime assente).
         for (let k = 0; r.bad && k < 3 && !stop && !degraded && !signal?.aborted; k++) {
           r.vf.close(); stats.players[p].retried++;
+          // v0.35: se il frame era stato presentato ma la rVFC è arrivata tardi, un nuovo seek allo STESSO istante non presenta
+          // nulla di nuovo e la rVFC non scatta più (3 tentativi persi): prima ci si sposta su un frame vicino, poi si ritenta.
+          await nudge(videos[p], frames[i], signal);
           r = await grabFrame(videos[p], frames[i], stats.players[p], signal);
         }
         if (stop || degraded) { r.vf.close(); return; }

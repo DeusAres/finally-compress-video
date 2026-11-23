@@ -268,7 +268,7 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 
 **Risultati**: IMG_7440 −60 % a 8 Mbps (VMAF 88.9); originali 4K −90 %; sorgenti già a 15 Mbps ≈ −40 %.
 
-**Moduli pronti ma NON integrati** (in corso di integrazione da altro lavoro): ricerca bitrate per scena (scenes.js, quality.js, ratecontrol.js, research/12): garantisce ogni segmento ≥ VMAF 88 ma su IMG_7440 costa +10 % di peso e 1.7× il tempo.
+**Qualità garantita per scena** (opzione sperimentale `sceneQ`, research/12 §11–12): prove per segmento (finestra 1 s, VMAF stimato ≥ 88, limite = bitrate dell'utente). **v0.35 prove più veloci** a parità di decisione: misura in diretta durante la prova, «limite per primo» (al limite una sola misura), niente 2° giro per i contenuti facili, partenza dal segmento precedente, player e canvas riscaldati, rVFC tardiva tollerata; riga `prove: tempi …` nel log. Laboratorio: finestra 0.5 s e stride 3–4 peggiorano la stima sul segmento (non adottati); ¼ di risoluzione equivalente ma dipende dal filtro di Safari (non adottato). Stima tempo ≈ 1.6× la codifica (IMG_3053 v0.34.1: ≈ 3×), da rimisurare su iPhone.
 
 **Limiti noti**: PiP non da PWA installata; eco del comando rapido riducibile, non eliminabile (12 % non lineare); audio spaziale `apac` scartato (vedi Idee future); encoder VT realtime ~6 punti VMAF sotto x265 a pari bitrate.
 
@@ -278,7 +278,7 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 - Video lungo 3–5 min e 4K: tenuta memoria/OPFS, velocità parallela, PiP per tutta la durata, spazio libero.
 - Ripresa **senza PiP** dopo background (rientro in Safari): riparte dall'ultimo segmento, file finale senza buchi né doppioni.
 - Web app installata: notifica di fine, funzionamento offline, aggiornamento automatico alla nuova versione (version.txt/service worker).
-- Ricerca per scena su file diversi (una volta integrata): peso, tempo e qualità vs bitrate fisso.
+- Ricerca per scena su file diversi: peso, tempo e qualità vs bitrate fisso; v0.35: leggere `prove: banco luma`, `prove: player riscaldati`, `prove: tempi …` e le note per segmento.
 
 ### Idee future
 - Passthrough della traccia audio spaziale `apac` tramite post-processing del moov (come già fatto per `dvvC`), invece di scartarla.
