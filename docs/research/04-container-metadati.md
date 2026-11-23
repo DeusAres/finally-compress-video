@@ -271,3 +271,10 @@ IMG_2790 (4K, 9 trak): stesse differenze residue (più `free` dopo il moov nell'
 - l'apac/le mebx coprono la durata sorgente intera (edit list traslate), il video quella dei fotogrammi codificati.
 
 ❓ Da verificare su iPhone: Foto offre «Mix audio» sul .mov v0.34 (IMG_3053 e IMG_2790); share sheet «Salva video» con `video/quicktime`.
+
+### Esito finale «Mix audio» (iPhone, 23/11, v0.34.1) — CHIUSO
+
+- v0.34.1 (.mov allineato all'originale): Foto **non** offre «Mix audio».
+- **Prova di controllo**: originale IMG_3053 esportato da Foto come «Originale non modificato» → File → «Salva video» → la copia reimportata **perde «Mix audio»**.
+- ⇒ Foto abilita il Mix audio solo per gli asset registrati dalla fotocamera (proprietà dell'asset nella libreria, non del file). **Nessun file prodotto da un'app può ottenerlo**: non è un difetto del contenitore.
+- Si mantiene comunque la copia di apac + tracce mebx (opzione «Mantieni audio spaziale e metadati iPhone»): l'audio spaziale resta nel file e viene riprodotto; MOV resta il contenitore di default.
