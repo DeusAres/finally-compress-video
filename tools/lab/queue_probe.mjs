@@ -41,7 +41,7 @@ const HANG = () => { // seek bloccato simulato: window.__hang.budget = quanti <v
   Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', { configurable: true, get() { return d.get.call(this); }, set(v) {
     if (H.els.has(this)) return;
     const k = (H.seen.get(this) || 0) + 1; H.seen.set(this, k);
-    if (H.budget > 0 && !this.isConnected && k >= H.after) { H.budget--; H.n++; H.els.add(this); return; }
+    if (H.budget > 0 && this.tagName === 'VIDEO' && !this.isConnected && k >= H.after) { H.budget--; H.n++; H.els.add(this); return; }
     d.set.call(this, v);
   } });
 };

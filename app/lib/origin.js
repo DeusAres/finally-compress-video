@@ -4,7 +4,7 @@
 // (o da un trascinamento) è RICODIFICATA da Foto: chiave com.apple.quicktime.displayname aggiunta, traccia AAC spostata
 // prima del video, apac (audio spaziale) tolto, 4K ridotto a 1080p, mvhd con l'ora dell'esportazione. L'originale della
 // fotocamera ha il video come prima traccia e nessuna displayname.
-import { parseBoxes, childBoxes, trakHandler } from './dovi.js?v=0.36.1';
+import { parseBoxes, childBoxes, trakHandler } from './dovi.js?v=0.36.2';
 
 const u16 = (b, o) => (b[o] << 8) | b[o + 1];
 const u32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
