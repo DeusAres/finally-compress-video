@@ -259,7 +259,7 @@ function verifiedGrab({ get, set = () => {}, p = 0, reopen = null, onReopen = ()
       best.vf.close();
       throw framesUnverifiedError(`frame ${idx ?? '?'} (${(f.ts / 1e6).toFixed(3)} s) non verificabile dopo ${k + 1} seek${reopened ? ' e la ricreazione del player' : ''} (${desc(f, best.mt)}): voce interrotta invece di scrivere un file con frame ripetuti o fuori ordine`);
     }
-    unverified.add(best.vf); if (best.mt != null) stats.prevMT = best.mt;
+    unverified.add(best.vf); // prevMT resta quello dell'ultimo frame verificato (il mediaTime sbagliato non deve far sembrare doppione il successivo)
     return best;
   };
 }

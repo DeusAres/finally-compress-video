@@ -333,3 +333,12 @@ test('autotestLuma: non-fatal encoder error → CPU with reason; downscale error
   const E = lumaWorld({ encErr: ds });
   await assert.rejects(E.deps.autotestLuma(E.vf, [8e6]), (e) => e === ds);
 });
+
+test('createTrialDeps (v0.36.3): frame non verificati (skipFrame) codificati ma esclusi dalla metrica, in diretta e dopo', async () => {
+  const w = { startIdx: 0, endIdx: 60 }, skip = new Set([4, 10, 11]); // indici relativi alla finestra; 4 e 10 cadono sullo stride (2)
+  const A = fakeWorld(), d = createTrialDeps({ ...A.common, skipFrame: (f) => skip.has(f.id) });
+  const out = await d.encodeTrial(w, [4e6, 8e6], { stream: [true, false] });
+  assert.equal(out[0].dbs.length, 28, 'in diretta: 30 punti − 2 esclusi');
+  assert.equal((await d.measure(w, out[1].encoded)).length, 28, 'misura dopo: stessi esclusi');
+  assert.equal(d.timing().frames, 60, 'tutti i frame codificati');
+});

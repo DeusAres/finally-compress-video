@@ -3,8 +3,8 @@
 import assert from 'node:assert/strict';
 
 const open = new Set();
-globalThis.VideoFrame = class { constructor(src, o) { this.ts = o.timestamp; open.add(this); } close() { open.delete(this); } };
-const { warmPlayers, parallelFrames, seekFrames, newStats, _setSeekTimeout, isSeekTimeout } = await import('./frames.js');
+globalThis.VideoFrame = class { constructor(src, o) { this.ts = o.timestamp; this.mt = src?._mt; open.add(this); } close() { open.delete(this); } };
+const { warmPlayers, parallelFrames, seekFrames, newStats, _setSeekTimeout, isSeekTimeout, isUnverified, withSpan } = await import('./frames.js');
 _setSeekTimeout(40); // seek «bloccato» in 2×40 ms invece di 2×4 s
 
 /** <video> finto: il seek presenta il frame (rVFC con mediaTime = istante richiesto) e poi emette 'seeked'. fail: il seek lancia; slow: ms di ritardo. */
@@ -80,5 +80,76 @@ const fr = (i) => ({ ts: i * 16667, dur: 16667 });
   await assert.rejects((async () => { for await (const vf of parallelFrames([fakeVideo({ hangAt: 2 }), fakeVideo({ hangAt: 2 })], list, st, null, { reopen: async () => fakeVideo({ hangAt: 1 }) })) vf.close(); })(), (e) => isSeekTimeout(e));
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(open.size, 0);
+}
+
+// ---- v0.36.3: player simulato su una griglia VFR (timescale 600 come gli iPhone: 20 tick = 33.3 ms, 25 tick = 41.7 ms) ----
+// Il seek presenta il frame il cui intervallo contiene l'istante; `glitch`: indice → spostamenti (in frame) dei prossimi seek che
+// cadono su quel frame (consumati uno per seek, come i mediaTime spostati del log IMG_6887); `always`: indice → spostamento fisso.
+const tick = (n) => Math.round(n * 1e6 / 600);
+function vfrList(n, long = new Set()) { const out = []; let t = tick(600 * 10); for (let i = 0; i < n; i++) { const d = long.has(i) ? 25 : 20; out.push({ ts: tick(Math.round(t * 600 / 1e6)), dur: tick(d) }); t += tick(d); } return out; }
+function gridVideo(list, { glitch = new Map(), always = new Map(), seeks = [] } = {}) {
+  const ls = new Map(); let cbs = []; const g = new Map([...glitch].map(([k, v]) => [k, [...v]]));
+  const v = {
+    _mt: null, duration: 30,
+    addEventListener(t, f) { (ls.get(t) || ls.set(t, new Set()).get(t)).add(f); },
+    removeEventListener(t, f) { ls.get(t)?.delete(f); },
+    requestVideoFrameCallback(f) { cbs.push(f); },
+    set currentTime(t) {
+      const us = t * 1e6; let i = 0; while (i + 1 < list.length && list[i + 1].ts <= us + 0.5) i++;
+      if (us < list[0].ts) i = -1;
+      let shown = i; seeks.push(i);
+      if (i >= 0 && g.get(i)?.length) shown = i + g.get(i).shift(); else if (always.has(i)) shown = i + always.get(i);
+      const mt = shown < 0 ? 9.5 : list[Math.max(0, Math.min(list.length - 1, shown))].ts / 1e6;
+      setTimeout(() => { v._mt = mt; const c = cbs; cbs = []; c.forEach((f) => f(0, { mediaTime: mt })); for (const f of [...(ls.get('seeked') || [])]) f(); }, 0);
+    },
+  };
+  return v;
+}
+const collect = async (gen) => { const got = []; for await (const vf of gen) { got.push({ ts: vf.ts, mt: vf.mt, unv: isUnverified(vf) }); vf.close(); } return got; };
+const exact = (got, list) => { assert.deepEqual(got.map((x) => x.ts), list.map((f) => f.ts), 'tutti i frame, in ordine'); got.forEach((x, k) => assert.ok(Math.abs(x.mt - list[k].ts / 1e6) < 1e-6, `frame ${k}: contenuto ${x.mt} ≠ atteso ${list[k].ts / 1e6}`)); };
+
+// 8) regressione IMG_6887: mediaTime spostati di +7/+2/−1/+2/−1 frame attorno a 10.4 s (anche due volte di fila sullo stesso frame),
+//    frame da 42 ms vicino: il sequenziale li recupera tutti con i nuovi seek guidati, nessun frame sbagliato consegnato
+{
+  const list = vfrList(40, new Set([3, 4, 17, 30])), st = newStats(); st.players = [st];
+  const glitch = new Map([[13, [7, 2]], [15, [-1, 2]], [19, [-1]], [22, [1]], [25, [3, 3, 3]]]); // 22: +1 (prima accettato come «ok»)
+  const got = await collect(seekFrames(gridVideo(list, { glitch }), list, st, null));
+  exact(got, list);
+  assert.equal(st.unverified || 0, 0); assert.equal(st.recovered, 5, 'cinque frame recuperati');
+  assert.ok(st.off >= 9, 'gli spostamenti sono contati come fuori posto'); assert.equal(open.size, 0);
+}
+// 9) frame sempre sbagliato su questo player → nuovi seek inutili → <video> ricreato (budget) → frame giusto
+{
+  const list = vfrList(20), st = newStats(); st.players = [st]; const re = [], why = [];
+  const got = await collect(seekFrames(gridVideo(list, { always: new Map([[7, 2]]) }), list, st, null, { reopen: async (p) => { re.push(p); return gridVideo(list); }, onReopen: (p, e) => why.push(e.message) }));
+  exact(got, list);
+  assert.deepEqual(re, [0]); assert.match(why[0], /frame 7 non verificato dopo 4 seek/); assert.equal(st.reopenBad, 1); assert.equal(open.size, 0);
+}
+// 10) irrecuperabile anche dopo la ricreazione → errore FramesUnverified; il frame sbagliato NON è consegnato, i precedenti sì e giusti
+{
+  const list = vfrList(20), st = newStats(); st.players = [st]; const got = [];
+  await assert.rejects((async () => { for await (const vf of seekFrames(gridVideo(list, { always: new Map([[9, -3]]) }), list, st, null, { base: 100, reopen: async () => gridVideo(list, { always: new Map([[9, -3]]) }) })) { got.push({ ts: vf.ts, mt: vf.mt }); vf.close(); } })(),
+    (e) => e.name === 'FramesUnverified' && /frame 109 .*non verificabile/.test(e.message));
+  exact(got, list.slice(0, 9)); assert.equal(st.unverified, 1); assert.deepEqual(st.unvSamples[0].slice(0, 2), [109, +(list[9].ts / 1e6).toFixed(4)]);
+  assert.equal(open.size, 0);
+}
+// 11) prove per scena (onBad 'mark', senza ricreare): consegnato ma SEGNATO (escluso dalla metrica); gli altri verificati
+{
+  const list = vfrList(12), st = newStats(); st.players = [st];
+  const got = await collect(seekFrames(gridVideo(list, { always: new Map([[4, 1]]) }), list, st, null, { onBad: 'mark', reopenBad: false, reopen: async () => assert.fail('non si ricrea nelle prove') }));
+  assert.deepEqual(got.map((x) => x.unv), got.map((_, k) => k === 4)); assert.equal(st.unverified, 1); assert.equal(open.size, 0);
+}
+// 12) parallelFrames: il player 2 dà sempre un frame spostato → fallback a 1 player sano che lo recupera; budget di ricreazioni condiviso
+{
+  const list = vfrList(30, new Set([10, 11])), st = newStats(), why = [], budget = { reopens: 0, max: 3 };
+  const got = await collect(parallelFrames([gridVideo(list, { glitch: new Map([[6, [2]]]) }), gridVideo(list, { always: new Map([[11, -2]]) })], list, st, null, { maxFlight: 4, budget, onFallback: (w) => why.push(w), reopen: async () => assert.fail('player sano: nessuna ricreazione') }));
+  exact(got, list);
+  assert.equal(st.fellBack, true); assert.match(why[0], /player 2: frame 11 non verificato dopo 4 seek/);
+  assert.equal(st.unverified || 0, 0); assert.equal(st.recovered, 1, "frame 6 recuperato dal player 1"); assert.equal(budget.reopens, 0); assert.equal(open.size, 0);
+}
+// 13) withSpan: durata del campione più lunga della distanza dal frame successivo (VFR/riordino) → intervallo = distanza
+{
+  const w = withSpan([{ ts: 0, dur: 41667 }, { ts: 33333, dur: 33333 }, { ts: 66667, dur: 41667 }]);
+  assert.deepEqual(w.map((f) => f.span), [33333, undefined, undefined]);
 }
 console.log('frames.test: OK');
