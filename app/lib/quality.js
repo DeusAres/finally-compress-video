@@ -249,14 +249,16 @@ export async function decodeChunks(config, chunks, onFrame) {
     output: (f) => { const i = idx++; chain = chain.then(() => onFrame(f, i)).finally(() => f.close()); },
     error: (e) => { err = e; },
   });
-  dec.configure(config);
-  for (const c of chunks) {
-    if (err) break;
-    dec.decode(c);
-    if (dec.decodeQueueSize > 8) await new Promise((r) => dec.addEventListener('dequeue', r, { once: true }));
-  }
-  await dec.flush().catch((e) => { err ??= e; });
-  await chain; dec.close();
+  try { // v0.35.4: decoder chiuso anche se configure()/decode() lanciano (prima restava aperto fino al GC)
+    dec.configure(config);
+    for (const c of chunks) {
+      if (err) break;
+      dec.decode(c);
+      if (dec.decodeQueueSize > 8) await new Promise((r) => dec.addEventListener('dequeue', r, { once: true }));
+    }
+    await dec.flush().catch((e) => { err ??= e; });
+    await chain;
+  } finally { try { if (dec.state !== 'closed') dec.close(); } catch {} }
   if (err) throw err;
   return idx;
 }

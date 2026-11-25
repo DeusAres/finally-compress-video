@@ -6,7 +6,7 @@
 //   seg-NNNN.json   {k, n, bytes, rpu, packets:[{ts,dur,type,offset,size}]}  (ts/dur in seconds, output timeline)
 // A segment counts as done only when the manifest says so AND its index + binary size agree (verifiedDone).
 // Writes go through the SyncAccessHandle worker (opfs-worker.js): no packet is kept in RAM after its write is acked.
-import { opfsWorker } from './opfs.js?v=0.35.3';
+import { opfsWorker } from './opfs.js?v=0.35.4';
 
 export const JOB_VERSION = 1;
 const DIR = ['jobs', 'current'];
@@ -84,8 +84,9 @@ export async function openJob(manifest, { fresh = false, done = manifest.doneCou
   const writeJson = (name, obj) => { const b = te.encode(JSON.stringify(obj)); return call({ op: 'writeFile', dir: DIR, name, data: b.buffer }, [b.buffer]); };
   manifest.doneCount = fresh ? 0 : done;
   manifest.updated = Date.now();
-  await writeJson('manifest.json', manifest);
-  const dir = await jobDir(true);
+  let dir;
+  try { await writeJson('manifest.json', manifest); dir = await jobDir(true); }
+  catch (e) { wk.terminate(); throw e; } // v0.35.4: worker (e handle OPFS) mai orfano se l'apertura fallisce (es. spazio esaurito)
   let closed = false;
   const job = {
     manifest,

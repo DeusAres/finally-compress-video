@@ -26,10 +26,12 @@ export async function openVideoElement(file, signal) {
   try {
     if (v.readyState < 1 && (await waitEvent(v, 'loadedmetadata', 10000, signal)) === 'abort') throw interruptError();
     // Safari needs a decoded frame before seeks deliver pictures reliably.
+    let onAb = null; // v0.35.4: listener tolto dopo la gara (prima restava sul signal della run, con la sua closure)
     try {
-      await Promise.race([v.play(), new Promise((_, rej) => { if (signal?.aborted) rej(interruptError()); else signal?.addEventListener('abort', () => rej(interruptError()), { once: true }); })]);
+      await Promise.race([v.play(), new Promise((_, rej) => { if (signal?.aborted) rej(interruptError()); else signal?.addEventListener('abort', onAb = () => rej(interruptError()), { once: true }); })]);
       v.pause();
     } catch (e) { if (e?.name === 'BackgroundInterrupt') throw e; /* muted autoplay may still be refused; seeks work anyway */ }
+    finally { if (onAb) signal.removeEventListener('abort', onAb); }
   } catch (e) { releaseVideoElement(v); throw e; }
   return v;
 }
@@ -91,7 +93,10 @@ async function nudge(video, f, signal) {
  * altrimenti il frame è chiuso. Ritorna per player {ok, tries, ms, mt}.
  */
 export async function warmPlayers(videos, frameFor, signal = null, { tries = 4, keep = null } = {}) {
-  return Promise.all(videos.map(async (v, p) => {
+  // v0.35.4: si attendono TUTTI i player prima di consegnare (keep) o di lanciare l'errore: con Promise.all un player che
+  // falliva faceva uscire il chiamante mentre l'altro poteva ancora consegnare un VideoFrame che nessuno avrebbe chiuso.
+  const got = [];
+  const rs = await Promise.allSettled(videos.map(async (v, p) => {
     const f = frameFor(p), t0 = performance.now(); if (!f) return { ok: false, tries: 0, ms: 0, skipped: true };
     const ps = newStats(); let k = 0, r = null;
     for (; k < tries; k++) {
@@ -100,9 +105,13 @@ export async function warmPlayers(videos, frameFor, signal = null, { tries = 4, 
       if (!r.bad) break;
       r.vf.close(); r = null;
     }
-    if (r) { if (keep) keep(p, r.vf); else r.vf.close(); }
+    if (r) { if (keep) got.push([p, r.vf]); else r.vf.close(); }
     return { ok: !!r, tries: Math.min(k + 1, tries), ms: performance.now() - t0, mt: r?.mt ?? null };
   }));
+  const bad = rs.find((x) => x.status === 'rejected');
+  if (bad) { for (const [, vf] of got) { try { vf.close(); } catch {} } throw bad.reason; }
+  for (const [p, vf] of got) keep(p, vf);
+  return rs.map((x) => x.value);
 }
 
 /**

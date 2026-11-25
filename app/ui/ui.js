@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.35.3';
-import { sprite, SPRITES } from './sprite.js?v=0.35.3';
-import { createLogStore } from './logstore.js?v=0.35.3';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.3';
+import { bus } from './bus.js?v=0.35.4';
+import { sprite, SPRITES } from './sprite.js?v=0.35.4';
+import { createLogStore } from './logstore.js?v=0.35.4';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.4';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -623,7 +623,9 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.log.append(frag); renderLogHead();
   }
   function clearLog() { store.clear(); pend = []; R.log.textContent = ''; showAll = false; R.logSel.hidden = true; renderLogHead(); }
-  function appendLog(line, cat, data) { store.add(line, cat, data); pend.push(String(line)); scheduleFlush(); }
+  function appendLog(line, cat, data) { // pend limitato: a pagina nascosta il flush può tardare (rAF fermo, timer rallentati)
+    store.add(line, cat, data); pend.push(String(line)); if (pend.length > 2 * LOG_ALL_MAX) pend.splice(0, pend.length - LOG_ALL_MAX); scheduleFlush();
+  }
   R.logAll.addEventListener('click', () => { if (R.logAll.disabled) return; showAll = !showAll; renderTail(); });
 
   function headerText() {

@@ -11,6 +11,7 @@ run node app/lib/echo.test.mjs
 run node app/lib/apac.test.mjs
 run node app/lib/passthrough.test.mjs
 run node app/lib/mov.test.mjs
+run node app/lib/frames.test.mjs
 run node --test app/lib/ratecontrol.test.mjs
 run node --test app/lib/scenesearch.test.mjs
 run node tools/lab/brctl-test.mjs

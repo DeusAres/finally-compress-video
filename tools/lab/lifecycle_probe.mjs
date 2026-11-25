@@ -30,7 +30,7 @@ const ONLY = arg('--only', 'nuovo,annulla,errore,impostazioni,ripresa').split(',
 // ---- campione H.264 (Chromium) ----
 const tmp = mkdtempSync(join(tmpdir(), 'fcv-life-'));
 const AVC = join(tmp, 'clip_avc.mov'), AVC2 = join(tmp, 'clip2_avc.mov');
-execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', SRC, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=320:-2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', AVC]);
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', SRC, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=320:-2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', AVC]);
 execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', AVC, '-c', 'copy', '-metadata', 'title=b', AVC2]); // secondo file (altro nome/dimensione)
 
 // ---- server statico (127.0.0.1: niente service worker, che index.html registra solo su https/localhost) ----
@@ -71,6 +71,7 @@ const INIT = () => {
   Document.prototype.createElement = function (n, o) { const e = ce.call(this, n, o); if (/^(video|audio)$/i.test(n)) P.media.push(new WeakRef(e)); return e; };
   const A0 = window.Audio; window.Audio = new Proxy(A0, { construct(t, a, nt) { const e = Reflect.construct(t, a, nt); P.media.push(new WeakRef(e)); return e; } });
   document.addEventListener('change', (e) => { const f = e.target?.files?.[0]; if (f) P.files.push(new WeakRef(f)); }, true);
+  const F0 = window.File; window.File = new Proxy(F0, { construct(t, a, nt) { const f = Reflect.construct(t, a, nt); if (/\.(mov|mp4)$/.test(f.name)) P.outs.push(new WeakRef(f)); return f; } });
   const gf = FileSystemFileHandle.prototype.getFile;
   FileSystemFileHandle.prototype.getFile = async function () { const f = await gf.call(this); if (/\.(mov|mp4)$/.test(f.name)) P.outs.push(new WeakRef(f)); return f; };
   P.snap = async () => {
@@ -79,13 +80,14 @@ const INIT = () => {
     return { heapMB: +(performance.memory.usedJSHeapSize / 1048576).toFixed(2), blobUrls: P.urls.size, frames: P.frames.size, codecs: [...P.codecs].filter((c) => c.state !== 'closed').length,
       workers: P.workers.size, audioCtx: [...P.actx].filter((a) => a.state !== 'closed').length, videoDom: document.querySelectorAll('video').length,
       mediaAlive: media.length, mediaSrc: media.filter((m) => m.getAttribute('src') || m.currentSrc).length,
-      filesAlive: P.files.filter((w) => w.deref()).length, outsAlive: P.outs.filter((w) => w.deref()).length, opfs: opfs.length, opfsList: opfs.join(' ') };
+      filesAlive: P.files.filter((w) => w.deref()).length, outsAlive: P.outs.filter((w) => w.deref()).length, opfs: opfs.length, opfsList: opfs.join(' '),
+      mediaInfo: media.map((m) => `${m.tagName}:${m.isConnected ? 'dom' : '-'}:${(m.getAttribute('src') || '').slice(0, 30)}:${(m.currentSrc || '').slice(0, 30)}:rs${m.readyState}:ns${m.networkState}`).join(' ') };
   };
 };
 
 const browser = await pw.chromium.launch({ args: ['--enable-precise-memory-info', '--autoplay-policy=no-user-gesture-required'] });
 const ctx = await browser.newContext(); const page = await ctx.newPage();
-const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+const errors = []; page.on('pageerror', (e) => errors.push(e.message + (process.env.STACK ? '\n' + e.stack : '')));
 await page.addInitScript(INIT);
 const cdp = await ctx.newCDPSession(page);
 await page.goto(BASE); await page.waitForSelector('[data-ref="go"]');
@@ -103,13 +105,15 @@ const go = async () => { await page.click('[data-ref="go"]'); };
 const snap = async () => { for (let i = 0; i < 3; i++) await cdp.send('HeapProfiler.collectGarbage'); await page.waitForTimeout(150); await cdp.send('HeapProfiler.collectGarbage'); return page.evaluate(() => window.__probe.snap()); };
 const rows = [];
 const rec = async (scen, i, extra = '') => { const s = await snap(); rows.push({ scen, i, ...s, extra }); };
-const logTail = () => page.evaluate(() => [...document.querySelectorAll('[data-ref="log"] div')].slice(-4).map((d) => d.textContent).join(' | '));
+const logTail = (n = 4) => page.evaluate((n) => [...document.querySelectorAll('[data-ref="log"] div')].slice(-n).map((d) => d.textContent).join(' | '), n);
 
 await rec('avvio', 0);
 const files = [AVC, AVC2];
 if (ONLY.includes('nuovo')) for (let i = 1; i <= N; i++) { // scelta file → export completo → Nuovo video
   await pick(files[i % 2]); await go(); await waitStage(['done', 'error']);
-  const st = await stage(); await rec('nuovo', i, st === 'done' ? 'export ok' : 'ERRORE: ' + (await logTail()).slice(0, 200));
+  const st = await stage();
+  if (st === 'done') { await page.click('[data-ref="save"]'); await page.waitForTimeout(300); } // «Salva»: in Chromium senza share sheet → download via Blob URL
+  await rec('nuovo', i, st === 'done' ? 'export ok + salva' : 'ERRORE: ' + (await logTail()).slice(0, 200));
 }
 if (ONLY.includes('impostazioni')) for (let i = 1; i <= N; i++) { // dopo l'export: «Altre impostazioni» → bitrate diverso → Comprimi
   if ((await stage()) !== 'done') { await pick(files[0]); await go(); await waitStage(['done', 'error']); }
@@ -123,7 +127,7 @@ if (ONLY.includes('annulla')) for (let i = 1; i <= N; i++) { // annulla durante 
   await rec('annulla', i, await stage());
 }
 if (ONLY.includes('errore')) for (let i = 1; i <= N; i++) { // errore: campione HEVC (il <video> di Chromium non lo decodifica)
-  await pick(SRC); await go(); await waitStage(['done', 'error'], 180000); await rec('errore', i, await stage());
+  await pick(SRC); await go(); await waitStage(['done', 'error'], 180000); if (process.env.LOG) console.log(await logTail(40)); await rec('errore', i, await stage());
 }
 if (ONLY.includes('ripresa')) for (let i = 1; i <= Math.min(N, 3); i++) { // ripresa da segmenti: ricarica a metà fase video, poi Riprendi
   await pick(files[0]); await page.evaluate(() => { document.querySelector('input[name="fcv-sceneq"]').checked = false; document.querySelector('input[name="fcv-sceneq"]').dispatchEvent(new Event('change', { bubbles: true })); });
@@ -143,4 +147,5 @@ const cols = ['scen', 'i', 'heapMB', 'blobUrls', 'frames', 'codecs', 'workers', 
 console.log(cols.join('\t'));
 for (const r of rows) console.log(cols.map((c) => r[c]).join('\t'));
 console.log('OPFS finale:', rows.at(-1).opfsList || '(vuoto)');
+if (process.env.MEDIA) for (const r of rows) console.log(r.scen, r.i, r.mediaInfo);
 if (errors.length) console.log('errori pagina:', errors.slice(0, 5));

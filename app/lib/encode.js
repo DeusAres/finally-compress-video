@@ -16,7 +16,9 @@ export function createHevcEncoder({ width, height, bitrate, framerate = 60, onCh
   });
   const cfg = { codec: 'hvc1.2.4.L123.B0', width, height, bitrate, framerate, latencyMode: 'quality', bitrateMode: 'variable' };
   log?.(`encoder: framerate ${framerate} fps`);
-  enc.configure(cfg);
+  // v0.35.4: se configure() lancia (dimensioni/config rifiutate) l'encoder va chiuso qui: il chiamante non ne riceve il riferimento
+  // e un VideoEncoder non chiuso resta vivo con le sue callback (che trattengono player, frame e analisi della run).
+  try { enc.configure(cfg); } catch (e) { try { enc.close(); } catch {} throw e; }
   return {
     get decoderConfig() { return decoderConfig; },
     get queue() { return enc.encodeQueueSize; },
