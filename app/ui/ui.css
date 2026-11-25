@@ -280,3 +280,5 @@ details.fcv-log > summary .count { margin-left: auto; }
 .fcv-drop-msg[hidden] { display: none; }
 .fcv-pred { margin: 0; font-size: var(--fs-sm); padding: var(--sp-2) var(--sp-3); background: var(--surface); box-shadow: var(--px-ring); }
 .fcv-pred-note[hidden] { display: none; }
+.fcv-open-safari { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.fcv-open-safari[hidden] { display: none; }

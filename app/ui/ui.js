@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.35.2';
-import { sprite, SPRITES } from './sprite.js?v=0.35.2';
-import { createLogStore } from './logstore.js?v=0.35.2';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.2';
+import { bus } from './bus.js?v=0.35.3';
+import { sprite, SPRITES } from './sprite.js?v=0.35.3';
+import { createLogStore } from './logstore.js?v=0.35.3';
+import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.3';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -38,7 +38,7 @@ const PHASES = [
   { id: 'scrittura', label: 'File', sub: 'Assemblo il file e i metadati' },
 ];
 const WEIGHT = { analisi: 0.04, video: 0.82, assemblaggio: 0.04, audio: 0.07, scrittura: 0.03 };
-const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: false, apac: true, container: 'mov' }; // container: 'mov' (QuickTime, come gli originali iPhone, v0.34) | 'mp4' // apac: audio spaziale + metadati iPhone (mebx) mantenuti (v0.32/v0.33, solo se la sorgente li ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
+const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, sceneQ: true, apac: true, container: 'mov' }; // container: 'mov' (QuickTime, come gli originali iPhone, v0.34) | 'mp4' // apac: audio spaziale + metadati iPhone (mebx) mantenuti (v0.32/v0.33, solo se la sorgente li ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
 
 const nf1 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 });
@@ -72,6 +72,7 @@ function template(opts) {
   ${s('logo', { scale: 4, className: 'fcv-logo px-bob', title: 'Logo' })}
   <h1 class="px-title">Finally <b>Compress<span class="fcv-cursor px-blink"></span></b></h1>
   <p>Video HDR e Dolby Vision dell'iPhone, più leggeri. Tutto resta sul telefono.${opts.version ? ` <span class="px-chip px-chip--num">${esc(opts.version)}</span>` : ''}</p>
+  <p class="fcv-open-safari" data-ref="safariBox" hidden><button type="button" class="px-btn px-btn--ghost" data-ref="safariBtn">Apri in Safari</button> <span data-ref="safariMsg" role="status" aria-live="polite">Nella scheda di Safari funziona la Picture-in-Picture.</span></p>
 </header>
 
 <ol class="fcv-steps" aria-label="Passi">
@@ -147,7 +148,7 @@ function template(opts) {
     </fieldset>
     <fieldset class="fcv-field">
       <legend class="px-label">Sperimentale</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-sceneq" value="1"><div><b>Qualità garantita per scena (sperimentale)</b><i>(più lento: ~1,6× il tempo)</i><span>Prova più bitrate per ogni tratto e sceglie il minimo che resta «quasi perfetto» (VMAF stimato ≥ 88); più lento. Il bitrate scelto sopra diventa il limite massimo: il file non pesa mai più della stima.</span></div></label>
+      <label class="fcv-radio"><input type="checkbox" name="fcv-sceneq" value="1"><div><b>Qualità garantita per scena</b><i>(più lento: ~1,6× il tempo)</i><span>Prova più bitrate per ogni tratto e sceglie il minimo che resta «quasi perfetto» (VMAF stimato ≥ 88); più lento. Il bitrate scelto sopra diventa il limite massimo: il file non pesa mai più della stima.</span></div></label>
       <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b><i>(sperimentale: su iOS 27 non mantiene la decodifica in background)</i><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
       <label class="fcv-radio"><input type="checkbox" name="fcv-par2" value="1"><div><b>Estrazione parallela (2 player)</b><i>(~1,7× più veloce; se un player si blocca torna a 1 da solo)</i></div></label>
     </fieldset>
@@ -455,6 +456,21 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (show && sa) R.pipNote.textContent = 'Per lavorare in background apri il sito in Safari (nell\'app installata la finestrella PiP non funziona).';
     else R.pipNote.textContent = st.pipOn ? 'Finestrella aperta: puoi usare altre app, la compressione continua finché resta aperta.' : 'Puoi usare altre app: la compressione continua finché la finestrella resta aperta.';
     R.pipBtn.textContent = st.pipOn ? 'Chiudi Picture-in-Picture' : 'Continua in Picture-in-Picture';
+  }
+  // v0.35.3: dall'app installata, tasto «Apri in Safari» (lì funziona la PiP). iOS: schema x-safari-https:// (apre Safari);
+  // se dopo ~1 s la pagina è ancora visibile, ripiego: link copiato negli appunti da incollare in Safari.
+  if (standalone()) {
+    R.safariBox.hidden = false;
+    R.safariBtn.addEventListener('click', () => {
+      const url = location.href.split('#')[0];
+      try { location.href = 'x-safari-' + url; } catch {}
+      setTimeout(() => {
+        if (document.visibilityState !== 'visible') return;
+        const ok = () => { R.safariMsg.textContent = 'Link copiato: aprilo incollandolo in Safari. (Nota: un export interrotto qui non si riprende in Safari, i dati sono separati.)'; };
+        const ko = () => { R.safariMsg.textContent = `Apri Safari e vai su ${url}`; };
+        try { navigator.clipboard?.writeText ? navigator.clipboard.writeText(url).then(ok, ko) : ko(); } catch { ko(); }
+      }, 1000);
+    });
   }
   R.pipBtn.addEventListener('click', () => handlers.onPip?.(!!st.pipOn)); // SINCRONO nel tap: requestPictureInPicture richiede il gesto
   function setPhase(p) {
