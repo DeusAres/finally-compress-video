@@ -72,7 +72,7 @@ function template(opts) {
   ${s('logo', { scale: 4, className: 'fcv-logo px-bob', title: 'Logo' })}
   <h1 class="px-title">Finally <b>Compress<span class="fcv-cursor px-blink"></span></b></h1>
   <p>Video HDR e Dolby Vision dell'iPhone, più leggeri. Tutto resta sul telefono.${opts.version ? ` <span class="px-chip px-chip--num">${esc(opts.version)}</span>` : ''}</p>
-  <p class="fcv-open-safari" data-ref="safariBox" hidden><button type="button" class="px-btn px-btn--ghost" data-ref="safariBtn">Apri in Safari</button> <span data-ref="safariMsg" role="status" aria-live="polite">Nella scheda di Safari funziona la Picture-in-Picture.</span></p>
+  <p class="fcv-open-safari" data-ref="safariBox" hidden><button type="button" class="px-btn" data-ref="safariBtn">Apri in Safari</button> <span data-ref="safariMsg" role="status" aria-live="polite">Nella scheda di Safari funziona la Picture-in-Picture.</span></p>
 </header>
 
 <ol class="fcv-steps" aria-label="Passi">
@@ -211,8 +211,8 @@ function template(opts) {
   <p class="fcv-save-msg" data-ref="saveMsg" aria-live="polite"></p>
   <p class="fcv-outname" data-ref="outName"></p>
   <div class="fcv-done-more">
-    <button class="px-btn px-btn--ghost" data-ref="again">Altre impostazioni</button>
-    <label class="px-btn px-btn--ghost fcv-relabel">Nuovo video<input type="file" accept="video/*,.mov,.mp4" data-ref="input3" aria-label="Scegli un nuovo video"></label>
+    <button class="px-btn" data-ref="again">Altre impostazioni</button>
+    <label class="px-btn fcv-relabel">Nuovo video<input type="file" accept="video/*,.mov,.mp4" data-ref="input3" aria-label="Scegli un nuovo video"></label>
   </div>
 </section>
 
@@ -392,7 +392,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.est.innerHTML = `${vary ? 'variabile, ≤' : '≈'} ${fmtMB(est)} <small>MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${vary ? 'almeno ' : ''}${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
     const tt = predictTime();
     R.estT.innerHTML = `${vary ? 'variabile, ≈' : '≈'} ${fmtTime(tt.s)} <small>m:ss</small>`;
-    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? ', 2 player' : ', 1 player'})${vary ? ', ×1,7 per le prove per scena' : ''}${st.settings.downscale ? ' · estrazione dal 4K, uscita 1080p (stessa durata del 4K)' : ''}.`;
+    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? ', 2 player' : ', 1 player'})${vary ? `, ×${nf1.format(SCENE_TIME_FACTOR)} per le prove per scena` : ''}${st.settings.downscale ? ' · estrazione dal 4K, uscita 1080p (stessa durata del 4K)' : ''}.`;
     R.estSrc.hidden = false;
     if (pct != null && pct < 10) {
       R.warn.hidden = false;

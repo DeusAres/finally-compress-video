@@ -108,7 +108,8 @@
 .fcv-tbl thead + tbody tr:first-child > * { border-top: 2px solid var(--line); }
 .fcv-est-tbl th[scope="row"] { width: 30%; }
 .fcv-est-tbl td { font-size: 26px; }
-.fcv-est-tbl .save { font-size: var(--fs-mono); color: var(--ok-strong); }
+.fcv-est-tbl td { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.fcv-est-tbl .save { display: block; font-size: var(--fs-mono); color: var(--ok-strong); }
 .fcv-est-tbl .bad { color: var(--danger-strong); }
 .fcv-pred-tbl th[scope="row"] { width: 31%; }
 .fcv-tbl td.ok { color: var(--ok-strong); }
@@ -192,8 +193,8 @@ details.fcv-adv > .fcv-field:last-child { margin-bottom: var(--sp-2); }
 .fcv-outname { font: 400 var(--fs-mono)/1.2 var(--font-mono); color: var(--muted); word-break: break-all; }
 .fcv-save-msg { font-size: var(--fs-sm); }
 .fcv-save-msg:empty { display: none; }
-.fcv-done-more { display: flex; flex-wrap: wrap; justify-content: space-evenly; gap: 0 var(--sp-2); }
-.fcv-done-more .px-btn { padding-inline: var(--sp-2); }
+.fcv-done-more { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+.fcv-done-more .px-btn { padding-inline: var(--sp-2); width: auto; justify-content: center; text-align: center; }
 .fcv-done[data-pop] .fcv-big { animation: px-pop 360ms steps(3) both; }
 
 /* coriandoli pixel: solo una volta, poi spariscono */
