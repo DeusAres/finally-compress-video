@@ -242,6 +242,7 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 - 2026-11-20 — **Previsione peso e tempo appresa** (v0.25): velocità misurata per modalità/risoluzione e memorizzata; tabella Previsto/Reale/Scarto a fine export.
 - 2026-11-20 — **UI pixel art rifinita** (v0.26–0.27.1): font Silkscreen (brand/titoli), Pixelify Sans (testo), VT323 (numeri/log), token tipografici e di spaziatura, contrasto AA, legatura "fi" disattivata. Eco v4 è la modalità consigliata del filtro audio.
 - 2026-11-20 — Pulizia repo: rimossi `fun.js`/`fun-preview.html` (gioco, fuori dall'app dalla v0.17) e `__pycache__`; `tools/run-tests.sh` lancia i test Node.
+- 2026-11-25 — **Coda multi-video: ricerca** (research/16): nessun limite WebKit al numero di `VideoEncoder`/`VideoDecoder` né di `<video>` muti (✅ sorgente); il limite è il media engine condiviso (tetto encoder ~163–200 fps a 1080p, oggi l'estrazione a ~90–100 fps è il collo di bottiglia → N=2 forse 1.3–2×, oltre nessun guadagno ❓); 🟡 kernel panic con 2 encode HEVC HW concorrenti su iPhone 16 Pro/iOS 26.5 (forum Apple 831532); WebContent ~2 GB ActiveHard su iPhone 17 Pro (🟡). Raccomandazione preliminare: coda **sequenziale**, parallelo a 2 solo se misurato. Pagina `tools/diag/multi.html` (scalini N, log persistente del punto di crash).
 
 ## 13. STATO / RIPRESA (leggere per primo)
 
@@ -272,12 +273,13 @@ Leve disponibili in A: bitrate per scena, GOP/scene-cut, frame quasi-duplicati, 
 
 **Limiti noti**: PiP non da PWA installata; eco del comando rapido riducibile, non eliminabile (12 % non lineare); audio spaziale `apac` scartato (vedi Idee future); encoder VT realtime ~6 punti VMAF sotto x265 a pari bitrate.
 
-**File chiave**: `docs/research/02` (fatti su device §10–11), `05` (curve VMAF reali), `04` (container/audio/eco), `13` (background/PiP, suono, parallela), `12` (ricerca per scena).
+**File chiave**: `docs/research/02` (fatti su device §10–11), `05` (curve VMAF reali), `04` (container/audio/eco), `13` (background/PiP, suono, parallela), `12` (ricerca per scena), `16` (più video insieme: limiti, pagina `tools/diag/multi.html`).
 
 ### Collaudi da fare su device
 - Video lungo 3–5 min e 4K: tenuta memoria/OPFS, velocità parallela, PiP per tutta la durata, spazio libero.
 - Ripresa **senza PiP** dopo background (rientro in Safari): riparte dall'ultimo segmento, file finale senza buchi né doppioni.
 - Web app installata: notifica di fine, funzionamento offline, aggiornamento automatico alla nuova versione (version.txt/service worker).
+- Più video insieme: `tools/diag/multi.html` (scalini N=1,2,3,4…; decide coda sequenziale vs 2 in parallelo, research/16 §7).
 - Ricerca per scena su file diversi: peso, tempo e qualità vs bitrate fisso; v0.35: leggere `prove: banco luma`, `prove: player riscaldati`, `prove: tempi …` e le note per segmento.
 
 ### Idee future

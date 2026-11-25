@@ -28,6 +28,7 @@ if (r1.crashes.length) fail('crash inatteso');
 
 // kill simulato: reload appena parte uno scalino con N=2
 await page.click('#go');
+await page.waitForFunction(() => window.__multi.log.filter((e) => e.ev === 'run-start').length === 2);
 await page.waitForFunction(() => window.__multi.log.some((e) => e.ev === 'step-start' && e.N === 2 && e.run === window.__multi.log.filter((x) => x.ev === 'run-start').pop().run), null, { timeout: 120000 });
 await page.waitForTimeout(400);
 await page.reload(); await page.waitForFunction(() => window.__multi?.ready);
