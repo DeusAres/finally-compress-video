@@ -202,7 +202,10 @@ export const isUnverified = (vf) => unverified.has(vf);
 const desc = (f, mt) => `mediaTime ${mt == null ? 'assente' : mt.toFixed(4)}, atteso ${(f.ts / 1e6).toFixed(4)}`;
 // punto del nuovo seek dentro il frame, guidato dal mediaTime dell'ultimo tentativo: presentato un frame PRECEDENTE → più avanti,
 // SUCCESSIVO → più indietro; assente/doppione → piccoli spostamenti attorno al centro (stesso istante = nessuna nuova presentazione)
-const steer = (f, mt, j) => {
+// v0.37 primo frame del file (idx 0): nuovi seek a ts esatto e a ts+1 ms (IMG_7245: al centro del primo frame mediaTime 0.0333,
+// cioè nessuna nuova presentazione; il frame 0 con edit list/composition offset non si presenta sempre a ts+dur/2)
+const steer = (f, mt, j, idx) => {
+  if (idx === 0) return [0, Math.min(0.5, 1000 / spanOf(f)), 0][(j - 1) % 3];
   const a = [0.7, 0.85, 0.9][Math.min(j, 3) - 1];
   if (mt == null) return [0.5, 0.35, 0.65][(j - 1) % 3];
   if (mt < f.ts / 1e6 - 2e-3) return a;
@@ -236,7 +239,7 @@ function verifiedGrab({ get, set = () => {}, p = 0, reopen = null, onReopen = ()
         // lontano (~0.5 s): il decoder riparte dal keyframe invece di proseguire dallo stato che ha dato il frame sbagliato.
         await nudge(get(), f, signal, j === tries && tries > 1);
         stats.prevMT = prev;
-        keep(await raw(f, signal, steer(f, last.mt, j)));
+        keep(await raw(f, signal, steer(f, last.mt, j, idx)));
       }
     };
     try {
@@ -265,79 +268,104 @@ function verifiedGrab({ get, set = () => {}, p = 0, reopen = null, onReopen = ()
 }
 
 /**
- * Estrazione parallela: due <video> distinti sullo stesso File; il player 0 prende gli indici pari, il 1 i dispari, in parallelo.
- * I frame tornano in ordine di presentazione (buffer: al massimo `maxFlight` frame vivi in totale, incluso quello in mano al
- * chiamante). Ogni player usa la stessa procedura verificata di seekFrames. Se un player dà errore o un frame fallisce la verifica
- * (mediaTime assente/doppione/fuori posto) si passa AUTOMATICAMENTE a 1 solo player (videos[0]) per il resto: il frame sospetto viene
- * scartato e riestratto in sequenza. Ogni frame non consegnato è chiuso. `stats`: {n,dup,off,noCallback,retried,samples (globali),
- * players:[stats per player], fellBack, fallbackReason}. Con 1 solo video equivale a seekFrames.
+ * Estrazione parallela su P <video> distinti sullo stesso File (P = 2, o 3 sperimentale): round-robin, il player attivo j prende
+ * gli indici start+j, start+j+Q, … (Q = player attivi). I frame tornano in ordine di presentazione (buffer: al massimo `maxFlight`
+ * frame vivi in totale, incluso quello in mano al chiamante). Ogni player usa la stessa procedura verificata di seekFrames.
+ * Se un player dà errore o un frame fallisce la verifica si passa a 1 solo player SANO (fallback): il frame sospetto viene scartato e
+ * riestratto in sequenza (con ricreazione del <video> se serve). v0.37: dopo `rejoinAfter` frame verificati in sequenza si TORNA al
+ * parallelo (al massimo `maxRejoin` volte per estrazione); un player che causa MAX_STRIKES fallback resta escluso (con 3 player si
+ * continua con 2). onFallback(why, {final, at}): final = da qui fino alla fine 1 solo player; onRejoin({at, players}).
+ * `stats`: {n,dup,off,noCallback,retried,samples (globali), players:[stats per player], fellBack, fallbackReason, falls, rejoined,
+ * soloFrames (frame estratti a 1 player), soloPlayer}. Con 1 solo video equivale a seekFrames.
  */
-export async function* parallelFrames(videos, frames, stats, signal = null, { maxFlight = 4, onFallback = () => {}, reopen = null, onReopen = () => {}, budget = null, onBad = 'fail', reopenBad = true, base = 0 } = {}) {
+export const REJOIN_AFTER = 24;
+export const MAX_REJOIN = 4;
+export const MAX_STRIKES = 2;
+export async function* parallelFrames(videos, frames, stats, signal = null, { maxFlight = 4, onFallback = () => {}, onRejoin = () => {}, rejoinAfter = REJOIN_AFTER, maxRejoin = MAX_REJOIN, reopen = null, onReopen = () => {}, budget = null, onBad = 'fail', reopenBad = true, base = 0 } = {}) {
   frames = withSpan(frames);
   videos = [...videos]; // v0.36.2: un player ricreato (reopen) sostituisce il suo elemento solo qui dentro
   const P = videos.length, N = frames.length;
-  stats.players = videos.map(() => newStats()); stats.fellBack = false; stats.fallbackReason = '';
+  stats.players = videos.map(() => newStats()); stats.fellBack = false; stats.fallbackReason = ''; stats.falls = 0; stats.rejoined = 0; stats.soloFrames = 0;
   stats.n = 0; stats.dup = 0; stats.off = 0; stats.noCallback = 0; stats.retried = 0; stats.samples = []; stats.unvSamples = [];
-  const buf = new Map(); // indice → {vf, bad, mt}
-  let next = 0, degraded = false, stop = false, waiters = [], prevMT = null;
-  const notify = () => { const w = waiters; waiters = []; w.forEach((r) => r()); };
-  const wake = () => new Promise((r) => waiters.push(r));
-  const onAbort = () => notify(); signal?.addEventListener('abort', onAbort);
-  const degrade = (why) => { if (degraded) return; degraded = true; stats.fellBack = true; stats.fallbackReason = why; onFallback(why); notify(); };
-  const failures = [], broken = new Set(); // broken: player andati in errore (v0.36.2: il fallback continua con un player SANO)
-  const worker = async (p) => {
-    // v0.22.1/v0.35: frame bad → nuovi seek (dopo uno spostamento) prima di arrendersi; ancora bad → 1 player (il sequenziale lo riprova)
-    const wg = verifiedGrab({ get: () => videos[p], p, stats: stats.players[p], alive: () => !stop && !degraded, onBad: 'return' });
-    try {
-      for (let i = p; i < N; i += P) {
-        while (!stop && !degraded && !signal?.aborted && i >= next + maxFlight) await wake(); // finestra: max frame vivi
-        if (stop || degraded || signal?.aborted) return;
-        const r = await wg(frames[i], signal, base + i); // v0.36.3: stessi nuovi seek guidati del sequenziale (senza ricreare il player)
-        if (stop || degraded) { r.vf.close(); return; }
-        if (r.bad) { r.vf.close(); degrade(`player ${p + 1}: frame ${base + i} non verificato dopo ${MAX_BAD_TRIES + 1} seek (${desc(frames[i], r.mt)})`); return; }
-        buf.set(i, r); notify();
-      }
-    } catch (e) {
-      if (signal?.aborted || e?.name === 'BackgroundInterrupt') { failures.push(e); notify(); return; }
-      broken.add(p); degrade(`player ${p + 1}: ${e?.message || e}`);
-      // v0.36.2: player bloccato → ricreato subito (per le estrazioni successive del chiamante); il resto di QUESTA estrazione
-      // continua con un player sano. Errore nel ricrearlo: resta guasto (il sequenziale non lo usa se ce n'è un altro).
-      if (isSeekTimeout(e) && reopen && !signal?.aborted) { try { onReopen(p, e, 0); videos[p] = await reopen(p); } catch (x) { if (x?.name === 'BackgroundInterrupt') failures.push(x); } }
-    }
-  };
-  const workers = P > 1 ? videos.map((_, p) => worker(p)) : [];
+  budget = reopenBad ? (budget || { reopens: 0, max: MAX_BAD_REOPEN }) : { reopens: 0, max: 0 }; // condiviso da tutte le fasi a 1 player
+  const dead = new Set(), strikes = videos.map(() => 0); // dead: player guasti (errore non recuperato)
+  let next = 0, prevMT = null, rejoins = 0;
   const sum = () => { for (const k of ['n', 'off', 'noCallback', 'retried', 'recovered', 'recoverMs', 'reopenBad', 'unverified']) stats[k] = stats.players.reduce((a, q) => a + (q[k] || 0), 0); stats.samples = stats.players.flatMap((q) => q.samples).slice(0, 5); stats.unvSamples = stats.players.flatMap((q) => q.unvSamples || []).slice(0, 5); };
-  try {
-    while (next < N) {
-      if (signal?.aborted) throw interruptError();
-      let r = buf.get(next);
-      if (!r && !degraded && P > 1) { await wake(); continue; }
-      if (r) buf.delete(next);
-      else { // un solo player (scelta o fallback): attende gli altri worker, scarta i frame in anticipo, poi estrae in sequenza da `next`
-        await Promise.all(workers);
-        if (signal?.aborted || failures.length) throw failures[0] || interruptError();
-        for (const x of buf.values()) x.vf.close(); buf.clear();
-        // v0.36.2: un player sano (prima: sempre il player 1, anche quando era proprio lui ad essersi bloccato)
-        const sp = P > 1 && broken.has(0) && !broken.has(1) ? 1 : 0, ps = stats.players[sp]; ps.prevMT = null; stats.soloPlayer = sp + 1;
-        const grab = verifiedGrab({ get: () => videos[sp], set: (v) => { videos[sp] = v; }, p: sp, reopen, onReopen, stats: ps, budget: reopenBad ? budget : { reopens: 0, max: 0 }, onBad });
-        for (; next < N; next++) {
-          let g; try { g = await grab(frames[next], signal, base + next); } finally { sum(); }
-          if (prevMT != null && g.mt != null && Math.abs(g.mt - prevMT) < 1e-4) stats.dup++;
-          if (g.mt != null) prevMT = g.mt;
-          sum(); notify();
-          yield g.vf;
+  const out = (r) => { if (prevMT != null && r.mt != null && Math.abs(r.mt - prevMT) < 1e-4) stats.dup++; if (r.mt != null) prevMT = r.mt; sum(); }; // doppione globale tra frame consecutivi in uscita
+  const usable = () => videos.map((_, p) => p).filter((p) => !dead.has(p) && strikes[p] < MAX_STRIKES);
+
+  // Fase parallela da `next` con i player `act`: ritorna null (finito) o {p, why} (fallback). I frame non consegnati sono chiusi.
+  async function* phase(act) {
+    const Q = act.length, start = next, buf = new Map(); // indice → {vf, bad, mt}
+    let stop = false, failed = null, waiters = [];
+    const failures = [];
+    const notify = () => { const w = waiters; waiters = []; w.forEach((r) => r()); };
+    const wake = () => new Promise((r) => waiters.push(r));
+    const onAbort = () => notify(); signal?.addEventListener('abort', onAbort);
+    const fail = (p, why) => { if (!failed) failed = { p, why }; notify(); };
+    const worker = async (j) => {
+      const p = act[j];
+      // v0.22.1/v0.35: frame bad → nuovi seek (dopo uno spostamento) prima di arrendersi; ancora bad → fallback (il sequenziale lo riprova)
+      const wg = verifiedGrab({ get: () => videos[p], p, stats: stats.players[p], alive: () => !stop && !failed, onBad: 'return' });
+      try {
+        for (let i = start + j; i < N; i += Q) {
+          while (!stop && !failed && !signal?.aborted && i >= next + maxFlight) await wake(); // finestra: max frame vivi
+          if (stop || failed || signal?.aborted) return;
+          const r = await wg(frames[i], signal, base + i); // v0.36.3: stessi nuovi seek guidati del sequenziale (senza ricreare il player)
+          if (stop || failed) { r.vf.close(); return; }
+          if (r.bad) { r.vf.close(); fail(p, `player ${p + 1}: frame ${base + i} non verificato dopo ${MAX_BAD_TRIES + 1} seek (${desc(frames[i], r.mt)})`); return; }
+          buf.set(i, r); notify();
         }
-        break;
+      } catch (e) {
+        if (signal?.aborted || e?.name === 'BackgroundInterrupt') { failures.push(e); notify(); return; }
+        fail(p, `player ${p + 1}: ${e?.message || e}`);
+        // v0.36.2: player bloccato → ricreato subito; il resto continua con un player sano. Errore nel ricrearlo (o errore non di seek): guasto.
+        if (isSeekTimeout(e) && reopen && !signal?.aborted) { try { onReopen(p, e, 0); videos[p] = await reopen(p); } catch (x) { dead.add(p); if (x?.name === 'BackgroundInterrupt') failures.push(x); } }
+        else dead.add(p);
       }
-      if (prevMT != null && r.mt != null && Math.abs(r.mt - prevMT) < 1e-4) stats.dup++; // doppione globale tra frame consecutivi in uscita
-      if (r.mt != null) prevMT = r.mt;
-      sum();
-      try { yield r.vf; } finally { next++; notify(); }
+    };
+    const ws = act.map((_, j) => worker(j));
+    try {
+      while (next < N) {
+        if (signal?.aborted) throw interruptError();
+        const r = buf.get(next);
+        if (r) { buf.delete(next); out(r); try { yield r.vf; } finally { next++; notify(); } continue; }
+        if (failed || failures.length) break;
+        await wake();
+      }
+    } finally {
+      stop = true; notify(); signal?.removeEventListener('abort', onAbort);
+      await Promise.allSettled(ws);
+      for (const x of buf.values()) { try { x.vf.close(); } catch {} } buf.clear();
     }
-  } finally {
-    stop = true; notify(); signal?.removeEventListener('abort', onAbort);
-    await Promise.allSettled(workers);
-    for (const x of buf.values()) { try { x.vf.close(); } catch {} } buf.clear();
+    if (signal?.aborted || failures.length) throw failures[0] || interruptError();
+    return next < N ? failed : null;
+  }
+
+  let fail = null;
+  while (next < N) {
+    let act = usable();
+    if (act.length > 1 && (!fail || rejoins < maxRejoin)) {
+      if (fail) { rejoins++; stats.rejoined = rejoins; onRejoin({ at: base + next, players: act.length }); }
+      fail = yield* phase(act);
+      if (!fail) break;
+      strikes[fail.p]++; stats.falls++;
+      if (!stats.fellBack) { stats.fellBack = true; stats.fallbackReason = fail.why; }
+      act = usable();
+      onFallback(fail.why, { final: act.length < 2 || rejoins >= maxRejoin, at: base + next });
+    }
+    // un solo player (scelta o fallback): un player SANO, diverso da quello che ha appena fallito se possibile
+    const ok = videos.map((_, p) => p).filter((p) => !dead.has(p));
+    const sp = ok.find((p) => p !== fail?.p) ?? ok[0] ?? 0, ps = stats.players[sp]; ps.prevMT = null; stats.soloPlayer = sp + 1;
+    const grab = verifiedGrab({ get: () => videos[sp], set: (v) => { videos[sp] = v; }, p: sp, reopen, onReopen, stats: ps, budget, onBad });
+    const again = P > 1 && usable().length > 1 && rejoins < maxRejoin;
+    const end = again ? Math.min(N, next + Math.max(1, rejoinAfter)) : N;
+    for (; next < end; next++) {
+      if (signal?.aborted) throw interruptError();
+      let g; try { g = await grab(frames[next], signal, base + next); } finally { sum(); }
+      out(g); if (P > 1) stats.soloFrames++;
+      yield g.vf;
+    }
   }
 }
 

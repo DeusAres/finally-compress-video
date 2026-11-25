@@ -152,4 +152,44 @@ const exact = (got, list) => { assert.deepEqual(got.map((x) => x.ts), list.map((
   const w = withSpan([{ ts: 0, dur: 41667 }, { ts: 33333, dur: 33333 }, { ts: 66667, dur: 41667 }]);
   assert.deepEqual(w.map((f) => f.span), [33333, undefined, undefined]);
 }
+// ---- v0.37 ----
+// 14) IMG_7245: frame 0 al centro presenta 0.0333 (frame 2) invece di 0 → nuovi seek a ts esatto / ts+1 ms lo recuperano senza ricreare
+function firstBad(list, seeks = []) { // come gridVideo, ma un seek nel frame 0 oltre ts+1.5 ms presenta il frame 2
+  const v = gridVideo(list, { seeks }), set = Object.getOwnPropertyDescriptor(v, 'currentTime').set;
+  Object.defineProperty(v, 'currentTime', { set(t) { set.call(v, t * 1e6 < list[0].ts + 1500 || t * 1e6 >= list[1].ts ? t : list[2].ts / 1e6 + 1e-4); } });
+  return v;
+}
+{
+  const list = Array.from({ length: 20 }, (_, i) => fr(i)), st = newStats(); st.players = [st];
+  const got = await collect(seekFrames(firstBad(list), list, st, null, { reopen: async () => assert.fail('nessuna ricreazione per il frame 0') }));
+  exact(got, list); assert.equal(st.recovered, 1); assert.equal(st.unverified || 0, 0); assert.equal(open.size, 0);
+  const s2 = newStats(), why = [];
+  exact(await collect(parallelFrames([firstBad(list), gridVideo(list)], list, s2, null, { onFallback: (w) => why.push(w) })), list);
+  assert.equal(s2.fellBack, false, 'frame 0 recuperato dal player stesso, nessun fallback'); assert.equal(open.size, 0);
+}
+// 15) dopo un fallback (frame non verificato sul player 2) si TORNA a 2 player dopo rejoinAfter frame in sequenza
+{
+  const list = vfrList(80), st = newStats(), why = [], rj = [], s1 = [], s2 = [];
+  const got = await collect(parallelFrames([gridVideo(list, { seeks: s1 }), gridVideo(list, { always: new Map([[11, -2]]), seeks: s2 })], list, st, null, { maxFlight: 4, rejoinAfter: 10, onFallback: (w, o) => why.push([w, o.final]), onRejoin: (o) => rj.push(o) }));
+  exact(got, list);
+  assert.equal(st.falls, 1); assert.equal(st.rejoined, 1); assert.equal(why[0][1], false, 'fallback non definitivo'); assert.equal(rj[0].players, 2);
+  assert.equal(st.soloFrames, 10, '10 frame a 1 player, poi di nuovo 2'); assert.ok(Math.max(...s2) > 60, 'il player 2 lavora fino alla fine');
+  assert.ok(s2.filter((i) => i > 30).length > 15); assert.equal(open.size, 0);
+}
+// 16) 3 player: round-robin p, p+3, … e ordine di uscita corretto
+{
+  const list = vfrList(45), st = newStats(), sk = [[], [], []];
+  const got = await collect(parallelFrames(sk.map((seeks) => gridVideo(list, { seeks })), list, st, null, { maxFlight: 6 }));
+  exact(got, list); assert.equal(st.fellBack, false);
+  sk.forEach((s, p) => { assert.equal(s.length, 15); assert.ok(s.every((i) => i % 3 === p), `player ${p + 1}: indici ${s}`); });
+  assert.deepEqual(st.players.map((q) => q.n), [15, 15, 15]); assert.equal(open.size, 0);
+}
+// 17) 3 player, il terzo sbaglia sempre dal frame 5: due fallback → escluso, si continua con 2 player (non con 1)
+{
+  const list = vfrList(90), st = newStats(), why = [], rj = [];
+  const bad3 = new Map(Array.from({ length: 85 }, (_, k) => [k + 5, 1]));
+  const got = await collect(parallelFrames([gridVideo(list), gridVideo(list), gridVideo(list, { always: bad3 })], list, st, null, { maxFlight: 6, rejoinAfter: 8, onFallback: (w, o) => why.push(o.final), onRejoin: (o) => rj.push(o.players) }));
+  exact(got, list); assert.equal(st.falls, 2); assert.deepEqual(why, [false, false]); assert.deepEqual(rj, [3, 2]); assert.equal(st.soloFrames, 16);
+  assert.equal(open.size, 0);
+}
 console.log('frames.test: OK');

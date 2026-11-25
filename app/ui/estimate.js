@@ -26,9 +26,9 @@ export function estimateOutBytes({ durS, videoMbps, audioMode = 'copy', aacBps, 
 // ---------- Stima del TEMPO ----------
 //   t = 0.5 s (analisi) + frame / fpsAtteso + 3 % · tVideo + 0.5 s (assemblaggio, audio, scrittura) [+ 0.07 s · durata se eco v4]
 // fpsAtteso: ultima misura reale (localStorage, per 1/2 player e ≤1080p/4K); in mancanza, un default.
-export const DEFAULT_FPS = { p2: { hd: 90, uhd: 70 }, p1: { hd: 57, uhd: 55 } };
+export const DEFAULT_FPS = { p3: { hd: 110, uhd: 80 }, p2: { hd: 90, uhd: 70 }, p1: { hd: 57, uhd: 55 } }; // p3 (v0.37, sperimentale): stima da rimisurare
 // downscale (v0.31 «Riduci a 1080p»): l'estrazione resta quella del 4K (stessa classe uhd) ma la velocità si salva a parte (l'encoder scala: costo diverso)
-export const speedKey = ({ par2, width, height, downscale }) => `fcv.fps.${par2 ? 'p2' : 'p1'}.${Math.max(width || 0, height || 0) > 1920 ? 'uhd' : 'hd'}${downscale ? '.ds' : ''}`;
+export const speedKey = ({ par2, width, height, downscale }) => `fcv.fps.${par2 === 3 ? 'p3' : par2 ? 'p2' : 'p1'}.${Math.max(width || 0, height || 0) > 1920 ? 'uhd' : 'hd'}${downscale ? '.ds' : ''}`;
 
 /** Velocità attesa {fps, measured}. */
 export function expectedFps(o) {
