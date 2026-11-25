@@ -2,6 +2,8 @@
 
 Rispondi in italiano, diretto e tecnico. Usa subagenti quando possibile, con prompt ingegnerizzati per **minimo consumo di token e massima efficienza**.
 
+**Agente principale sempre disponibile per parlare con l'utente**: delega il lavoro (codice, test, ricerche, analisi di log lunghe) a subagenti **in background** e resta libero per la conversazione. Inline solo ritocchi di pochi secondi (1–2 comandi) o il coordinamento (commit/push dei risultati, risposte).
+
 ## Subagenti: scelta del modello
 | Compito | Modello |
 |---|---|

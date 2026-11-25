@@ -7,12 +7,12 @@
 // start() chiama solo requestPictureInPicture (fallback webkitSetPresentationMode), come nella pagina di test che funziona.
 
 // v0.36.2: per la CODA la PiP resta UN solo <video> per tutta la sessione e la sua sorgente è una CLIP LEGGERA generata in
-// pagina (H.264 288×512, 10 fps, 2 s in loop, ~50 KB) invece del file sorgente: prima l'anteprima riproduceva in loop il
+// pagina (H.264 320×320 quadrata (v0.36.4: PiP meno invasiva), 10 fps, 2 s in loop, ~50 KB) invece del file sorgente: prima l'anteprima riproduceva in loop il
 // video della prima voce (1080p/4K) per tutta la coda, cioè un decoder hardware sempre occupato accanto ai 2 player di seek e
 // all'encoder (research/16 §3). prepare() parte dal file (dati subito, come prima) e passa alla clip appena è pronta, solo se
 // la PiP non è ancora aperta (cambiare sorgente a PiP aperta potrebbe chiuderla); se la clip non si riproduce torna al file.
 let clipBlob = null, clipP = null;
-async function makeClip(MB, { w = 288, h = 512, fps = 10, sec = 2 } = {}) {
+async function makeClip(MB, { w = 320, h = 320, fps = 10, sec = 2 } = {}) {
   const cv = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
   const g = cv.getContext('2d', { alpha: false }); if (!g) throw new Error('canvas 2D non disponibile');
   const N = fps * sec, draw = (i) => {
@@ -20,10 +20,10 @@ async function makeClip(MB, { w = 288, h = 512, fps = 10, sec = 2 } = {}) {
     for (let k = 0; k < 12; k++) { // rotella: 12 punti, quello «attivo» gira in 2 s (loop senza scatti)
       const a = (k / 12) * 2 * Math.PI - Math.PI / 2, on = ((k - Math.round(i * 12 / N)) % 12 + 12) % 12;
       g.globalAlpha = 1 - on / 13; g.fillStyle = '#f3ecdc';
-      g.beginPath(); g.arc(w / 2 + Math.cos(a) * w * 0.22, h * 0.42 + Math.sin(a) * w * 0.22, w * 0.035, 0, 2 * Math.PI); g.fill();
+      g.beginPath(); g.arc(w / 2 + Math.cos(a) * w * 0.22, h * 0.40 + Math.sin(a) * w * 0.22, w * 0.035, 0, 2 * Math.PI); g.fill();
     }
     g.globalAlpha = 1; g.fillStyle = '#f3ecdc'; g.textAlign = 'center'; g.font = `bold ${Math.round(w * 0.085)}px sans-serif`;
-    g.fillText('Compressione', w / 2, h * 0.70); g.fillText('in corso', w / 2, h * 0.70 + w * 0.11);
+    g.fillText('Compressione', w / 2, h * 0.76); g.fillText('in corso', w / 2, h * 0.76 + w * 0.10);
   };
   const target = new MB.BufferTarget(), out = new MB.Output({ format: new MB.Mp4OutputFormat(), target });
   let done = false;
@@ -77,7 +77,7 @@ export function createPip(file, { log = () => {}, onChange = () => {}, clip = nu
     v.setAttribute('muted', ''); v.setAttribute('playsinline', ''); v.setAttribute('autoplay', '');
     v.title = 'Anteprima (Picture-in-Picture)';
     // piccola anteprima VISIBILE in basso a destra (iOS non mette in PiP un video invisibile/minuscolo)
-    v.style.cssText = 'position:fixed;right:max(10px,env(safe-area-inset-right,0px));bottom:max(10px,env(safe-area-inset-bottom,0px));width:72px;height:128px;object-fit:cover;z-index:50;border:3px solid currentColor;background:#000;pointer-events:none';
+    v.style.cssText = 'position:fixed;right:max(10px,env(safe-area-inset-right,0px));bottom:max(10px,env(safe-area-inset-bottom,0px));width:84px;height:84px;object-fit:cover;z-index:50;border:3px solid currentColor;background:#000;pointer-events:none';
     document.body.appendChild(v);
     const ready = clip ? pipClipReady() : null;
     setSource(ready || file, ready ? 'clip' : 'file');
