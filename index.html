@@ -15,7 +15,8 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers } from './app/lib/frames.js?v=0.36.1';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers, isSeekTimeout } from './app/lib/frames.js?v=0.36.1';
+import { installMediaDiag, mediaDiagLine } from './app/lib/mediadiag.js?v=0.36.1';
 import { estimateOutBytes, estimateTimeS } from './app/ui/estimate.js?v=0.36.1';
 import { createHevcEncoder } from './app/lib/encode.js?v=0.36.1';
 import { downscaleDims, avgFramerate, verifyDownscale, dsError } from './app/lib/downscale.js?v=0.36.1';
@@ -29,7 +30,7 @@ import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/op
 import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.36.1';
 import { startKeepAlive } from './app/lib/keepalive.js?v=0.36.1';
 import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.36.1';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.36.1';
+import { createPip, pipSupported, pipClip } from './app/lib/pip.js?v=0.36.1';
 import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, lumaTestLine, SCENE } from './app/lib/scenesearch.js?v=0.36.1';
 import { inspectMovie, judgeOrigin } from './app/lib/origin.js?v=0.36.1';
 import { newQueue, addItems, removeItem, retryItem, nextItem, matchFiles, restoreQueue, uniqueOutName, readyToSave, keepNames as queueKeep, itemLabel, queueStats, summaryLines, findItem, ST } from './app/lib/queue.js?v=0.36.1';
@@ -37,6 +38,7 @@ import { loadQueue, saveQueue } from './app/lib/queuestore.js?v=0.36.1';
 import { mountUI } from './app/ui/ui.js?v=0.36.1';
 import { bus, emit } from './app/ui/bus.js?v=0.36.1';
 import * as MB from './vendor/mediabunny-1.65.1.min.mjs';
+installMediaDiag(); // v0.36.2: conteggio di <video>/<audio> (anche fuori dal DOM) e codec aperti → riga «risorse:» nel log
 const $ = (id) => document.getElementById(id);
 // cat: setup | segment | pip | heartbeat | warn | error | summary | info (se omessa la deduce l'archivio dal prefisso); data: numeri per il riassunto
 // Coda (v0.36): durante una voce ogni riga è prefissata con «[n/N nome] » e i dati dei segmenti portano la voce (q).
@@ -65,6 +67,17 @@ const qFiles = new Map(), qOuts = new Map(), qUrls = new Map(); // id → File s
 let outOpfsName = '', outNameHook = null; // nome OPFS del risultato dell'ultima run; hook per nomi unici nella coda
 const MB_ = 1048576;
 // Interruzione da background: durante la fase video l'attesa del seek corrente viene abortita al volo (hidden), poi si riparte dall'ultimo segmento (visible).
+// v0.36.2: i 2 <video> di seek sono RIUSATI per tutta la sessione (coda: stessi elementi per tutte le voci, cambia solo la
+// sorgente; prima 2 nuovi per voce: su iOS il player/decoder di un <video> scartato resta finché il GC non lo raccoglie).
+// Ricreati solo dopo un seek bloccato (SeekTimeout). seekInfo: contatori per la riga «risorse:».
+let seekEls = [null, null], seekInfo = { made: 0, renewed: 0 };
+async function openPlayer(p, signal, { fresh = false } = {}) {
+  if (fresh && seekEls[p]) { releaseVideoElement(seekEls[p]); seekEls[p] = null; seekInfo.renewed++; }
+  const reuse = seekEls[p]; if (!reuse) seekInfo.made++;
+  const v = await openVideoElement(file, signal, reuse); seekEls[p] = v; return v;
+}
+function dropPlayers() { for (const v of seekEls) { try { releaseVideoElement(v); } catch {} } seekEls = [null, null]; }
+const resLine = (when) => mediaDiagLine(when, `player di seek: ${seekEls.filter(Boolean).length} riusati (creati ${seekInfo.made}, ricreati ${seekInfo.renewed}) · anteprima PiP: ${pip ? (pip.source === 'clip' ? 'clip leggera' : pip.source === 'file' ? 'video sorgente' : 'non preparata') + (pip.active ? ', aperta' : '') : 'no'}`);
 let vidRun = null, bgInt = null; // vidRun: AbortController della run video in corso; bgInt: {at} della richiesta di interruzione
 let hbRef = 0; // riferimento del delta frame nell'heartbeat (azzerato a ogni run)
 const fmtT = (s) => { s = Math.max(0, Math.round(s)); const m = Math.floor(s / 60); return m ? `${m}m ${String(s % 60).padStart(2, '0')}s` : `${s}s`; };
@@ -287,12 +300,12 @@ function pipSummary() {
 }
 let pipFile = null; // File mostrato dalla PiP: quello del singolo export, o il primo della coda (la PiP resta aperta per tutta la coda)
 function makePip(f) {
-  return createPip(f, { log: (t) => log(`[${clock()}] ${t}`), onChange: (a) => { pipOnChange(a); ui.setPip(a); if (!a) try { if (navigator.mediaSession) navigator.mediaSession.metadata = null; } catch {} } });
+  return createPip(f, { clip: () => pipClip(MB), log: (t) => log(`[${clock()}] ${t}`), onChange: (a) => { pipOnChange(a); ui.setPip(a); if (!a) try { if (navigator.mediaSession) navigator.mediaSession.metadata = null; } catch {} } });
 }
 // ---- Sessione di lavoro (v0.36): un export singolo o una coda intera. Le parti SINCRONE nel tap (PiP, jingle, keep-alive) una volta
 // sola all'inizio; PiP, wake lock e keep-alive restano attivi fino alla fine della sessione (per la coda: fino all'ultimo video).
 function beginSession(s, f) {
-  running = true; cancelled = false; pipFile = f;
+  running = true; cancelled = false; pipFile = f; dropPlayers(); seekInfo = { made: 0, renewed: 0 };
   // v0.21.1: prepara SUBITO (nel tap di Comprimi) il video della PiP: iOS non la avvia su un video senza dati o invisibile.
   try { if (pipSupported() && !(matchMedia('(display-mode: standalone)').matches || navigator.standalone === true)) { if (pip) { pip.stop(); } pip = makePip(f); pip.prepare(); } } catch (e) { log('PiP: preparazione fallita ' + (e?.message || e)); }
   cfg = { bitrateMbps: +s?.bitrateMbps || 8, keyframeS: +s?.keyframeS || 4, audioMode: s?.audioMode || 'copy', bgAudio: !!s?.bgAudio, par2: !!s?.par2, sceneQ: s?.sceneQ !== false, downscale: !!s?.downscale, apac: s?.apac !== false, container: s?.container === 'mp4' ? 'mp4' : 'mov' };
@@ -309,11 +322,13 @@ function resetPerFile() {
   curPhase = null; lastFps = NaN; NFtot = 0; progFrame = 0; hbRef = 0; vidRun = null; bgInt = null; ui.setProgNote('');
 }
 async function endSession() {
+  dropPlayers(); // v0.36.2: i <video> di seek riusati vivono solo per la sessione
   if (hb) { clearInterval(hb); hb = null; }
   try { keep?.stop(); } catch {} keep = null;
   pipSummary(); if (pipTimer) { clearInterval(pipTimer); pipTimer = null; }
   if (pip) { const t = pip.elapsedS(); if (pip.active) await new Promise((r) => setTimeout(r, 900)); /* lascia suonare il jingle mentre la PiP tiene viva la pagina (fuori da Safari, chiusa la PiP iOS sospende l'audio) */ try { await pip.stop(); } catch {} if (t > 0) log(`Picture-in-Picture: ${fmtT(t)} in PiP durante il ${Q ? 'lavoro della coda' : 'job'}`); pip = null; ui.setPip(false); }
   pipFile = null; lastPipPc = -1; running = false; notice('');
+  log(resLine('fine sessione'));
   try { localStorage.removeItem('jobRunning'); } catch {}
   try { await wake?.release(); } catch {} wake = null;
 }
@@ -330,7 +345,7 @@ async function exportCurrent({ beforeRun } = {}) {
   await acquireWake();
   if (!Q || !qRun?.said) { log('Tieni l\'app aperta e lo schermo acceso finché finisce: se cambi app o blocchi lo schermo, iOS ferma l\'elaborazione (i segmenti già pronti restano salvati e si riprende da lì).'); if (qRun) qRun.said = true; }
   if (cfg.bgAudio && !hb) { log(`[${clock()}] TEST BACKGROUND CON AUDIO attivo: battito ogni secondo, riepilogo a fine job.`); startHeartbeat(); }
-  let auto = 0, fresh = false;
+  let auto = 0, fresh = false, seekRetry = false;
   for (;;) {
     const bgN = bg.n; segsSaved = 0;
     try { return await run({ forceFresh: fresh }); }
@@ -345,6 +360,14 @@ async function exportCurrent({ beforeRun } = {}) {
         const m = `ripreso dopo ${secs.toFixed(1)} s in background dal segmento ${n}${pj?.total ? '/' + pj.total : ''}`;
         log(`[${clock()}] ▶ ${m}`); ui.setProgNote(m[0].toUpperCase() + m.slice(1) + '. Tieni l\'app aperta e lo schermo acceso finché finisce.', 'warn');
         await acquireWake(); keep?.nudge(); continue;
+      }
+      // v0.36.2: player bloccato anche dopo averlo ricreato → prima di dare errore la voce riparte UNA volta con 2 <video> nuovi
+      // (dai segmenti già salvati). Un secondo blocco è un guasto reale e ferma la voce.
+      if (isSeekTimeout(e) && !seekRetry && !cancelled) {
+        seekRetry = true; seekInfo.renewed += seekEls.filter(Boolean).length; dropPlayers();
+        const m = `Lettura del video bloccata (${e.message}): ricreo i player e riprovo questo video una volta.`;
+        log(`[${clock()}] ⚠️ ${m} ${resLine('dopo il blocco')}`); ui.setProgNote(m, 'warn');
+        await whenVisible(); continue;
       }
       if ((e?.name === 'HvccMismatch' || e?.name === 'JobMismatch') && !fresh) {
         const m = `I segmenti salvati non sono compatibili con questo encoder (${e.message}): ricomincio il video da capo.`;
@@ -370,6 +393,7 @@ async function start(s) {
   if (Q) return startQueue(s);
   if (!file) return;
   beginSession(s, file); resetPerFile();
+  log(resLine('inizio'));
   let failed = false;
   try {
     await releasing;
@@ -463,11 +487,16 @@ async function runWith(input, { forceFresh = false } = {}) {
   if (doneSeg < nSeg) {
     const runStart = segStarts[doneSeg]; progFrame = runStart; hbRef = runStart; // nuovo run: azzera il riferimento dell'heartbeat
     vidRun = new AbortController(); if (document.hidden && !bgInt) bgInt = { at: Date.now(), seg: segsSaved }; if (document.hidden) vidRun.abort();
-    const video = await openVideoElement(file, vidRun.signal);
+    let video = await openPlayer(0, vidRun.signal);
     cur.video = video;
     let video2 = null;
-    if (cfg.par2 && !parOff) { try { video2 = await openVideoElement(file, vidRun.signal); cur.video2 = video2; if (video2.videoWidth !== video.videoWidth || video2.videoHeight !== video.videoHeight) throw new Error('dimensioni diverse tra i due player'); } catch (e) { if (e?.name === 'BackgroundInterrupt') throw e; log(`[${clock()}] estrazione parallela non disponibile (${e?.message || e}): 1 player`); try { if (video2) releaseVideoElement(video2); } catch {} video2 = null; cur.video2 = null; parOff = true; } }
+    // v0.36.2: player bloccato (seek timeout) → ricreato e frame riprovato una volta (frames.js); qui si aggiornano i riferimenti
+    const sig = vidRun.signal;
+    const reopen = async (p) => { const v = await openPlayer(p, sig, { fresh: true }); if (p === 0) { video = v; cur.video = v; } else { video2 = v; cur.video2 = v; } return v; };
+    const onReopen = (p, e, n) => log(`[${clock()}] ⚠️ player ${p + 1}: ${e?.message || e} → ricreo il <video>${n ? ` e riprovo lo stesso frame (${n}ª volta in questa estrazione)` : ' (questa estrazione continua con l\'altro player)'}`);
+    if (cfg.par2 && !parOff) { try { video2 = await openPlayer(1, vidRun.signal); cur.video2 = video2; if (video2.videoWidth !== video.videoWidth || video2.videoHeight !== video.videoHeight) throw new Error('dimensioni diverse tra i due player'); } catch (e) { if (e?.name === 'BackgroundInterrupt') throw e; log(`[${clock()}] estrazione parallela non disponibile (${e?.message || e}): 1 player`); try { if (video2) releaseVideoElement(video2); } catch {} video2 = null; cur.video2 = null; parOff = true; } }
     const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}${video2 ? ' · estrazione parallela: 2 player (pari/dispari)' : ''}`);
+    log(`[${clock()}] ${resLine('player aperti')}`);
     // «Riduci a 1080p» (v0.31): l'encoder è configurato a outW×outH e riceve i frame NATIVI (4K, già ruotati): deve scalarli lui (WebCodecs).
     // Ipotesi da verificare su Safari/VT (research/02 §12): lo fa WebKit? tiene i 10 bit? Verifica sul primo chunk (hvcC/SPS); nessun ripiego.
     const ds = cfg.downscale ? downscaleDims(W, H) : null, dsOn = !!ds, outW = ds ? ds.width : W, outH = ds ? ds.height : H;
@@ -500,8 +529,8 @@ async function runWith(input, { forceFresh = false } = {}) {
       if (todo) log(`[${clock()}] qualità per scena: prove su ${todo} segmenti (finestra ~${SCENE.trialSec} s al centro, 1–2 bitrate in parallelo con misura in diretta, VMAF stimato ≥ 88 + guardia p5), limite ${cfg.bitrateMbps} Mbps`);
       const trialFrames = (a, b) => {
         const list = frames.slice(a, b).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), st = newStats();
-        return video2 && !parOff && !parTrialOff ? parallelFrames([video, video2], list, st, vidRun.signal, { maxFlight: 4, onFallback: (why) => { parTrialOff = true; log(`[${clock()}] ⚠️ estrazione parallela (prove): ${why} → 1 player per le prove; la codifica finale riprova con 2 player`); } })
-          : seekFrames(video, list, (st.players = [st], st), vidRun.signal);
+        return video2 && !parOff && !parTrialOff ? parallelFrames([video, video2], list, st, vidRun.signal, { maxFlight: 4, reopen, onReopen, onFallback: (why) => { parTrialOff = true; log(`[${clock()}] ⚠️ estrazione parallela (prove): ${why} → 1 player per le prove; la codifica finale riprova con 2 player`); } })
+          : seekFrames(video, list, (st.players = [st], st), vidRun.signal, { reopen, onReopen });
       };
       const makeTrialEnc = !dsOn ? createHevcEncoder : (o) => { // prove con downscale: errori prima del primo chunk = downscale non riuscito (fatale, mai assorbito come «prova fallita»)
         let got = false; const e = createHevcEncoder({ ...o, onChunk: (c, m) => { got = true; o.onChunk(c, m); }, onError: (x) => o.onError(got ? x : dsWrap(x, 'prova: encoder')) });
@@ -518,7 +547,7 @@ async function runWith(input, { forceFresh = false } = {}) {
         const at = (p) => { const i = w0.startIdx - 6 - p >= 0 ? w0.startIdx - 6 - p : w0.endIdx + 6 + p < NF ? w0.endIdx + 6 + p : -1; return i < 0 ? null : { ts: Math.round(frames[i].ts * 1e6), dur: Math.round(frames[i].dur * 1e6) }; };
         try {
           let vf0 = null, lc = null;
-          const wr = await warmPlayers(vids, at, vidRun.signal, { keep: (p, vf) => { if (p === 0) vf0 = vf; else vf.close(); } });
+          const wr = await warmPlayers(vids, at, vidRun.signal, { reopen, onReopen, keep: (p, vf) => { if (p === 0) vf0 = vf; else vf.close(); } });
           log(`[${clock()}] prove: player riscaldati ${wr.map((r, p) => `${p + 1}: ${r.skipped ? 'saltato' : r.ok ? `ok (${r.tries} ${r.tries === 1 ? 'tentativo' : 'tentativi'}, ${Math.round(r.ms)} ms)` : 'NON verificato'}`).join(' · ')}`);
           // dopo i seek (il lavoro di canvas non ritarda le rVFC dei player). v0.35.2: autotest a coppie CPU/GPU sulla ssimDb (research/12 §12.6):
           // 1 keyframe del frame nativo al limite e a limite/3 con lo stesso encoder delle prove (chiuso subito, mai insieme all'encoder finale).
@@ -529,7 +558,9 @@ async function runWith(input, { forceFresh = false } = {}) {
         } catch (e) { if (['BackgroundInterrupt', 'Cancelled', 'DownscaleError'].includes(e?.name)) throw e; log(`[${clock()}] prove: riscaldamento non riuscito (${e?.message || e}), proseguo`); }
       }
       await runSceneSearch({ plan, from: doneSeg, saved: job.manifest.scene, deps, ceiling: bitrate,
-        isFatal: (e) => e?.name === 'BackgroundInterrupt' || e?.name === 'Cancelled' || e?.name === 'DownscaleError' || cancelled || !!vidRun?.signal.aborted,
+        // v0.36.2: SeekTimeout qui = player bloccato anche dopo averlo ricreato → non si assorbe come «prova fallita» (bitrate al limite
+        // per tutte le scene, come nella voce 3 del log v0.36.1): risale a exportCurrent, che riprova la voce con player nuovi
+        isFatal: (e) => e?.name === 'BackgroundInterrupt' || e?.name === 'Cancelled' || e?.name === 'DownscaleError' || isSeekTimeout(e) || cancelled || !!vidRun?.signal.aborted,
         save: async (k, rec) => { job.manifest.scene[k] = rec; await job.save(); },
         check: async () => { checkCancel(); await whenVisible(); },
         log: (t) => log(`[${clock()}] ${t}`),
@@ -602,8 +633,8 @@ async function runWith(input, { forceFresh = false } = {}) {
     const vstats = newStats();
     const srcFrames = frames.slice(runStart).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) }));
     const gen = video2 && !parOff
-      ? parallelFrames([video, video2], srcFrames, vstats, vidRun.signal, { maxFlight: 4, onFallback: (why) => { parOff = true; log(`[${clock()}] ⚠️ estrazione parallela: ${why} → passo a 1 player per il resto del job`); } })
-      : seekFrames(video, srcFrames, (vstats.players = [vstats], vstats), vidRun.signal);
+      ? parallelFrames([video, video2], srcFrames, vstats, vidRun.signal, { maxFlight: 4, reopen, onReopen, onFallback: (why) => { parOff = true; log(`[${clock()}] ⚠️ estrazione parallela: ${why} → passo a 1 player per il resto del job`); } })
+      : seekFrames(video, srcFrames, (vstats.players = [vstats], vstats), vidRun.signal, { reopen, onReopen });
     for await (const vf of gen) {
       const k = runStart + i; while (k >= segEnd(segStarts, s, NF)) s++;
       if (s !== inSeg) { inSeg = s; const c = rc.configured(s); if (Math.abs(c - curBr) > curBr * 0.005) { curBr = c; enc.setBitrate(curBr); job.manifest.encBitrate = curBr; } } // nuovo target: configure PRIMA del keyframe del segmento
@@ -622,11 +653,11 @@ async function runWith(input, { forceFresh = false } = {}) {
     setProg('video', 1, 'chiusura encoder');
     try { await enc.flush(); } catch (e) { throw dsWrap(e, 'flush()'); }
     if (encErr) throw encErr; if (dsOn && !dsVerified) throw dsError('nessun pacchetto prodotto dall\'encoder (flush senza output)');
-    enc.close(); cur.enc = null; releaseVideoElement(video); cur.video = null; if (video2) { releaseVideoElement(video2); cur.video2 = null; } vidRun = null; await wq; if (encErr) throw encErr;
+    enc.close(); cur.enc = null; releaseVideoElement(cur.video); cur.video = null; if (cur.video2) { releaseVideoElement(cur.video2); cur.video2 = null; } vidRun = null; await wq; if (encErr) throw encErr;
     job0Br = curBr;
     if (job.doneCount !== nSeg) throw new Error(`segmenti completati ${job.doneCount}/${nSeg} (pacchetti ${nChunks}/${NF - runStart})`);
     const encSec = (performance.now() - tE) / 1000;
-    if (video2) { const fps = (x) => (x.n / encSec).toFixed(0); vstats.players.forEach((q, p) => log(`verifica player ${p + 1}: ${q.n} seek (${fps(q)} fps), doppioni ${q.dup}, fuori posto ${q.off}, senza callback ${q.noCallback}${q.retried ? `, seek ripetuti ${q.retried}` : ''}`)); log(`estrazione parallela: ${i} frame in ${encSec.toFixed(1)} s = ${(i / encSec).toFixed(0)} fps${vstats.fellBack ? ` · FALLBACK a 1 player (${vstats.fallbackReason})` : ''}`); }
+    if (video2) { const fps = (x) => (x.n / encSec).toFixed(0); vstats.players.forEach((q, p) => log(`verifica player ${p + 1}: ${q.n} seek (${fps(q)} fps), doppioni ${q.dup}, fuori posto ${q.off}, senza callback ${q.noCallback}${q.retried ? `, seek ripetuti ${q.retried}` : ''}`)); log(`estrazione parallela: ${i} frame in ${encSec.toFixed(1)} s = ${(i / encSec).toFixed(0)} fps${vstats.fellBack ? ` · FALLBACK a 1 player (${vstats.fallbackReason}; continua il player ${vstats.soloPlayer || 1})` : ''}`); }
     log(`verifica frame${video2 ? ' (globale)' : ''}: ${vstats.n} seek, doppioni ${vstats.dup}, fuori posto ${vstats.off}, senza callback ${vstats.noCallback}${vstats.retried ? `, seek ripetuti ${vstats.retried}` : ''} ${vstats.samples.length ? 'es. ' + JSON.stringify(vstats.samples) : ''}`);
     { const d = frames.map((f) => Math.round(f.dur * 1000)); const h = {}; d.forEach((x) => h[x] = (h[x] || 0) + 1); log(`durate frame sorgente (ms→n): ${JSON.stringify(h)}`); }
     log(`codificati ${i} frame → ${nChunks} chunk in ${encSec.toFixed(1)} s (${(i / encSec).toFixed(0)} fps). NAL nel primo frame: ${firstKeyNal} (19/20 = IDR, 21 = CRA, 39 = SEI, 32-34 = parametri). Timestamp encoder spostati >2 ms: ${tsDrift}.${notKey ? ` ⚠️ ${notKey} segmenti non iniziano con un keyframe` : ''}`);
@@ -1007,6 +1038,7 @@ async function runQueueItem(it) {
   resetPerFile();
   ui.queueItemStart({ id: it.id, idx, n: N, name: file.name, sizeMB: file.size / MB_, ...(it.info?.dur ? { durationS: it.info.dur, width: it.info.W, height: it.info.H, fps: it.info.fps, aacBps: it.info.aacBps, apacBps: it.info.apacBps, apac: it.info.apac, hdr: it.info.hdr, dolbyVision: it.info.dv } : {}) });
   log(`▶ voce ${idx} di ${N}: ${file.name} — ${(file.size / MB_).toFixed(1)} MB`, 'summary');
+  log(resLine('inizio voce'));
   saveQ(); renderQueue();
   outNameHook = (n) => uniqueOutName(new Set(Q.items.filter((x) => x !== it && x.result && !x.saved).map((x) => x.result.opfsName)), n);
   let res = 'ok';
@@ -1029,12 +1061,14 @@ async function runQueueItem(it) {
         else { it.status = ST.CANCEL; await discardJob(); log('voce annullata: segmenti eliminati, si passa alla successiva'); }
       } else {
         logFailure(e);
+        dropPlayers(); // v0.36.2: dopo un errore la voce successiva parte con <video> di seek nuovi (mai un elemento che si è bloccato)
         it.status = ST.ERR; it.error = e?.name === 'QuotaExceededError' || e?.name === 'DownscaleError' ? friendlyError(e) : `${e?.name ? e.name + ': ' : ''}${e?.message || e}`;
         chimeFail(`${it.key.name}: ${it.error}`.slice(0, 120)); res = 'err';
       }
     }
   } finally {
     if (TSTART) bgSummary();
+    log(resLine('fine voce'));
     TSTART = 0; analysis = null; savedJob = null; info = null; file = null; outNameHook = null; cancelled = false; qCurId = 0;
     logPrefix = ''; logQ = 0;
     await annotateResume().catch(() => {});

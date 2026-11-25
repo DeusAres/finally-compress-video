@@ -52,9 +52,10 @@ export const INIT = () => {
   // SOLO prova: Chromium non ha HEVC. Bitrate ×20 all'encoder: OpenH264 altrimenti salta fotogrammi (pacchetti < fotogrammi)
   const mapCodec = (c, enc) => (c && /^hvc1|^hev1/.test(c.codec) ? { ...c, codec: 'avc1.640028', ...(enc && c.bitrate ? { bitrate: c.bitrate * 20 } : {}) } : c);
   const wrapCodec = (Base, kind) => new Proxy(Base, { construct(t, [init], nt) {
-    const o = init?.output; const i2 = { ...init, output: kind === 'dec' ? (f, m) => o(track(f), m) : (ch, m) => { if (m?.decoderConfig && /^avc1/.test(m.decoderConfig.codec)) m = { ...m, decoderConfig: { ...m.decoderConfig, codec: 'hvc1.2.4.L123.B0' } }; o(ch, m); } };
+    let mapped = false; // v0.36.2: solo gli encoder configurati in HEVC (mappati) dichiarano hvc1 in uscita; un vero H.264 (clip PiP) resta avc1
+    const o = init?.output; const i2 = { ...init, output: kind === 'dec' ? (f, m) => o(track(f), m) : (ch, m) => { if (mapped && m?.decoderConfig && /^avc1/.test(m.decoderConfig.codec)) m = { ...m, decoderConfig: { ...m.decoderConfig, codec: 'hvc1.2.4.L123.B0' } }; o(ch, m); } };
     const x = Reflect.construct(t, [i2], nt); P.codecs.add(x); P.made[kind]++;
-    const cf = x.configure.bind(x), cl = x.close.bind(x); x.configure = (c) => cf(mapCodec(c, kind === 'enc')); x.close = () => { P.codecs.delete(x); return cl(); };
+    const cf = x.configure.bind(x), cl = x.close.bind(x); x.configure = (c) => { mapped = !!(c && /^hvc1|^hev1/.test(c.codec)); return cf(mapCodec(c, kind === 'enc')); }; x.close = () => { P.codecs.delete(x); return cl(); };
     return x; } });
   window.VideoEncoder = wrapCodec(window.VideoEncoder, 'enc'); window.VideoDecoder = wrapCodec(window.VideoDecoder, 'dec');
   const W = window.Worker, term = W.prototype.terminate;
@@ -63,35 +64,46 @@ export const INIT = () => {
   for (const k of ['AudioContext', 'webkitAudioContext']) { const A = window[k]; if (!A) continue; const c = A.prototype.close;
     A.prototype.close = function () { P.actx.delete(this); return c.call(this); };
     window[k] = new Proxy(A, { construct(t, a, nt) { const x = Reflect.construct(t, a, nt); P.actx.add(x); return x; } }); }
+  // v0.36.2: <video>/<audio> anche FUORI dal DOM (createElement, new Audio, innerHTML/cloneNode via 'loadstart' in cattura).
+  const seen = new WeakSet(), addMedia = (e) => { if (!e || seen.has(e)) return; seen.add(e); P.media.push(new WeakRef(e)); P.made[e.tagName === 'VIDEO' ? 'video' : 'audio'] = (P.made[e.tagName === 'VIDEO' ? 'video' : 'audio'] || 0) + 1; };
   const ce = Document.prototype.createElement;
-  Document.prototype.createElement = function (n, o) { const e = ce.call(this, n, o); if (/^(video|audio)$/i.test(n)) P.media.push(new WeakRef(e)); return e; };
-  const A0 = window.Audio; window.Audio = new Proxy(A0, { construct(t, a, nt) { const e = Reflect.construct(t, a, nt); P.media.push(new WeakRef(e)); return e; } });
+  Document.prototype.createElement = function (n, o) { const e = ce.call(this, n, o); if (/^(video|audio)$/i.test(n)) addMedia(e); return e; };
+  const A0 = window.Audio; window.Audio = new Proxy(A0, { construct(t, a, nt) { const e = Reflect.construct(t, a, nt); addMedia(e); return e; } });
+  document.addEventListener('loadstart', (e) => { if (e.target instanceof HTMLMediaElement) addMedia(e.target); }, true);
+  for (const k of ['AudioEncoder', 'AudioDecoder']) { const B = window[k]; if (!B) continue; // contati come i VideoEncoder/Decoder (aperti = state ≠ closed)
+    window[k] = new Proxy(B, { construct(t, a, nt) { const x = Reflect.construct(t, a, nt); P.codecs.add(x); P.made[k] = (P.made[k] || 0) + 1; return x; } }); }
   document.addEventListener('change', (e) => { for (const f of e.target?.files || []) P.files.push(new WeakRef(f)); }, true);
   const F0 = window.File; window.File = new Proxy(F0, { construct(t, a, nt) { const f = Reflect.construct(t, a, nt); if (/\.(mov|mp4)$/.test(f.name)) P.outs.push(new WeakRef(f)); return f; } });
   const gf = FileSystemFileHandle.prototype.getFile;
   FileSystemFileHandle.prototype.getFile = async function () { const f = await gf.call(this); if (/\.(mov|mp4)$/.test(f.name)) P.outs.push(new WeakRef(f)); return f; };
   P.snap = async () => {
     const opfs = []; try { const walk = async (d, p) => { for await (const [n, h] of d.entries()) { if (h.kind === 'directory') await walk(h, p + n + '/'); else opfs.push(p + n); } }; await walk(await navigator.storage.getDirectory(), ''); } catch {}
-    const media = P.media.map((w) => w.deref()).filter(Boolean);
+    const media = P.media.map((w) => w.deref()).filter(Boolean), hasSrc = (m) => !!(m.getAttribute('src') || m.srcObject || (m.currentSrc && m.networkState !== 0));
     return { heapMB: +(performance.memory.usedJSHeapSize / 1048576).toFixed(2), blobUrls: P.urls.size, frames: P.frames.size, codecs: [...P.codecs].filter((c) => c.state !== 'closed').length,
       workers: P.workers.size, audioCtx: [...P.actx].filter((a) => a.state !== 'closed').length, videoDom: document.querySelectorAll('video').length,
       mediaAlive: media.length, mediaSrc: media.filter((m) => m.getAttribute('src') || m.currentSrc).length,
+      // con sorgente: attributo src, srcObject o currentSrc con networkState ≠ EMPTY (dopo removeAttribute('src') + load() currentSrc resta)
+      vidSrc: media.filter((m) => m.tagName === 'VIDEO' && hasSrc(m)).length,
+      vidSrcOut: media.filter((m) => m.tagName === 'VIDEO' && !m.isConnected && hasSrc(m)).length,
+      vidPlay: media.filter((m) => m.tagName === 'VIDEO' && !m.paused && hasSrc(m)).length,
+      mediaPlay: media.filter((m) => !m.paused && hasSrc(m)).length,
+      vidMade: P.made.video || 0,
       filesAlive: P.files.filter((w) => w.deref()).length, outsAlive: P.outs.filter((w) => w.deref()).length, opfs: opfs.length, opfsList: opfs.join(' '),
       mediaInfo: media.map((m) => `${m.tagName}:${m.isConnected ? 'dom' : '-'}:${(m.getAttribute('src') || '').slice(0, 30)}:${(m.currentSrc || '').slice(0, 30)}:rs${m.readyState}:ns${m.networkState}`).join(' ') };
   };
 };
 
-/** Browser + pagina strumentata. extraInit: altro script di prova (es. mock di navigator.share). */
+/** Browser + pagina strumentata. extraInit: altro script di prova o elenco di script (es. mock di navigator.share). */
 export async function openProbe(base, { extraInit, viewport } = {}) {
   const pw = playwright();
   const browser = await pw.chromium.launch({ args: ['--enable-precise-memory-info', '--autoplay-policy=no-user-gesture-required'] });
   const ctx = await browser.newContext(viewport ? { viewport } : {}); const page = await ctx.newPage();
   const errors = []; page.on('pageerror', (e) => errors.push(e.message + (process.env.STACK ? '\n' + e.stack : '')));
-  await page.addInitScript(INIT); if (extraInit) await page.addInitScript(extraInit);
+  await page.addInitScript(INIT); for (const x of [extraInit].flat()) if (x) await page.addInitScript(x);
   const cdp = await ctx.newCDPSession(page);
   await page.goto(base); await page.waitForSelector('[data-ref="go"]');
   const snap = async () => { for (let i = 0; i < 3; i++) await cdp.send('HeapProfiler.collectGarbage'); await page.waitForTimeout(150); await cdp.send('HeapProfiler.collectGarbage'); return page.evaluate(() => window.__probe.snap()); };
   const logTail = (n = 4) => page.evaluate((n) => [...document.querySelectorAll('[data-ref="log"] div')].slice(-n).map((d) => d.textContent).join(' | '), n);
   return { browser, ctx, page, cdp, errors, snap, logTail };
 }
-export const SNAP_COLS = ['heapMB', 'blobUrls', 'frames', 'codecs', 'workers', 'audioCtx', 'videoDom', 'mediaAlive', 'mediaSrc', 'filesAlive', 'outsAlive', 'opfs'];
+export const SNAP_COLS = ['heapMB', 'blobUrls', 'frames', 'codecs', 'workers', 'audioCtx', 'videoDom', 'mediaAlive', 'mediaSrc', 'vidSrc', 'vidSrcOut', 'vidPlay', 'mediaPlay', 'vidMade', 'filesAlive', 'outsAlive', 'opfs'];

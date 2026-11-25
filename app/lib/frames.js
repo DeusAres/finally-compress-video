@@ -18,20 +18,38 @@ export const waitEvent = (el, ev, ms, signal) => new Promise((res) => {
 
 export const RVFC_GRACE_MS = 60;
 export const SEEK_TIMEOUT_MS = 4000; // solo per guasti reali: il passaggio in background interrompe via AbortSignal
+let seekTimeoutMs = SEEK_TIMEOUT_MS;
+/** Solo per i test in Node: timeout di seek più corto. */
+export const _setSeekTimeout = (ms) => { seekTimeoutMs = ms || SEEK_TIMEOUT_MS; };
 
-export async function openVideoElement(file, signal) {
-  const v = document.createElement('video');
+/** v0.36.2: player bloccato (seek senza 'seeked' dopo un nuovo tentativo, metadati che non arrivano): recuperabile ricreando il <video>. */
+export const seekTimeoutError = (msg) => Object.assign(new Error(msg), { name: 'SeekTimeout' });
+export const isSeekTimeout = (e) => e?.name === 'SeekTimeout';
+
+/**
+ * Apre (o RIAPRE, v0.36.2) un <video> di seek fuori dal DOM sul File. `reuse`: elemento già creato da riusare (coda: gli stessi 2
+ * player per tutta la sessione invece di 2 nuovi per voce; su iOS un <video> scartato tiene il suo player/decoder finché il GC
+ * non lo raccoglie, research/16 §3). Su errore l'elemento è rilasciato (senza src) e resta riusabile.
+ */
+export async function openVideoElement(file, signal, reuse = null) {
+  const v = reuse || document.createElement('video');
+  if (reuse) releaseVideoElement(v); // sorgente precedente (se ancora presente) rilasciata prima della nuova
   v.muted = true; v.playsInline = true; v.preload = 'auto';
   v.src = URL.createObjectURL(file);
   try {
-    if (v.readyState < 1 && (await waitEvent(v, 'loadedmetadata', 10000, signal)) === 'abort') throw interruptError();
+    if (v.readyState < 1) {
+      const ev = await waitEvent(v, 'loadedmetadata', 10000, signal);
+      if (ev === 'abort') throw interruptError();
+      if (ev === 'timeout' && v.readyState < 1) throw seekTimeoutError(`video: metadati non caricati in 10 s (readyState ${v.readyState}, networkState ${v.networkState}${v.error ? ', errore ' + v.error.code : ''})`);
+    }
     // Safari needs a decoded frame before seeks deliver pictures reliably.
-    let onAb = null; // v0.35.4: listener tolto dopo la gara (prima restava sul signal della run, con la sua closure)
+    let onAb = null, t = 0; // v0.35.4: listener tolto dopo la gara (prima restava sul signal della run, con la sua closure)
     try {
-      await Promise.race([v.play(), new Promise((_, rej) => { if (signal?.aborted) rej(interruptError()); else signal?.addEventListener('abort', onAb = () => rej(interruptError()), { once: true }); })]);
+      // v0.36.2: play() può restare in sospeso per sempre se iOS non concede il decoder: dopo 3 s si prosegue (i seek lo diranno)
+      await Promise.race([v.play(), new Promise((res) => { t = setTimeout(res, 3000); }), new Promise((_, rej) => { if (signal?.aborted) rej(interruptError()); else signal?.addEventListener('abort', onAb = () => rej(interruptError()), { once: true }); })]);
       v.pause();
     } catch (e) { if (e?.name === 'BackgroundInterrupt') throw e; /* muted autoplay may still be refused; seeks work anyway */ }
-    finally { if (onAb) signal.removeEventListener('abort', onAb); }
+    finally { clearTimeout(t); if (onAb) signal.removeEventListener('abort', onAb); }
   } catch (e) { releaseVideoElement(v); throw e; }
   return v;
 }
@@ -54,12 +72,12 @@ async function grabFrame(video, f, ps, signal) {
   }) : null;
   if (signal?.aborted) throw interruptError();
   video.currentTime = target;
-  let ev = await waitEvent(video, 'seeked', SEEK_TIMEOUT_MS, signal);
+  let ev = await waitEvent(video, 'seeked', seekTimeoutMs, signal);
   if (ev === 'abort') throw interruptError(); // background: esce subito, senza aspettare il timeout
   if (ev === 'timeout') { // guasto reale (pagina visibile): un solo nuovo tentativo
-    video.currentTime = target + 1e-6; ev = await waitEvent(video, 'seeked', SEEK_TIMEOUT_MS, signal);
+    video.currentTime = target + 1e-6; ev = await waitEvent(video, 'seeked', seekTimeoutMs, signal);
     if (ev === 'abort') throw interruptError();
-    if (ev === 'timeout') throw new Error(`seek timeout @${target.toFixed(3)}s`);
+    if (ev === 'timeout') throw seekTimeoutError(`seek timeout @${target.toFixed(3)}s`);
     if (ps) ps.retried++;
   }
   let bad = false, mt = null;
@@ -81,7 +99,7 @@ async function nudge(video, f, signal) {
   const rv = new Promise((res) => { const to = setTimeout(res, 150); video.requestVideoFrameCallback(() => { clearTimeout(to); res(); }); });
   if (signal?.aborted) throw interruptError();
   video.currentTime = t;
-  const ev = await waitEvent(video, 'seeked', SEEK_TIMEOUT_MS, signal);
+  const ev = await waitEvent(video, 'seeked', seekTimeoutMs, signal);
   if (ev === 'abort') throw interruptError();
   await rv;
 }
@@ -92,16 +110,17 @@ async function nudge(video, f, signal) {
  * frameFor(p) → {ts, dur} in µs, o null per saltare. keep(p, vf): facoltativo, riceve il frame (ne diventa proprietario);
  * altrimenti il frame è chiuso. Ritorna per player {ok, tries, ms, mt}.
  */
-export async function warmPlayers(videos, frameFor, signal = null, { tries = 4, keep = null } = {}) {
+export async function warmPlayers(videos, frameFor, signal = null, { tries = 4, keep = null, reopen = null, onReopen = () => {} } = {}) {
   // v0.35.4: si attendono TUTTI i player prima di consegnare (keep) o di lanciare l'errore: con Promise.all un player che
   // falliva faceva uscire il chiamante mentre l'altro poteva ancora consegnare un VideoFrame che nessuno avrebbe chiuso.
   const got = [];
   const rs = await Promise.allSettled(videos.map(async (v, p) => {
     const f = frameFor(p), t0 = performance.now(); if (!f) return { ok: false, tries: 0, ms: 0, skipped: true };
     const ps = newStats(); let k = 0, r = null;
+    const grab = reopenGrab(() => v, (x) => { v = x; }, p, reopen, onReopen, ps, 1); // v0.36.2: player bloccato → ricreato una volta
     for (; k < tries; k++) {
       if (k) await nudge(v, f, signal);
-      r = await grabFrame(v, f, ps, signal);
+      r = await grab(f, signal);
       if (!r.bad) break;
       r.vf.close(); r = null;
     }
@@ -119,10 +138,30 @@ export async function warmPlayers(videos, frameFor, signal = null, { tries = 4, 
  * Seeks to the centre of each frame so VFR (17/33 ms) frames are hit exactly once.
  * Caller MUST close() every frame.
  */
-export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentation order */, stats = null, signal = null) {
+export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentation order */, stats = null, signal = null, { reopen = null, onReopen = () => {} } = {}) {
   // stats (optional): verify via rVFC which frame was actually presented after each seek.
   if (stats) { stats.retried ||= 0; stats.prevMT ??= null; }
-  for (const f of frames) yield (await grabFrame(video, f, stats, signal)).vf;
+  const grab = reopenGrab(() => video, (v) => { video = v; }, 0, reopen, onReopen, stats);
+  for (const f of frames) yield (await grab(f, signal)).vf;
+}
+
+/**
+ * v0.36.2 recupero del seek bloccato: se il player va in timeout (già dopo il suo nuovo tentativo interno) l'elemento viene
+ * RICREATO con reopen(p) → nuovo <video> e lo stesso frame riprovato UNA volta; un secondo timeout sullo stesso frame (o più di
+ * `max` ricreazioni nella stessa estrazione) è un guasto reale e viene rilanciato. Senza reopen: comportamento di prima.
+ */
+export const MAX_REOPEN = 2;
+function reopenGrab(get, set, p, reopen, onReopen, stats, max = MAX_REOPEN) {
+  let n = 0;
+  return async (f, signal) => {
+    try { return await grabFrame(get(), f, stats, signal); }
+    catch (e) {
+      if (!reopen || !isSeekTimeout(e) || n >= max || signal?.aborted) throw e;
+      n++; onReopen(p, e, n);
+      const v = await reopen(p); set(v); if (stats) stats.prevMT = null;
+      return await grabFrame(v, f, stats, signal);
+    }
+  };
 }
 
 /**
@@ -133,7 +172,8 @@ export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentat
  * scartato e riestratto in sequenza. Ogni frame non consegnato è chiuso. `stats`: {n,dup,off,noCallback,retried,samples (globali),
  * players:[stats per player], fellBack, fallbackReason}. Con 1 solo video equivale a seekFrames.
  */
-export async function* parallelFrames(videos, frames, stats, signal = null, { maxFlight = 4, onFallback = () => {} } = {}) {
+export async function* parallelFrames(videos, frames, stats, signal = null, { maxFlight = 4, onFallback = () => {}, reopen = null, onReopen = () => {} } = {}) {
+  videos = [...videos]; // v0.36.2: un player ricreato (reopen) sostituisce il suo elemento solo qui dentro
   const P = videos.length, N = frames.length;
   stats.players = videos.map(() => newStats()); stats.fellBack = false; stats.fallbackReason = '';
   stats.n = 0; stats.dup = 0; stats.off = 0; stats.noCallback = 0; stats.retried = 0; stats.samples = [];
@@ -143,7 +183,7 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
   const wake = () => new Promise((r) => waiters.push(r));
   const onAbort = () => notify(); signal?.addEventListener('abort', onAbort);
   const degrade = (why) => { if (degraded) return; degraded = true; stats.fellBack = true; stats.fallbackReason = why; onFallback(why); notify(); };
-  const failures = [];
+  const failures = [], broken = new Set(); // broken: player andati in errore (v0.36.2: il fallback continua con un player SANO)
   const worker = async (p) => {
     try {
       for (let i = p; i < N; i += P) {
@@ -165,7 +205,10 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
       }
     } catch (e) {
       if (signal?.aborted || e?.name === 'BackgroundInterrupt') { failures.push(e); notify(); return; }
-      degrade(`player ${p + 1}: ${e?.message || e}`);
+      broken.add(p); degrade(`player ${p + 1}: ${e?.message || e}`);
+      // v0.36.2: player bloccato → ricreato subito (per le estrazioni successive del chiamante); il resto di QUESTA estrazione
+      // continua con un player sano. Errore nel ricrearlo: resta guasto (il sequenziale non lo usa se ce n'è un altro).
+      if (isSeekTimeout(e) && reopen && !signal?.aborted) { try { onReopen(p, e, 0); videos[p] = await reopen(p); } catch (x) { if (x?.name === 'BackgroundInterrupt') failures.push(x); } }
     }
   };
   const workers = P > 1 ? videos.map((_, p) => worker(p)) : [];
@@ -180,9 +223,11 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
         await Promise.all(workers);
         if (signal?.aborted || failures.length) throw failures[0] || interruptError();
         for (const x of buf.values()) x.vf.close(); buf.clear();
-        const ps = stats.players[0]; ps.prevMT = null;
+        // v0.36.2: un player sano (prima: sempre il player 1, anche quando era proprio lui ad essersi bloccato)
+        const sp = P > 1 && broken.has(0) && !broken.has(1) ? 1 : 0, ps = stats.players[sp]; ps.prevMT = null; stats.soloPlayer = sp + 1;
+        const grab = reopenGrab(() => videos[sp], (v) => { videos[sp] = v; }, sp, reopen, onReopen, ps);
         for (; next < N; next++) {
-          const g = await grabFrame(videos[0], frames[next], ps, signal);
+          const g = await grab(frames[next], signal);
           if (prevMT != null && g.mt != null && Math.abs(g.mt - prevMT) < 1e-4) stats.dup++;
           if (g.mt != null) prevMT = g.mt;
           sum(); notify();
@@ -202,7 +247,11 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
   }
 }
 
+/** Rilascia la sorgente (decoder/player di WebKit): pausa, via src (+ load) e Blob URL revocato. L'elemento resta riusabile. */
 export function releaseVideoElement(v) {
-  try { URL.revokeObjectURL(v.src); } catch {}
-  v.removeAttribute('src'); v.load();
+  if (!v) return;
+  try { v.pause(); } catch {}
+  const u = v.getAttribute?.('src');
+  if (u) { try { URL.revokeObjectURL(u); } catch {} v.removeAttribute('src'); try { v.load(); } catch {} }
+  try { if (v.isConnected) v.remove(); } catch {}
 }
