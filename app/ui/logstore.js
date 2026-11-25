@@ -2,13 +2,14 @@
 // Nessuna dipendenza dal DOM (testabile in Node). Categorie: setup | segment | pip | heartbeat | warn | error | summary | info
 export const CATS = ['setup', 'segment', 'pip', 'heartbeat', 'warn', 'error', 'summary', 'info'];
 const STAMP = /^\[\d\d:\d\d:\d\d(?:\.\d+)?\]\s*/;
+const QTAG = /^\[\d+\/\d+ [^\]]*\]\s*/; // coda (v0.36): «[2/3 IMG_0001.MOV] » davanti alle righe di una voce
 const RE_ERR = /^(ERRORE|Impossibile leggere)/;
 const RE_WARN = /⚠️|non ottenuto|fallit[ao]|NON supportato|INCOMPLETO|^(visibilità|evento pagina|wake lock|background: interrompo|ripresa|RIPRESA|aggiornamento)|timer fermo/;
 const RE_SUM = /^(COMPRESSIONE|QUALITÀ PER SCENA|bitrate video reale|fatto in|file:|PREVISIONE|PiP: aperta|background:|verifica|durate frame|codificati|assemblati|RPU trapiantati|metadati copiati|prove per scena|job completato|analisi eco|correzione|filtro|v4 elaborato|audio (corretto|SOLO)|hvcC)/;
 
 /** Categoria dedotta dal prefisso (usata se il chiamante non la passa): robusta alle righe senza tag. */
 export function classify(line, seenSegment = false) {
-  const s = String(line).replace(STAMP, '');
+  const s = String(line).replace(QTAG, '').replace(STAMP, '');
   if (RE_ERR.test(s)) return 'error';
   if (s.startsWith('PiP ♥')) return 'pip';
   if (s.startsWith('♥')) return /timer fermo/.test(s) ? 'warn' : 'heartbeat';
@@ -43,11 +44,11 @@ export function createLogStore({ max = 20000, head = 200, now = () => Date.now()
     if (lines.length > max) { const drop = lines.length - max + 500; lines.splice(head, drop); omitted += drop; }
     if (cat === 'segment') {
       seenSeg = true;
-      if (data && Number.isFinite(data.seg)) {
-        const r = segs.get(data.seg) || { seg: data.seg };
+      if (data && Number.isFinite(data.seg)) { // coda: data.q = voce (i segmenti di video diversi non si mescolano)
+        const key = data.q ? `${data.q}#${data.seg}` : data.seg, r = segs.get(key) || { seg: data.seg, q: data.q || 0 };
         if (num(data.frames) !== null) { r.frames = data.frames; r.bytes = data.bytes; r.t = t; }
         if (num(data.real) !== null) { r.real = data.real; r.target = data.target; r.chosen = data.chosen; r.scene = !!data.scene; }
-        segs.set(data.seg, r);
+        segs.set(key, r);
       }
     } else if (cat === 'pip') pipSeen.push(e);
     else if (cat === 'heartbeat') hbSeen.push(e);
@@ -74,12 +75,15 @@ export function createLogStore({ max = 20000, head = 200, now = () => Date.now()
   }
 
   function segLines(blockSize, maxBlocks) {
-    const all = [...segs.values()].sort((a, b) => a.seg - b.seg);
+    const all = [...segs.values()].sort((a, b) => a.q - b.q || a.seg - b.seg);
     if (!all.length) return [];
     const bs = Math.max(blockSize, Math.ceil(all.length / maxBlocks));
     const out = []; let prevT = null;
-    for (let i = 0; i < all.length; i += bs) {
-      const b = all.slice(i, i + bs), a0 = b[0].seg, a1 = b[b.length - 1].seg;
+    // blocchi di bs segmenti, mai a cavallo di due voci della coda
+    const blocks = []; for (let i = 0; i < all.length;) { const q = all[i].q; let j = i; while (j < all.length && j - i < bs && all[j].q === q) j++; blocks.push(all.slice(i, j)); i = j; }
+    for (const b of blocks) {
+      const a0 = b[0].seg, a1 = b[b.length - 1].seg;
+      if (b[0].q && b !== blocks[0] && blocks[blocks.indexOf(b) - 1][0].q !== b[0].q) prevT = null;
       const timed = b.filter((r) => r.t != null), reals = b.filter((r) => r.real > 0).map((r) => r.real / 1e6);
       let fps = '—';
       if (timed.length) {
@@ -94,7 +98,7 @@ export function createLogStore({ max = 20000, head = 200, now = () => Date.now()
         if (r.t != null && r.real == null) anom.push(`seg ${r.seg} senza misura bitrate`);
       }
       const scene = b.filter((r) => r.scene && r.chosen > 0);
-      let s = `segmenti ${a0}–${a1}: fps medio ${fps}`;
+      let s = `${b[0].q ? `voce ${b[0].q} · ` : ''}segmenti ${a0}–${a1}: fps medio ${fps}`;
       if (reals.length) s += `, bitrate reale medio ${f1(reals.reduce((x, y) => x + y, 0) / reals.length)} Mbps (${f1(Math.min(...reals))}–${f1(Math.max(...reals))})`;
       else s += ', bitrate reale n/d';
       if (scene.length) s += `, scelto ${f1(scene.reduce((x, r) => x + r.chosen, 0) / scene.length / 1e6)} Mbps`;

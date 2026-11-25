@@ -10,87 +10,19 @@
 // memoria, non l'uscita). Con --hevc usa il campione HEVC così com'è (percorso d'errore: il <video> non decodifica).
 //
 // Uso: node tools/lab/lifecycle_probe.mjs [--n 4] [--sample samples/IMG_7440.mov] [--only nuovo,annulla,errore,impostazioni,ripresa]
-import { createRequire } from 'node:module';
-import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import { mkdtempSync, existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { tmpdir } from 'node:os';
-import { join, dirname, extname, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { arg, makeSamples, startServer, openProbe } from './probe_kit.mjs';
 
-const req = createRequire(import.meta.url);
-let pw; try { pw = req('playwright'); } catch { pw = req(join(execFileSync('npm', ['root', '-g']).toString().trim(), 'playwright')); }
-const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 // --root: cartella servita (es. un `git worktree` di una versione precedente, per le misure «prima»); il campione resta quello del repo
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..'), ROOT = resolve(arg('--root', REPO));
 const N = +arg('--n', 4), SRC = resolve(REPO, arg('--sample', 'samples/IMG_7440.mov'));
 const ONLY = arg('--only', 'nuovo,annulla,errore,impostazioni,ripresa').split(',');
 
-// ---- campione H.264 (Chromium) ----
-const tmp = mkdtempSync(join(tmpdir(), 'fcv-life-'));
-const AVC = join(tmp, 'clip_avc.mov'), AVC2 = join(tmp, 'clip2_avc.mov');
-execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', SRC, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=320:-2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', AVC]);
-execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', AVC, '-c', 'copy', '-metadata', 'title=b', AVC2]); // secondo file (altro nome/dimensione)
-
-// ---- server statico (127.0.0.1: niente service worker, che index.html registra solo su https/localhost) ----
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.svg': 'image/svg+xml', '.txt': 'text/plain', '.woff2': 'font/woff2', '.wasm': 'application/wasm' };
-const server = createServer(async (q, r) => {
-  try { const p = join(ROOT, decodeURIComponent(new URL(q.url, 'http://x').pathname)); if (!p.startsWith(ROOT) || !(await stat(p)).isFile()) throw 0;
-    r.writeHead(200, { 'content-type': MIME[extname(p)] || 'application/octet-stream', 'cache-control': 'no-store' }); r.end(await readFile(p)); }
-  catch { r.writeHead(404); r.end(); }
-}).listen(0, '127.0.0.1');
-await new Promise((r) => server.once('listening', r));
-const BASE = `http://127.0.0.1:${server.address().port}/index.html`;
-
-// ---- strumentazione in pagina (prima di ogni script) ----
-const INIT = () => {
-  const P = window.__probe = { urls: new Set(), frames: new Set(), codecs: new Set(), workers: new Set(), actx: new Set(), media: [], files: [], outs: [], made: { urls: 0, frames: 0, enc: 0, dec: 0, workers: 0 } };
-  const cu = URL.createObjectURL, ru = URL.revokeObjectURL;
-  URL.createObjectURL = function (o) { const u = cu.call(this, o); P.urls.add(u); P.made.urls++; return u; };
-  URL.revokeObjectURL = function (u) { P.urls.delete(u); return ru.call(this, u); };
-  const VF = window.VideoFrame, close = VF.prototype.close;
-  const track = (f) => { P.frames.add(f); P.made.frames++; return f; };
-  VF.prototype.close = function () { P.frames.delete(this); return close.call(this); };
-  window.VideoFrame = new Proxy(VF, { construct(t, a, nt) { return track(Reflect.construct(t, a, nt)); } });
-  // SOLO prova: Chromium non ha HEVC. Bitrate ×20 all'encoder: OpenH264 altrimenti salta fotogrammi (pacchetti < fotogrammi)
-  const mapCodec = (c, enc) => (c && /^hvc1|^hev1/.test(c.codec) ? { ...c, codec: 'avc1.640028', ...(enc && c.bitrate ? { bitrate: c.bitrate * 20 } : {}) } : c);
-  const wrapCodec = (Base, kind) => new Proxy(Base, { construct(t, [init], nt) {
-    const o = init?.output; const i2 = { ...init, output: kind === 'dec' ? (f, m) => o(track(f), m) : (ch, m) => { if (m?.decoderConfig && /^avc1/.test(m.decoderConfig.codec)) m = { ...m, decoderConfig: { ...m.decoderConfig, codec: 'hvc1.2.4.L123.B0' } }; o(ch, m); } };
-    const x = Reflect.construct(t, [i2], nt); P.codecs.add(x); P.made[kind]++;
-    const cf = x.configure.bind(x), cl = x.close.bind(x); x.configure = (c) => cf(mapCodec(c, kind === 'enc')); x.close = () => { P.codecs.delete(x); return cl(); };
-    return x; } });
-  window.VideoEncoder = wrapCodec(window.VideoEncoder, 'enc'); window.VideoDecoder = wrapCodec(window.VideoDecoder, 'dec');
-  const W = window.Worker, term = W.prototype.terminate;
-  W.prototype.terminate = function () { P.workers.delete(this); return term.call(this); };
-  window.Worker = new Proxy(W, { construct(t, a, nt) { const w = Reflect.construct(t, a, nt); P.workers.add(w); P.made.workers++; return w; } });
-  for (const k of ['AudioContext', 'webkitAudioContext']) { const A = window[k]; if (!A) continue; const c = A.prototype.close;
-    A.prototype.close = function () { P.actx.delete(this); return c.call(this); };
-    window[k] = new Proxy(A, { construct(t, a, nt) { const x = Reflect.construct(t, a, nt); P.actx.add(x); return x; } }); }
-  const ce = Document.prototype.createElement;
-  Document.prototype.createElement = function (n, o) { const e = ce.call(this, n, o); if (/^(video|audio)$/i.test(n)) P.media.push(new WeakRef(e)); return e; };
-  const A0 = window.Audio; window.Audio = new Proxy(A0, { construct(t, a, nt) { const e = Reflect.construct(t, a, nt); P.media.push(new WeakRef(e)); return e; } });
-  document.addEventListener('change', (e) => { const f = e.target?.files?.[0]; if (f) P.files.push(new WeakRef(f)); }, true);
-  const F0 = window.File; window.File = new Proxy(F0, { construct(t, a, nt) { const f = Reflect.construct(t, a, nt); if (/\.(mov|mp4)$/.test(f.name)) P.outs.push(new WeakRef(f)); return f; } });
-  const gf = FileSystemFileHandle.prototype.getFile;
-  FileSystemFileHandle.prototype.getFile = async function () { const f = await gf.call(this); if (/\.(mov|mp4)$/.test(f.name)) P.outs.push(new WeakRef(f)); return f; };
-  P.snap = async () => {
-    const opfs = []; try { const walk = async (d, p) => { for await (const [n, h] of d.entries()) { if (h.kind === 'directory') await walk(h, p + n + '/'); else opfs.push(p + n); } }; await walk(await navigator.storage.getDirectory(), ''); } catch {}
-    const media = P.media.map((w) => w.deref()).filter(Boolean);
-    return { heapMB: +(performance.memory.usedJSHeapSize / 1048576).toFixed(2), blobUrls: P.urls.size, frames: P.frames.size, codecs: [...P.codecs].filter((c) => c.state !== 'closed').length,
-      workers: P.workers.size, audioCtx: [...P.actx].filter((a) => a.state !== 'closed').length, videoDom: document.querySelectorAll('video').length,
-      mediaAlive: media.length, mediaSrc: media.filter((m) => m.getAttribute('src') || m.currentSrc).length,
-      filesAlive: P.files.filter((w) => w.deref()).length, outsAlive: P.outs.filter((w) => w.deref()).length, opfs: opfs.length, opfsList: opfs.join(' '),
-      mediaInfo: media.map((m) => `${m.tagName}:${m.isConnected ? 'dom' : '-'}:${(m.getAttribute('src') || '').slice(0, 30)}:${(m.currentSrc || '').slice(0, 30)}:rs${m.readyState}:ns${m.networkState}`).join(' ') };
-  };
-};
-
-const browser = await pw.chromium.launch({ args: ['--enable-precise-memory-info', '--autoplay-policy=no-user-gesture-required'] });
-const ctx = await browser.newContext(); const page = await ctx.newPage();
-const errors = []; page.on('pageerror', (e) => errors.push(e.message + (process.env.STACK ? '\n' + e.stack : '')));
-await page.addInitScript(INIT);
-const cdp = await ctx.newCDPSession(page);
-await page.goto(BASE); await page.waitForSelector('[data-ref="go"]');
+// ---- campioni H.264 (Chromium) e server statico (strumentazione in pagina: probe_kit.mjs) ----
+const [AVC, AVC2] = makeSamples(SRC, 2);
+const server = await startServer(ROOT);
+const { browser, page, errors, snap: snap0, logTail } = await openProbe(server.base);
 const app = '#app';
 const stage = () => page.$eval(app, (r) => r.dataset.stage);
 const waitStage = (list, ms = 120000) => page.waitForFunction((l) => l.includes(document.querySelector('#app').dataset.stage) && document.querySelector('#app').dataset.busy === 'false', list, { timeout: ms })
@@ -102,10 +34,9 @@ const pick = async (path) => {
   await page.waitForTimeout(300); // refreshResume / updateEstimate
 };
 const go = async () => { await page.click('[data-ref="go"]'); };
-const snap = async () => { for (let i = 0; i < 3; i++) await cdp.send('HeapProfiler.collectGarbage'); await page.waitForTimeout(150); await cdp.send('HeapProfiler.collectGarbage'); return page.evaluate(() => window.__probe.snap()); };
+const snap = snap0;
 const rows = [];
 const rec = async (scen, i, extra = '') => { const s = await snap(); rows.push({ scen, i, ...s, extra }); };
-const logTail = (n = 4) => page.evaluate((n) => [...document.querySelectorAll('[data-ref="log"] div')].slice(-n).map((d) => d.textContent).join(' | '), n);
 
 await rec('avvio', 0);
 const files = [AVC, AVC2];

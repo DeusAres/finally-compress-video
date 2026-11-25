@@ -1,5 +1,5 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.35.5</title>
+<title>Compressore HDR v0.36.0</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
 <link rel="stylesheet" href="app/ui/theme.css"><link rel="stylesheet" href="app/ui/ui.css">
@@ -15,35 +15,39 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers } from './app/lib/frames.js?v=0.35.5';
-import { estimateOutBytes } from './app/ui/estimate.js?v=0.35.5';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.35.5';
-import { downscaleDims, avgFramerate, verifyDownscale, dsError } from './app/lib/downscale.js?v=0.35.5';
-import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.35.5';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.35.5';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.35.5';
-import { finishMoov, rewriteMoov, sourceFtypPatch } from './app/lib/mp4-post.js?v=0.35.5';
-import { readPassthrough, selectPassthrough, planPassthroughMdat, copyPassthroughData, addPassthroughTracks, describeAdded } from './app/lib/passthrough.js?v=0.35.5';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.35.5';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.35.5';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.35.5';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.35.5';
-import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.35.5';
-import { createPip, pipSupported } from './app/lib/pip.js?v=0.35.5';
-import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, lumaTestLine, SCENE } from './app/lib/scenesearch.js?v=0.35.5';
-import { inspectMovie, judgeOrigin } from './app/lib/origin.js?v=0.35.5';
-import { mountUI } from './app/ui/ui.js?v=0.35.5';
-import { bus, emit } from './app/ui/bus.js?v=0.35.5';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers } from './app/lib/frames.js?v=0.36.0';
+import { estimateOutBytes, estimateTimeS } from './app/ui/estimate.js?v=0.36.0';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.36.0';
+import { downscaleDims, avgFramerate, verifyDownscale, dsError } from './app/lib/downscale.js?v=0.36.0';
+import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.36.0';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.36.0';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.36.0';
+import { finishMoov, rewriteMoov, sourceFtypPatch } from './app/lib/mp4-post.js?v=0.36.0';
+import { readPassthrough, selectPassthrough, planPassthroughMdat, copyPassthroughData, addPassthroughTracks, describeAdded } from './app/lib/passthrough.js?v=0.36.0';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.36.0';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.36.0';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.36.0';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.36.0';
+import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.36.0';
+import { createPip, pipSupported } from './app/lib/pip.js?v=0.36.0';
+import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, lumaTestLine, SCENE } from './app/lib/scenesearch.js?v=0.36.0';
+import { inspectMovie, judgeOrigin } from './app/lib/origin.js?v=0.36.0';
+import { newQueue, addItems, removeItem, retryItem, nextItem, matchFiles, restoreQueue, uniqueOutName, readyToSave, keepNames as queueKeep, itemLabel, queueStats, summaryLines, findItem, ST } from './app/lib/queue.js?v=0.36.0';
+import { loadQueue, saveQueue } from './app/lib/queuestore.js?v=0.36.0';
+import { mountUI } from './app/ui/ui.js?v=0.36.0';
+import { bus, emit } from './app/ui/bus.js?v=0.36.0';
 import * as MB from './vendor/mediabunny-1.65.1.min.mjs';
 const $ = (id) => document.getElementById(id);
 // cat: setup | segment | pip | heartbeat | warn | error | summary | info (se omessa la deduce l'archivio dal prefisso); data: numeri per il riassunto
-const log = (s, cat, data) => emit('log', { line: String(s), cat, data });
+// Coda (v0.36): durante una voce ogni riga è prefissata con «[n/N nome] » e i dati dei segmenti portano la voce (q).
+let logPrefix = '', logQ = 0;
+const log = (s, cat, data) => emit('log', { line: logPrefix + String(s), cat, data: data && logQ ? { ...data, q: logQ } : data });
 const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.35.5-20261125T125215Z';
-const BUILD_LABEL = 'v0.35.5 · 25/11 13:52';
+const BUILD_ID = '0.36.0-20261125T132507Z';
+const BUILD_LABEL = 'v0.36.0 · 25/11 14:25';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false, sceneQ: true, downscale: false, apac: true, container: 'mov' }, NFtot = 0;
 let parTrialOff = false; // v0.34.1: un intoppo durante le prove (più video attivi) non spegne la parallela della codifica finale
@@ -54,6 +58,11 @@ let file = null, outFile = null, outName = '', info = null, running = false, can
 let job = null, savedJob = null, analysis = null, progFrame = 0, keep = null, hb = null, segsSaved = 0; // segsSaved: segmenti salvati nel tentativo corrente
 let outUrl = null, outUrlT = 0, releasing = Promise.resolve(); // Blob URL del download di ripiego del risultato (onSave), revocato dopo 60 s o al rilascio del risultato
 const bg = { hiddenAt: 0, frameAt: 0, hiddenMs: 0, frames: 0, n: 0 }; // statistiche background del job
+// Coda (v0.36, app/lib/queue.js): Q = manifest (persistito in IndexedDB); i File sorgente e i File risultato (OPFS) vivono solo qui.
+// Q = null → modalità singola, identica a prima. Un solo export alla volta: la coda chiama la stessa exportCurrent() del singolo.
+let Q = null, qRun = null, qCurId = 0, qMsg = null; // qRun: {stop} mentre la coda lavora; qMsg: {text, kind} sopra la lista
+const qFiles = new Map(), qOuts = new Map(), qUrls = new Map(); // id → File sorgente · File risultato (OPFS) · {url, t} download di ripiego
+let outOpfsName = '', outNameHook = null; // nome OPFS del risultato dell'ultima run; hook per nomi unici nella coda
 const MB_ = 1048576;
 // Interruzione da background: durante la fase video l'attesa del seek corrente viene abortita al volo (hidden), poi si riparte dall'ultimo segmento (visible).
 let vidRun = null, bgInt = null; // vidRun: AbortController della run video in corso; bgInt: {at} della richiesta di interruzione
@@ -119,6 +128,7 @@ async function checkSpace(br = cfg.bitrateMbps, audioMode = cfg.audioMode, apac 
   return { ok: true, text: info.dur > 600 ? 'Video lungo: tieni l\'app in primo piano e lo schermo acceso per tutta l\'elaborazione.' : '' };
 }
 async function updateEstimate() {
+  if (Q) return updateQueueEstimate();
   const st = ui ? ui.getSettings() : cfg; const r = await checkSpace(st.bitrateMbps, st.audioMode, st.apac !== false);
   notice(r.text, r.ok ? 'warn' : 'bad'); if (r.text) log(r.text);
 }
@@ -140,10 +150,15 @@ async function inspectFile(f) {
     return r;
   } catch (e) { return { error: e?.message || String(e) }; } finally { try { input.dispose?.(); } catch {} }
 }
+// Job salvato (OPFS) riprendibile per il file f (stessa versione, stesso file), o null.
+async function findSavedJob(f) {
+  const pj = f ? await peekJob() : null;
+  return pj && pj.done > 0 && pj.manifest.app === VER && sameFile(pj.manifest.file, fileKey(f)) ? pj : null;
+}
 // Job salvato (OPFS) per il file scelto → UI «Riprendi export di <nome> (segmenti x/y)».
 async function refreshResume() {
   savedJob = null;
-  if (!file || running) { ui.setResume(null); return; }
+  if (!file || running || Q) { ui.setResume(null); return; }
   const pj = await peekJob();
   if (pj && pj.done > 0 && pj.manifest.app === VER && sameFile(pj.manifest.file, fileKey(file))) {
     savedJob = pj;
@@ -160,9 +175,12 @@ async function refreshResume() {
 async function releaseResult() {
   if (outUrl) { clearTimeout(outUrlT); try { URL.revokeObjectURL(outUrl); } catch {} outUrl = null; }
   const had = !!outFile; outFile = null; outName = '';
-  return had && !running ? cleanOpfs() : 0;
+  return had && !running ? cleanOpfs(opfsKeep()) : 0;
 }
+// Voci OPFS da non cancellare mai nelle pulizie: il job riprendibile e i risultati della coda non ancora salvati (v0.36).
+const opfsKeep = () => ['jobs', ...queueKeep(Q)];
 async function onFile(f) {
+  if (Q) return onQueueAdd(f ? [f] : []); // in modalità coda ogni scelta va in coda
   if (running) return; // la UI blocca la scelta durante l'export: difesa in più (il File del job in corso non va sostituito)
   file = f || null; info = null; analysis = null; savedJob = null; notice('');
   releasing = releaseResult().then((n) => { if (n) log(`risultato precedente rilasciato (${n} file OPFS rimossi)`); }, () => {}); // atteso da start(): la pulizia non tocca il nuovo file in uscita
@@ -177,14 +195,17 @@ async function onFile(f) {
   await refreshResume(); if (f !== file) return;
   await updateEstimate();
 }
-document.addEventListener('change', (e) => { if (e.target?.closest?.('.fcv-step-set') && file) updateEstimate(); });
+document.addEventListener('change', (e) => { if (e.target?.closest?.('.fcv-step-set') && (file || Q)) updateEstimate(); });
 
-// Avvio: pulizia file OPFS di run precedenti (tranne il job riprendibile); avviso se la sessione precedente è stata uccisa (jetsam/background).
+// Avvio: coda salvata (IndexedDB) → risultati ancora in OPFS e voci da riselezionare; pulizia file OPFS di run precedenti
+// (tranne il job riprendibile e i risultati della coda); avviso se la sessione precedente è stata uccisa (jetsam/background).
 (async () => {
   let killed = false; try { if (localStorage.getItem('jobRunning')) { localStorage.removeItem('jobRunning'); killed = true; } } catch {}
-  const n = await cleanOpfs(); if (n) console.log('OPFS: rimossi', n, 'file vecchi');
+  try { await restoreSavedQueue(killed); } catch (e) { log('coda: ripristino fallito (' + (e?.message || e) + ')', 'warn'); }
+  const n = await cleanOpfs(opfsKeep()); if (n) console.log('OPFS: rimossi', n, 'file vecchi');
   const pj = await peekJob();
-  if (pj && pj.done > 0 && pj.manifest.app === VER) {
+  if (Q) { await annotateResume(pj); renderQueue(); }
+  else if (pj && pj.done > 0 && pj.manifest.app === VER) {
     const m = `${killed ? 'La sessione precedente è stata interrotta (app chiusa in background o memoria esaurita). ' : ''}C'è un export interrotto di «${pj.manifest.file.name}» (${pj.done}/${pj.total} segmenti pronti): riseleziona lo stesso video per riprenderlo da dove era rimasto.`;
     if (!file) { notice(m, 'warn'); log(m); }
   } else {
@@ -218,9 +239,9 @@ function friendlyError(e) {
 }
 // Tap su «Continua in Picture-in-Picture»: SINCRONO (nessun await prima di requestPictureInPicture, dentro pip.start()).
 function onPip(wasOn) {
-  if (!running || !file) return;
+  if (!running || !pipFile) return;
   if (wasOn) { pip?.stop().then(() => { pip = null; ui.setPip(false); }); return; }
-  if (!pip) { pip = makePip(); pip.prepare(); } // normalmente già preparato all'avvio dell'export (v0.21.1)
+  if (!pip) { pip = makePip(pipFile); pip.prepare(); } // normalmente già preparato all'avvio dell'export (v0.21.1)
   pip.start().then((ok) => { if (!ok) ui.setProgNote('Picture-in-Picture non disponibile su questo dispositivo/browser: tieni l\'app aperta e lo schermo acceso.', 'warn'); });
 }
 async function cleanupRun() {
@@ -264,79 +285,110 @@ function pipSummary() {
   const min = st.openMs / 60000, fps = st.frames / (st.openMs / 1000);
   log(`PiP: aperta per ${min.toFixed(1)} min, ${st.hiddenN ? `nascosta ${st.hiddenN} volte per ${(st.hiddenMs / 1000).toFixed(1)} s` : 'pagina mai nascosta'}, fps medio in PiP ${fps.toFixed(1)}, interruzioni: ${st.events.length ? st.events.join(', ') : 'nessuna'}`);
 }
-function makePip() {
-  return createPip(file, { log: (t) => log(`[${clock()}] ${t}`), onChange: (a) => { pipOnChange(a); ui.setPip(a); if (!a) try { if (navigator.mediaSession) navigator.mediaSession.metadata = null; } catch {} } });
+let pipFile = null; // File mostrato dalla PiP: quello del singolo export, o il primo della coda (la PiP resta aperta per tutta la coda)
+function makePip(f) {
+  return createPip(f, { log: (t) => log(`[${clock()}] ${t}`), onChange: (a) => { pipOnChange(a); ui.setPip(a); if (!a) try { if (navigator.mediaSession) navigator.mediaSession.metadata = null; } catch {} } });
 }
-async function start(s) {
-  if (running || !file) return;
-  running = true; cancelled = false;
+// ---- Sessione di lavoro (v0.36): un export singolo o una coda intera. Le parti SINCRONE nel tap (PiP, jingle, keep-alive) una volta
+// sola all'inizio; PiP, wake lock e keep-alive restano attivi fino alla fine della sessione (per la coda: fino all'ultimo video).
+function beginSession(s, f) {
+  running = true; cancelled = false; pipFile = f;
   // v0.21.1: prepara SUBITO (nel tap di Comprimi) il video della PiP: iOS non la avvia su un video senza dati o invisibile.
-  try { if (pipSupported() && !(matchMedia('(display-mode: standalone)').matches || navigator.standalone === true)) { if (pip) { pip.stop(); } pip = makePip(); pip.prepare(); } } catch (e) { log('PiP: preparazione fallita ' + (e?.message || e)); }
+  try { if (pipSupported() && !(matchMedia('(display-mode: standalone)').matches || navigator.standalone === true)) { if (pip) { pip.stop(); } pip = makePip(f); pip.prepare(); } } catch (e) { log('PiP: preparazione fallita ' + (e?.message || e)); }
   cfg = { bitrateMbps: +s?.bitrateMbps || 8, keyframeS: +s?.keyframeS || 4, audioMode: s?.audioMode || 'copy', bgAudio: !!s?.bgAudio, par2: !!s?.par2, sceneQ: s?.sceneQ !== false, downscale: !!s?.downscale, apac: s?.apac !== false, container: s?.container === 'mp4' ? 'mp4' : 'mov' };
-  parOff = false; parTrialOff = false; pipStat = { hiddenN: 0, hiddenMs: 0, hAt: 0, events: [], inAt: 0, fIn: 0, frames: 0, openMs: 0, tickAt: 0, tickF: 0 }; startPipWatch();
+  pipStat = { hiddenN: 0, hiddenMs: 0, hAt: 0, events: [], inAt: 0, fIn: 0, frames: 0, openMs: 0, tickAt: 0, tickF: 0 }; startPipWatch();
   // SINCRONO nel tap (gesto utente): l'audio di keep-alive deve partire prima di qualunque await.
   chimeUnlock(); askNotify(); // SINCRONO nel tap: sblocca l'audio del jingle finale (iOS) e, da web app installata, chiede le notifiche
   keep = cfg.bgAudio ? startKeepAlive({ log: (t) => log(`[${clock()}] ${t}`), title: 'Compressione in corso 0%' }) : null;
+  ui.setBusy(true);
+}
+// Stato per file: ogni video (singolo o voce della coda) parte pulito.
+function resetPerFile() {
+  parOff = false; parTrialOff = false;
   Object.assign(bg, { hiddenAt: document.hidden ? Date.now() : 0, frameAt: 0, hiddenMs: 0, frames: 0, n: 0 });
-  curPhase = null; lastFps = NaN; NFtot = 0; progFrame = 0; hbRef = 0; vidRun = null; bgInt = null; ui.setBusy(true); ui.setProgNote('');
+  curPhase = null; lastFps = NaN; NFtot = 0; progFrame = 0; hbRef = 0; vidRun = null; bgInt = null; ui.setProgNote('');
+}
+async function endSession() {
+  if (hb) { clearInterval(hb); hb = null; }
+  try { keep?.stop(); } catch {} keep = null;
+  pipSummary(); if (pipTimer) { clearInterval(pipTimer); pipTimer = null; }
+  if (pip) { const t = pip.elapsedS(); if (pip.active) await new Promise((r) => setTimeout(r, 900)); /* lascia suonare il jingle mentre la PiP tiene viva la pagina (fuori da Safari, chiusa la PiP iOS sospende l'audio) */ try { await pip.stop(); } catch {} if (t > 0) log(`Picture-in-Picture: ${fmtT(t)} in PiP durante il ${Q ? 'lavoro della coda' : 'job'}`); pip = null; ui.setPip(false); }
+  pipFile = null; lastPipPc = -1; running = false; notice('');
+  try { localStorage.removeItem('jobRunning'); } catch {}
+  try { await wake?.release(); } catch {} wake = null;
+}
+// Export del file corrente (globali file/info): lettura, spazio, ripresa dai segmenti, tentativi automatici. Ritorna il
+// risultato di run() o lancia (ReadError / SpaceError: nulla è partito). Usata identica dall'export singolo e dalla coda.
+async function exportCurrent({ beforeRun } = {}) {
+  if (!info) info = await inspectFile(file);
+  if (info.error) throw Object.assign(new Error('Impossibile leggere il video: ' + info.error), { name: 'ReadError' });
+  savedJob = await findSavedJob(file).catch(() => null);
+  const sp = await checkSpace(cfg.bitrateMbps, cfg.audioMode, cfg.apac);
+  if (!sp.ok) throw Object.assign(new Error(sp.text), { name: 'SpaceError' });
+  notice(''); TSTART = performance.now(); try { localStorage.setItem('jobRunning', '1'); } catch {}
+  if (beforeRun) await beforeRun();
+  await acquireWake();
+  if (!Q || !qRun?.said) { log('Tieni l\'app aperta e lo schermo acceso finché finisce: se cambi app o blocchi lo schermo, iOS ferma l\'elaborazione (i segmenti già pronti restano salvati e si riprende da lì).'); if (qRun) qRun.said = true; }
+  if (cfg.bgAudio && !hb) { log(`[${clock()}] TEST BACKGROUND CON AUDIO attivo: battito ogni secondo, riepilogo a fine job.`); startHeartbeat(); }
+  let auto = 0, fresh = false;
+  for (;;) {
+    const bgN = bg.n; segsSaved = 0;
+    try { return await run({ forceFresh: fresh }); }
+    catch (e) {
+      const phase = curPhase, hadJob = !!job; await cleanupRun();
+      if (e?.name === 'Cancelled' || e?.name === 'DownscaleError') throw e; // downscale non riuscito: mai ritentare né ripiegare (v0.31)
+      if (e?.name === 'BackgroundInterrupt') { // non è un guasto: non consuma i tentativi automatici
+        const at = bgInt?.at || Date.now(); bgInt = null;
+        while (document.hidden) await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true }));
+        checkCancel();
+        const pj = await peekJob(), secs = (Date.now() - at) / 1000, n = (pj?.done ?? 0) + 1;
+        const m = `ripreso dopo ${secs.toFixed(1)} s in background dal segmento ${n}${pj?.total ? '/' + pj.total : ''}`;
+        log(`[${clock()}] ▶ ${m}`); ui.setProgNote(m[0].toUpperCase() + m.slice(1) + '. Tieni l\'app aperta e lo schermo acceso finché finisce.', 'warn');
+        await acquireWake(); keep?.nudge(); continue;
+      }
+      if ((e?.name === 'HvccMismatch' || e?.name === 'JobMismatch') && !fresh) {
+        const m = `I segmenti salvati non sono compatibili con questo encoder (${e.message}): ricomincio il video da capo.`;
+        log('⚠️ ' + m); ui.setProgNote(m, 'warn'); fresh = true; continue;
+      }
+      // ripresa automatica solo se il tentativo aveva fatto progressi o c'è stato un passaggio in background (errore non deterministico)
+      if (hadJob && phase === 'video' && auto < 3 && e?.name !== 'QuotaExceededError' && (segsSaved > 0 || bg.n > bgN)) {
+        auto++; const pj = await peekJob();
+        const m = `Elaborazione interrotta (${e?.name || 'errore'}: ${e?.message || e}). Riprendo dal segmento ${(pj?.done ?? 0) + 1}/${pj?.total ?? '?'} (tentativo ${auto}/3).`;
+        log(`[${clock()}] ⚠️ ${m}`); ui.setProgNote(m, 'warn');
+        await whenVisible(); continue;
+      }
+      throw e;
+    }
+  }
+}
+function logFailure(e) {
+  log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || ''), 'error');
+  if (e?.name === 'DownscaleError') log(`downscale: FALLITO, job interrotto senza ripiego (nessun passaggio via canvas/WebGPU: sarebbe 8 bit, HDR perso). Dettaglio tecnico: ${e.detail}`, 'error');
+}
+async function start(s) {
+  if (running) return;
+  if (Q) return startQueue(s);
+  if (!file) return;
+  beginSession(s, file); resetPerFile();
   let failed = false;
   try {
     await releasing;
-    if (!info) info = await inspectFile(file);
-    if (!savedJob) await refreshResume().catch(() => {});
-    const sp = await checkSpace(cfg.bitrateMbps, cfg.audioMode, cfg.apac);
-    if (!sp.ok) { log(sp.text); emit('error', { message: sp.text }); failed = true; return; }
-    notice(''); TSTART = performance.now(); try { localStorage.setItem('jobRunning', '1'); } catch {}
-    if (outFile || outUrl) { await releaseResult(); await cleanOpfs(); } // «Altre impostazioni» dopo un export: il file precedente lascia OPFS
-    await acquireWake();
-    log('Tieni l\'app aperta e lo schermo acceso finché finisce: se cambi app o blocchi lo schermo, iOS ferma l\'elaborazione (i segmenti già pronti restano salvati e si riprende da lì).');
-    if (cfg.bgAudio) { log(`[${clock()}] TEST BACKGROUND CON AUDIO attivo: battito ogni secondo, riepilogo a fine job.`); startHeartbeat(); }
-    let auto = 0, fresh = false;
-    for (;;) {
-      const bgN = bg.n; segsSaved = 0;
-      try { await run({ forceFresh: fresh }); break; }
-      catch (e) {
-        const phase = curPhase, hadJob = !!job; await cleanupRun();
-        if (e?.name === 'Cancelled' || e?.name === 'DownscaleError') throw e; // downscale non riuscito: mai ritentare né ripiegare (v0.31)
-        if (e?.name === 'BackgroundInterrupt') { // non è un guasto: non consuma i tentativi automatici
-          const at = bgInt?.at || Date.now(); bgInt = null;
-          while (document.hidden) await new Promise((r) => document.addEventListener('visibilitychange', r, { once: true }));
-          checkCancel();
-          const pj = await peekJob(), secs = (Date.now() - at) / 1000, n = (pj?.done ?? 0) + 1;
-          const m = `ripreso dopo ${secs.toFixed(1)} s in background dal segmento ${n}${pj?.total ? '/' + pj.total : ''}`;
-          log(`[${clock()}] ▶ ${m}`); ui.setProgNote(m[0].toUpperCase() + m.slice(1) + '. Tieni l\'app aperta e lo schermo acceso finché finisce.', 'warn');
-          await acquireWake(); keep?.nudge(); continue;
-        }
-        if ((e?.name === 'HvccMismatch' || e?.name === 'JobMismatch') && !fresh) {
-          const m = `I segmenti salvati non sono compatibili con questo encoder (${e.message}): ricomincio il video da capo.`;
-          log('⚠️ ' + m); ui.setProgNote(m, 'warn'); fresh = true; continue;
-        }
-        // ripresa automatica solo se il tentativo aveva fatto progressi o c'è stato un passaggio in background (errore non deterministico)
-        if (hadJob && phase === 'video' && auto < 3 && e?.name !== 'QuotaExceededError' && (segsSaved > 0 || bg.n > bgN)) {
-          auto++; const pj = await peekJob();
-          const m = `Elaborazione interrotta (${e?.name || 'errore'}: ${e?.message || e}). Riprendo dal segmento ${(pj?.done ?? 0) + 1}/${pj?.total ?? '?'} (tentativo ${auto}/3).`;
-          log(`[${clock()}] ⚠️ ${m}`); ui.setProgNote(m, 'warn');
-          await whenVisible(); continue;
-        }
-        throw e;
-      }
-    }
+    // «Altre impostazioni» dopo un export: il file precedente lascia OPFS (dopo il controllo dello spazio, come prima)
+    const r = await exportCurrent({ beforeRun: async () => { if (outFile || outUrl) { await releaseResult(); await cleanOpfs(opfsKeep()); } } });
+    emit('phase', { phase: 'fatto' }); emit('result', r);
+    { const n = chimeDone({ savedPct: r.savedPct, fileName: r.fileName }); log(`fine: jingle${n ? ' + notifica' : ' (notifiche disponibili solo dalla web app installata)'}`); }
   } catch (e) {
     failed = true;
-    log('ERRORE: ' + (e?.name || '') + ': ' + (e?.message || e) + '\n' + (e?.stack || ''), 'error');
-    if (e?.name === 'DownscaleError') log(`downscale: FALLITO, job interrotto senza ripiego (nessun passaggio via canvas/WebGPU: sarebbe 8 bit, HDR perso). Dettaglio tecnico: ${e.detail}`, 'error');
-    await cleanupRun();
-    if (e?.name === 'Cancelled') { await discardJob(); analysis = null; log('job annullato: segmenti eliminati'); }
-    else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); chimeFail(friendlyError(e).slice(0, 120)); }
+    if (e?.name === 'ReadError' || e?.name === 'SpaceError') { log(e.message); emit('error', { message: e.message }); }
+    else {
+      logFailure(e);
+      await cleanupRun();
+      if (e?.name === 'Cancelled') { await discardJob(); analysis = null; log('job annullato: segmenti eliminati'); }
+      else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); chimeFail(friendlyError(e).slice(0, 120)); }
+    }
   } finally {
-    if (hb) { clearInterval(hb); hb = null; }
     if (TSTART) bgSummary();
-    try { keep?.stop(); } catch {} keep = null;
-    pipSummary(); if (pipTimer) { clearInterval(pipTimer); pipTimer = null; }
-    if (pip) { const t = pip.elapsedS(); if (pip.active) await new Promise((r) => setTimeout(r, 900)); /* lascia suonare il jingle mentre la PiP tiene viva la pagina (fuori da Safari, chiusa la PiP iOS sospende l'audio) */ try { await pip.stop(); } catch {} if (t > 0) log(`Picture-in-Picture: ${fmtT(t)} in PiP durante il job`); pip = null; ui.setPip(false); }
-    lastPipPc = -1; running = false; notice('');
-    try { localStorage.removeItem('jobRunning'); } catch {}
-    try { await wake?.release(); } catch {} wake = null;
+    await endSession();
     if (!failed) analysis = null;
     TSTART = 0;
     ui.setBusy(false);
@@ -622,6 +674,7 @@ async function runWith(input, { forceFresh = false } = {}) {
   // l'ftyp è quello della sorgente: Foto riconosce le tracce mebx / apac come nell'originale (research/04 «Contenitore MOV»).
   const mov = cfg.container !== 'mp4', ext = mov ? 'mov' : 'mp4', mime = mov ? 'video/quicktime' : 'video/mp4';
   outName = `${base}_${brTag}${dsTag}_k${gopSec}s_${aTag}_${VER}.${ext}`;
+  if (outNameHook) outName = outNameHook(outName); // coda: nomi unici in OPFS (due IMG_0001.MOV da cartelle diverse)
   // Passthrough tracce iPhone (v0.33, app/lib/passthrough.js): audio spaziale 'apac' + TUTTE le mebx (video-orientation,
   // cinematic-audio, detected-face, live-photo-info, scene-illuminance, …), copiate byte per byte in un secondo mdat.
   // apac (e la mebx 'cinematic-audio' che la riferisce, necessaria a «Mix audio» in Foto) SOLO se l'AAC in uscita è la copia
@@ -756,7 +809,7 @@ async function runWith(input, { forceFresh = false } = {}) {
     }
   }
   await store.write(moovPos, moovOut); await store.flush(); await store.close();
-  const f0 = await store.getFile(); store = null;
+  const f0 = await store.getFile(); outOpfsName = store.name; store = null;
   outFile = f0.type === mime && f0.name === outName ? f0 : new File([f0], outName, { type: mime }); // File su disco (OPFS), nessuna copia in RAM; MIME video/quicktime per MOV (share sheet / download)
   setProg('scrittura', 1, 'completato');
   log(`RPU trapiantati: ${rpuUsed}/${nV}${dvBox && rpuUsed !== nV ? ' ⚠️ INCOMPLETO' : ''}. Metadati originali copiati: ${srcMoov ? 'sì' : 'no'}.`);
@@ -775,8 +828,8 @@ async function runWith(input, { forceFresh = false } = {}) {
   log(`bitrate video reale medio ${(segBytes * 8 / durS / 1e6).toFixed(2)} Mbps vs target ${sceneSum ? 'medio per scena ' + (tgt / 1e6).toFixed(2) : bitrate / 1e6} Mbps (${((segBytes * 8 / durS / tgt - 1) * 100).toFixed(1)}%)${job0Br ? `, encoder finale ${(job0Br / 1e6).toFixed(2)} Mbps` : ''}.`);
   log(`file: ${outName}`);
   log(`fatto in ${((performance.now() - T0) / 1000).toFixed(1)} s.`);
-  emit('phase', { phase: 'fatto' }); emit('result', { inMB: file.size / MB_, outMB: outFile.size / MB_, savedPct: pct, fileName: outName, sceneBr: sceneSum ? { min: sceneSum.min / 1e6, max: sceneSum.max / 1e6, mean: sceneSum.mean / 1e6 } : undefined });
-  { const n = chimeDone({ savedPct: pct, fileName: outName }); log(`fine: jingle${n ? ' + notifica' : ' (notifiche disponibili solo dalla web app installata)'}`); }
+  // v0.36: il risultato torna al chiamante (export singolo: schermata «Fatto!» + jingle; coda: voce fatta, jingle solo a fine coda)
+  return { inMB: file.size / MB_, outMB: outFile.size / MB_, savedPct: pct, fileName: outName, sceneBr: sceneSum ? { min: sceneSum.min / 1e6, max: sceneSum.max / 1e6, mean: sceneSum.mean / 1e6 } : undefined };
 }
 
 function onSave() {
@@ -799,8 +852,238 @@ async function saveViaArtifact() {
   catch (e) { ui.setSaveMessage( `Non salvato (${e.code || e.message}).`); }
 }
 
+// =====================================================================================================================
+// CODA (v0.36, app/lib/queue.js): più video, elaborati UNO ALLA VOLTA nell'ordine di aggiunta (FIFO), con la stessa
+// exportCurrent() dell'export singolo. PiP, wake lock e keep-alive per tutta la coda; jingle/notifica a fine coda e sugli errori.
+// Ogni risultato resta in OPFS (radice) finché viene salvato; il manifest della coda è in IndexedDB (queuestore.js) per la ripresa.
+// =====================================================================================================================
+const needsFile = (it) => !qFiles.has(it.id) && (it.status === ST.WAIT || it.status === ST.RUN || it.status === ST.ERR || it.status === ST.CANCEL);
+const compactInfo = (r) => (r.error ? { error: r.error } : { W: r.W, H: r.H, dur: r.dur, hdr: !!r.hdr, dv: !!r.dv, fps: r.fps || 0, aacBps: r.aacBps, apac: !!r.apac, apacBps: r.apacBps || 0, meta: r.meta?.length || 0, exported: r.origin?.verdict === 'esportato' ? r.origin.reasons : null });
+const qlog = (it, s, cat) => emit('log', { line: `${itemLabel(Q, it.id)} ${s}`, cat });
+let qSaveWarned = false;
+function saveQ() { if (!Q) return; saveQueue(Q).then((r) => { if (!r.ok && !qSaveWarned) { qSaveWarned = true; log(`coda: salvataggio in IndexedDB non riuscito (${r.error}): la coda funziona ma non si riprende dopo una ricarica`, 'warn'); } }); }
+function queueView() {
+  if (!Q) return null;
+  return { running: !!qRun, curId: qCurId, msg: qMsg, items: Q.items.map((it) => ({ id: it.id, name: it.key.name, sizeMB: it.key.size / MB_, status: it.status, info: it.info || null,
+    result: it.result || null, error: it.error || '', saved: !!it.saved, hasFile: qFiles.has(it.id), hasOut: qOuts.has(it.id), interrupted: !!it.interrupted, lost: !!it.lost, resume: it.resume || null })) };
+}
+function renderQueue() { if (ui) ui.setQueue(queueView()); }
+const setQMsg = (text, kind = 'warn') => { qMsg = text ? { text, kind } : null; renderQueue(); };
+const predictFor = (inf, c = cfg) => (inf?.dur ? { mb: estimateOutBytes({ durS: inf.dur, videoMbps: c.bitrateMbps, audioMode: c.audioMode, aacBps: inf.aacBps, apacBps: c.apac !== false ? inf.apacBps : 0 }) / MB_,
+  s: estimateTimeS({ durS: inf.dur, fps: inf.fps, audioMode: c.audioMode, par2: c.par2, width: inf.W, height: inf.H, sceneQ: c.sceneQ, downscale: c.downscale })?.s ?? null } : { mb: null, s: null });
+async function opfsRootNames() { const n = new Set(); try { for await (const [k] of (await navigator.storage.getDirectory()).entries()) n.add(k); } catch {} return n; }
+async function opfsOutFile(opfsName, outName) {
+  const f = await (await (await navigator.storage.getDirectory()).getFileHandle(opfsName)).getFile(), mime = /\.mp4$/i.test(outName) ? 'video/mp4' : 'video/quicktime';
+  return f.type === mime && f.name === outName ? f : new File([f], outName, { type: mime });
+}
+// Ripresa dopo una ricarica: risultati ancora in OPFS → salvabili; voci senza File → da riselezionare (nome + peso + data).
+async function restoreSavedQueue(killed) {
+  const saved = await loadQueue(); if (!saved) return;
+  const names = await opfsRootNames();
+  Q = restoreQueue(saved, { resultExists: (it) => !!it.result?.opfsName && names.has(it.result.opfsName) });
+  if (!Q || !Q.items.length) { Q = null; saveQueue(null); return; }
+  for (const it of readyToSave(Q)) { try { qOuts.set(it.id, await opfsOutFile(it.result.opfsName, it.result.outName)); } catch { it.status = ST.WAIT; it.lost = true; delete it.result; } }
+  ui.setQueueMode(true); if (Q.settings) ui.applySettings(Q.settings);
+  const ready = readyToSave(Q).length, miss = Q.items.filter(needsFile).length, intr = Q.items.some((it) => it.interrupted), lost = Q.items.filter((it) => it.lost).length;
+  const m = `${killed ? 'La sessione precedente è stata interrotta (app chiusa in background o memoria esaurita). ' : ''}Coda ripristinata (${Q.items.length} video).${ready ? ` ${ready} ${ready === 1 ? 'video compresso è pronto' : 'video compressi sono pronti'} da salvare.` : ''}${miss ? ` Riseleziona ${miss === 1 ? 'il video da comprimere' : `i ${miss} video da comprimere`} con «Riseleziona i video» (stessi file: si riconoscono da nome, peso e data)${intr ? '; quello interrotto riprende dai segmenti già pronti' : ''}.` : ''}${lost ? ` ${lost} risultati non più presenti sul telefono: quei video vanno ricompressi.` : ''}`;
+  qMsg = { text: m, kind: 'warn' }; log(m, 'warn'); saveQ();
+}
+// Voce interrotta con segmenti in OPFS (jobs/current) → «riprende dal segmento x/y» nella lista.
+async function annotateResume(pj) {
+  if (!Q) return;
+  if (pj === undefined) pj = await peekJob();
+  const ok = pj && pj.done > 0 && pj.manifest.app === VER;
+  for (const it of Q.items) it.resume = ok && it.status === ST.WAIT && sameFile(pj.manifest.file, it.key) ? { done: pj.done, total: pj.total } : null;
+}
+// File scelti/trascinati → coda. In modalità singola il primo passaggio crea la coda (con il video già scelto se includeCurrent).
+async function onQueueAdd(files, { includeCurrent = false } = {}) {
+  files = [...(files || [])].filter(Boolean); if (!files.length) return;
+  if (!Q) {
+    if (running) return; // export singolo in corso: la UI non offre l'aggiunta
+    const curF = includeCurrent && file ? file : null;
+    releasing = releaseResult().then((n) => { if (n) log(`risultato precedente rilasciato (${n} file OPFS rimossi)`); }, () => {});
+    Q = newQueue({ app: VER, settings: ui.getSettings() }); qMsg = null;
+    file = null; info = null; analysis = null; savedJob = null; ui.setResume(null); notice('');
+    if (curF) files = [curF, ...files];
+    ui.setQueueMode(true);
+  }
+  const { matched, rest } = matchFiles(Q, files, needsFile);
+  for (const [it, f] of matched) { qFiles.set(it.id, f); delete it.lost; qlog(it, `riabbinato al file scelto (${(f.size / MB_).toFixed(1)} MB)`); }
+  const { added, dup } = addItems(Q, rest);
+  rest.forEach((f) => { const it = added.find((x) => x.key.name === f.name && x.key.size === f.size && x.key.lastModified === f.lastModified); if (it) qFiles.set(it.id, f); });
+  if (added.length || matched.length) log(`coda: ${added.length ? `+${added.length} video` : ''}${added.length && matched.length ? ', ' : ''}${matched.length ? `${matched.length} riabbinati` : ''}${dup.length - matched.length > 0 ? ` (${dup.length - matched.length} già in coda, ignorati)` : ''} → ${Q.items.length} in coda${qRun ? ' (in fondo, dopo quelli già in coda)' : ''}`);
+  else if (dup.length) setQMsg(`${dup.length === 1 ? 'Questo video è già' : 'Questi video sono già'} in coda.`, 'warn');
+  if (qMsg && Q.items.every((it) => !needsFile(it)) && /Riseleziona/.test(qMsg.text)) qMsg = null;
+  await annotateResume().catch(() => {});
+  saveQ(); renderQueue(); inspectQueue(); updateEstimate();
+}
+// Metadati (durata, risoluzione, HDR/DV, origine) delle voci appena aggiunte: uno alla volta, in sottofondo (anche mentre la coda lavora).
+let inspecting = false;
+async function inspectQueue() {
+  if (inspecting) return; inspecting = true;
+  try {
+    for (;;) {
+      const it = Q?.items.find((x) => !x.info && qFiles.has(x.id) && x.status !== ST.RUN); if (!it) break;
+      const r = await inspectFile(qFiles.get(it.id)); if (!Q || !findItem(Q, it.id)) continue;
+      it.info = compactInfo(r);
+      if (r.error) qlog(it, 'Impossibile leggere il video: ' + r.error, 'warn');
+      else {
+        qlog(it, `${r.W}×${r.H} · ${fmtT(r.dur)} · HDR ${r.hdr ? 'sì' : 'no'} · Dolby Vision ${r.dv ? 'sì' : 'no'} · audio spaziale ${r.apac ? 'sì' : 'no'}${r.fps ? ' · ' + r.fps.toFixed(1) + ' fps' : ''}`, 'setup');
+        if (r.origin) qlog(it, `origine: ${r.origin.verdict}${r.origin.reasons.length ? ' — ' + r.origin.reasons.join('; ') : ''}`, r.origin.verdict === 'esportato' ? 'warn' : 'setup');
+      }
+      saveQ(); renderQueue();
+    }
+  } finally { inspecting = false; }
+  updateEstimate();
+}
+// Spazio per la coda (solo avviso: il controllo vero è prima di ogni voce).
+async function updateQueueEstimate() {
+  const st = ui.getSettings(); let need = 0, n = 0;
+  for (const it of Q.items) if ((it.status === ST.WAIT || it.status === ST.RUN) && it.info?.dur) { need += (predictFor(it.info, st).mb || 0) * MB_ * 1.15; n++; }
+  if (!n || !opfsSupported()) { notice(''); return; }
+  const sp = await opfsSpace();
+  if (sp && need + 32 * MB_ > sp.free) notice(`Spazio: la coda produrrà circa ${fmtMB(need)} e sul telefono restano ${fmtMB(sp.free)} per l'app. Salva nelle Foto i video man mano che sono pronti (si libera spazio), altrimenti la coda si fermerà prima della fine.`, 'warn');
+  else notice('');
+}
+function onQueueRemove(id) {
+  const it = Q && findItem(Q, id); if (!it || it.status === ST.RUN) return;
+  releaseQueueOut(id); removeItem(Q, id); qFiles.delete(id); log(`coda: rimosso ${it.key.name}`);
+  if (!Q.items.length && !qRun) { clearQueueAll(); return; }
+  saveQ(); renderQueue(); updateEstimate();
+}
+function onQueueRetry(id) { if (Q && retryItem(Q, id)) { const it = findItem(Q, id); qlog(it, 'rimesso in coda'); annotateResume().then(() => { saveQ(); renderQueue(); }); } }
+// «Ferma la coda»: la voce in corso si interrompe ma i suoi segmenti restano (riprende da lì al prossimo «Comprimi»).
+function onQueueStop() { if (!qRun) return; qRun.stop = true; cancelled = true; log('coda: fermata richiesta (la voce in corso riprenderà dai segmenti già pronti)'); }
+async function releaseQueueOut(id) {
+  const u = qUrls.get(id); if (u) { clearTimeout(u.t); try { URL.revokeObjectURL(u.url); } catch {} qUrls.delete(id); }
+  const it = Q && findItem(Q, id), had = qOuts.delete(id);
+  if (it?.result?.opfsName && had) { try { await (await navigator.storage.getDirectory()).removeEntry(it.result.opfsName); } catch {} }
+}
+function clearQueueAll() {
+  if (qRun || running) return;
+  for (const id of [...qOuts.keys()]) releaseQueueOut(id);
+  Q = null; qFiles.clear(); qMsg = null; saveQueue(null); notice('');
+  log('coda svuotata: risultati non salvati rilasciati');
+  ui.setQueueMode(false);
+}
+async function markSaved(ids, how) {
+  for (const id of ids) { const it = Q && findItem(Q, id); if (!it) continue; it.saved = true; await releaseQueueOut(id); qlog(it, `${how}: file compresso tolto dalla memoria dell'app`); }
+  saveQ(); renderQueue();
+}
+// Salva una voce (SINCRONO nel tap: share sheet → «Salva video»; ripiego: download, file rilasciato dopo 60 s).
+function onQueueSave(id) {
+  const f = qOuts.get(id), it = Q && findItem(Q, id); if (!f || !it) return;
+  if (navigator.canShare?.({ files: [f] })) {
+    navigator.share({ files: [f] }).then(() => markSaved([id], 'salvato'), (e) => { if (e?.name !== 'AbortError') setQMsg(`Condivisione di ${it.key.name} non riuscita: ${e?.message || e}`, 'bad'); });
+    return;
+  }
+  const old = qUrls.get(id); if (old) { clearTimeout(old.t); URL.revokeObjectURL(old.url); }
+  const url = URL.createObjectURL(f), t = setTimeout(() => { if (qUrls.get(id)?.url === url) markSaved([id], 'scaricato'); }, 60000);
+  qUrls.set(id, { url, t });
+  const a = Object.assign(document.createElement('a'), { href: url, download: f.name }); document.body.appendChild(a); a.click(); a.remove();
+  setQMsg(`Download di ${f.name} avviato: il file compresso viene tolto dall'app fra un minuto.`, 'warn');
+}
+// «Salva tutti nelle Foto»: UNA share sheet con tutti i file pronti (un solo gesto). Se il browser non accetta più file insieme
+// o la condivisione fallisce → messaggio e salvataggio uno per uno con il tasto di ogni voce.
+function onQueueSaveAll() {
+  if (!Q) return;
+  const items = readyToSave(Q).filter((it) => qOuts.has(it.id)); if (!items.length) return;
+  if (items.length === 1) { onQueueSave(items[0].id); return; }
+  const files = items.map((it) => qOuts.get(it.id)), ids = items.map((it) => it.id), tot = files.reduce((a, f) => a + f.size, 0);
+  const fallback = (why) => { const m = `${why}: salva i video uno per uno con «Salva» su ciascuno.`; log('coda: ' + m, 'warn'); setQMsg(m, 'bad'); ui.setQueueShareFallback(true); };
+  if (!navigator.canShare?.({ files })) { fallback(`Il browser non accetta ${files.length} file (${fmtMB(tot)}) in una sola condivisione`); return; }
+  log(`coda: condivisione di ${files.length} file insieme (${fmtMB(tot)})`);
+  navigator.share({ files }).then(() => markSaved(ids, 'salvato (tutti insieme)'), (e) => {
+    if (e?.name === 'AbortError') return;
+    fallback(`Condivisione di ${files.length} file insieme non riuscita (${e?.name || ''} ${e?.message || e})`);
+  });
+}
+// Una voce: stessa exportCurrent() dell'export singolo; errore/annullo non fermano la coda (si passa alla successiva).
+async function runQueueItem(it) {
+  file = qFiles.get(it.id); info = it.info && !it.info.error ? it.info : null; analysis = null; savedJob = null; cancelled = false;
+  qCurId = it.id; it.status = ST.RUN; delete it.error; delete it.lost;
+  const idx = Q.items.indexOf(it) + 1, N = Q.items.length;
+  logQ = idx; logPrefix = itemLabel(Q, it.id) + ' ';
+  resetPerFile();
+  ui.queueItemStart({ id: it.id, idx, n: N, name: file.name, sizeMB: file.size / MB_, ...(it.info?.dur ? { durationS: it.info.dur, width: it.info.W, height: it.info.H, fps: it.info.fps, aacBps: it.info.aacBps, apacBps: it.info.apacBps, apac: it.info.apac, hdr: it.info.hdr, dolbyVision: it.info.dv } : {}) });
+  log(`▶ voce ${idx} di ${N}: ${file.name} — ${(file.size / MB_).toFixed(1)} MB`, 'summary');
+  saveQ(); renderQueue();
+  outNameHook = (n) => uniqueOutName(new Set(Q.items.filter((x) => x !== it && x.result && !x.saved).map((x) => x.result.opfsName)), n);
+  let res = 'ok';
+  try {
+    const r = await exportCurrent();
+    if (!it.info?.dur) it.info = compactInfo(info);
+    const pred = predictFor(it.info), timeS = (performance.now() - TSTART) / 1000;
+    it.status = ST.DONE; delete it.interrupted; delete it.resume;
+    it.result = { outName: r.fileName, opfsName: outOpfsName, inMB: r.inMB, outMB: r.outMB, pct: r.savedPct, timeS, predMB: pred.mb, predS: pred.s, sceneBr: r.sceneBr };
+    qOuts.set(it.id, outFile); outFile = null; outName = '';
+    ui.queueItemDone(it.id, it.result);
+    log(`✓ fatto: ${r.inMB.toFixed(1)} → ${r.outMB.toFixed(1)} MB (−${r.savedPct.toFixed(1)}%) in ${fmtT(timeS)}${pred.mb ? ` · previsto ${pred.mb.toFixed(1)} MB, ${fmtT(pred.s)}` : ''}`, 'summary');
+  } catch (e) {
+    if (e?.name === 'SpaceError') { it.status = ST.WAIT; log(e.message, 'warn'); res = { space: e.message }; }
+    else if (e?.name === 'ReadError') { it.status = ST.ERR; it.error = e.message; log(e.message, 'error'); chimeFail(e.message.slice(0, 120)); }
+    else {
+      await cleanupRun();
+      if (e?.name === 'Cancelled') {
+        if (qRun?.stop) { it.status = ST.WAIT; it.interrupted = true; log('coda fermata: questa voce riprenderà dai segmenti già pronti', 'warn'); }
+        else { it.status = ST.CANCEL; await discardJob(); log('voce annullata: segmenti eliminati, si passa alla successiva'); }
+      } else {
+        logFailure(e);
+        it.status = ST.ERR; it.error = e?.name === 'QuotaExceededError' || e?.name === 'DownscaleError' ? friendlyError(e) : `${e?.name ? e.name + ': ' : ''}${e?.message || e}`;
+        chimeFail(`${it.key.name}: ${it.error}`.slice(0, 120)); res = 'err';
+      }
+    }
+  } finally {
+    if (TSTART) bgSummary();
+    TSTART = 0; analysis = null; savedJob = null; info = null; file = null; outNameHook = null; cancelled = false; qCurId = 0;
+    logPrefix = ''; logQ = 0;
+    await annotateResume().catch(() => {});
+    saveQ(); renderQueue();
+  }
+  return res;
+}
+async function startQueue(s) {
+  const first = nextItem(Q, (id) => qFiles.has(id));
+  if (!first) { setQMsg(Q.items.some(needsFile) ? 'Riseleziona i video da comprimere («Riseleziona i video»).' : 'Nessun video in attesa nella coda.', 'warn'); return; }
+  logPrefix = ''; logQ = 0;
+  beginSession(s, qFiles.get(first.id)); // SINCRONO nel tap: PiP preparata sul primo video, resta aperta per tutta la coda
+  qRun = { stop: false, t0: performance.now(), said: false }; qMsg = null;
+  Q.settings = { ...cfg }; ui.queueStart();
+  const n0 = Q.items.filter((it) => it.status === ST.WAIT && qFiles.has(it.id)).length;
+  log(`CODA: ${n0} video da comprimere uno alla volta, nell'ordine (${cfg.sceneQ ? `per scena ≤ ${cfg.bitrateMbps}` : cfg.bitrateMbps} Mbps, key ${cfg.keyframeS}s, audio ${cfg.audioMode}${cfg.downscale ? ', 1080p' : ''}, ${cfg.container.toUpperCase()})`, 'summary');
+  saveQ(); renderQueue();
+  let stopText = '', fatal = null;
+  try {
+    await releasing;
+    if (outFile || outUrl) await releaseResult();
+    await acquireWake();
+    for (;;) {
+      if (qRun.stop) break;
+      const it = nextItem(Q, (id) => qFiles.has(id)); if (!it) break;
+      const r = await runQueueItem(it);
+      if (r?.space) { stopText = `Coda fermata: ${r.space}${readyToSave(Q).length ? ' Salva nelle Foto i video già pronti (si libera spazio), poi tocca «Comprimi» per continuare.' : ''}`; break; }
+    }
+  } catch (e) { fatal = e; logFailure(e); }
+  finally {
+    const stopped = !!qRun?.stop, st = queueStats(Q), wall = (performance.now() - qRun.t0) / 1000;
+    qRun = null; qCurId = 0; logPrefix = ''; logQ = 0;
+    for (const l of summaryLines(Q)) log(l, 'summary');
+    log(`CODA: tempo totale ${fmtT(wall)}${stopped ? ' (fermata dall\'utente)' : ''}`, 'summary');
+    if (stopText || fatal) { const m = stopText || `Coda interrotta: ${fatal?.message || fatal}`; qMsg = { text: m, kind: 'bad' }; chimeFail(m.slice(0, 120)); }
+    else if (stopped) qMsg = { text: 'Coda fermata. Tocca «Comprimi» per continuare: il video interrotto riprende dai segmenti già pronti.', kind: 'warn' };
+    else if (st.done) { const n = chimeDone({ savedPct: st.pct, fileName: `${st.done} video${st.err ? `, ${st.err} con errore` : ''}` }); log(`fine coda: jingle${n ? ' + notifica' : ''}`); }
+    await endSession();
+    saveQ();
+    const finished = !stopText && !fatal && !stopped && (st.done + st.err + st.cancel) > 0;
+    if (finished) ui.showQueueDone();
+    ui.setBusy(false);
+    renderQueue(); updateEstimate();
+  }
+}
+
 ui = mountUI(document.getElementById('app'), {
-  onFile, onStart: start, onPip, onCancel() { cancelled = true; log('Annullamento richiesto'); }, onSave,
+  onFile, onStart: start, onPip, onCancel() { cancelled = true; log(qRun ? 'Annullamento richiesto per questo video (la coda prosegue)' : 'Annullamento richiesto'); }, onSave,
+  onQueueAdd, onQueueRemove, onQueueRetry, onQueueStop, onQueueSave, onQueueSaveAll, onQueueClear: clearQueueAll,
 }, { version: BUILD_LABEL.startsWith('__') ? VER : BUILD_LABEL });
 ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, apac: true, container: 'mov' });
 // Niente zoom (iOS ignora user-scalable): blocco doppio tocco e pinch.
@@ -833,7 +1116,7 @@ async function checkUpdate() {
     if (!id || id === BUILD_ID) return;
     log(`aggiornamento: nuova versione ${BUILD_ID} -> ${id}`);
     let tried = null; try { tried = sessionStorage.getItem('fcv_reload_for'); } catch { /* storage bloccato */ }
-    if (!running && !file && tried !== id) {   // una sola volta per id: la CDN può servire ancora il vecchio index.html (niente loop)
+    if (!running && !file && !Q && tried !== id) {   // una sola volta per id: la CDN può servire ancora il vecchio index.html (niente loop)
       try { sessionStorage.setItem('fcv_reload_for', id); } catch { /* storage bloccato */ }
       return freshReload();
     }

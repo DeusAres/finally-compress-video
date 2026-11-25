@@ -40,6 +40,11 @@ Valori: `bitrateMbps` ∈ 4,6,8,10,12,14 (8 consigliato) · `keyframeS` ∈ 1,4,
 - `setPip(active)` (v0.21): etichetta del pulsante PiP («Continua» / «Chiudi Picture-in-Picture»). Il pulsante (`pipBox`) compare nel pannello di avanzamento dalla fase `video` in poi solo se `document.pictureInPictureEnabled`; in display-mode standalone mostra solo la nota «apri il sito in Safari» (bug WebKit 303885). Logica PiP in `app/lib/pip.js` (`createPip(file, {log, onChange})`: `<video>` muto separato dal video dei seek, `leavepictureinpicture` → chiusura gestita, la ripresa v0.20 resta invariata).
 - `setProgNote(text, kind)` (v0.18): riquadro nel pannello di avanzamento; testo vuoto = «Tieni l'app aperta e lo schermo acceso finché finisce.»; `kind` `warn`/`bad`. Usato per «pausa di N s / ripreso / interrotto, riprendo dal segmento x».
 
+### Coda di video (v0.36)
+Handler in più: `onQueueAdd(files, {includeCurrent})` (più file scelti/trascinati, «Aggiungi video», «Riseleziona i video»; `includeCurrent` da «Aggiungi altri video» nella scheda del singolo), `onQueueRemove(id)`, `onQueueRetry(id)`, `onQueueStop()` («Ferma la coda»), `onQueueSave(id)` e `onQueueSaveAll()` (SINCRONI nel tap: share sheet), `onQueueClear()` («Svuota coda» / «Nuova coda», con conferma se ci sono risultati non salvati). `onCancel()` in modalità coda = «Annulla questo video».
+Metodi: `setQueueMode(bool)` (root `data-queue`; la sezione `.fcv-queue` sostituisce la scheda del file), `setQueue(view)` con `view = {running, curId, msg:{text,kind}|null, items:[{id, name, sizeMB, status:'attesa'|'corso'|'fatto'|'errore'|'annullata', info:{dur,W,H,hdr,dv,fps,aacBps,apacBps,exported}|null, result:{outMB,pct,timeS,predMB,predS,…}|null, error, saved, hasFile, hasOut, interrupted, lost, resume:{done,total}|null}]}`, `queueStart()`, `queueItemStart({id, idx, n, name, sizeMB, durationS, width, height, fps, …})` (pannello di avanzamento azzerato, log conservato), `queueItemDone(id, result)` (impara la velocità), `showQueueDone()` (stage `done` → sezione `.fcv-qdone` «Coda finita!» con tabella e «Salva tutti nelle Foto»), `setQueueShareFallback(bool)` (un tasto per file), `applySettings(s)`.
+Previsioni per voce e totale calcolate nella UI con `estimate.js` e le impostazioni correnti. In `busy`/`done` la lista sta sotto il pannello (CSS `order`). Il drop accetta più file (per nome base il più grande); durante la coda il drop aggiunge in fondo.
+
 ## Eventi del bus (`bus.js`)
 
 `export const bus = new EventTarget()`, `emit(type, detail)`; estensioni: `on(type, fn(detail)) → off`, `EVENTS`, `PHASES`. Ogni evento è un `CustomEvent` con i dati in `e.detail`.
@@ -62,7 +67,7 @@ Rimosso dall'app dalla v0.17 (modulo e anteprima rimossi; nessun `#fun-slot`). I
 
 ## Drag & drop, zoom, previsione
 
-- Rilascio file su tutta la pagina (window: dragenter/over/leave/drop) con overlay pixel art; solo il primo video, altri tipi → messaggio; ignorato durante l'export.
+- Rilascio file su tutta la pagina (window: dragenter/over/leave/drop) con overlay pixel art; un video = flusso singolo, più video = coda (v0.36), altri tipi → messaggio; ignorato durante l'export singolo, accettato durante la coda (in fondo).
 - Zoom disattivato: viewport `maximum-scale=1,user-scalable=no`, `touch-action: manipulation`, guard su `dblclick`/`gesturestart`/doppio `touchend`.
 - Al via la UI memorizza il peso stimato; il risultato mostra «Previsto ≈ X MB · Reale Y MB · scarto ±Z %» (nota se >15 %) e lo scrive nel log.
 

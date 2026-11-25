@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
-// mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset }
-import { bus } from './bus.js?v=0.35.5';
-import { sprite, SPRITES } from './sprite.js?v=0.35.5';
-import { createLogStore } from './logstore.js?v=0.35.5';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.5';
+// mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
+import { bus } from './bus.js?v=0.36.0';
+import { sprite, SPRITES } from './sprite.js?v=0.36.0';
+import { createLogStore } from './logstore.js?v=0.36.0';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.36.0';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -81,14 +81,15 @@ function template(opts) {
   <li data-step="3"><span class="n">3</span><span class="t">Comprimi</span></li>
 </ol>
 
-<div class="fcv-drop" data-ref="drop" hidden aria-hidden="true">${s('film', { scale: 8, className: 'px-bob' })}<b class="px-title">Rilascia qui il video</b><span>Solo il primo file video</span></div>
+<div class="fcv-drop" data-ref="drop" hidden aria-hidden="true">${s('film', { scale: 8, className: 'px-bob' })}<b class="px-title">Rilascia qui i video</b><span>Più video = una coda, compressi uno alla volta</span></div>
 
 <section class="px-panel fcv-card fcv-step-file" aria-labelledby="fcv-h1">
   <header><span class="num">1</span><h2 class="px-title" id="fcv-h1">Scegli il video</h2></header>
   <label class="fcv-pick" data-ref="pick">
-    <input type="file" accept="video/*,.mov,.mp4" data-ref="input" aria-label="Scegli un video">
+    <input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input" aria-label="Scegli uno o più video">
     ${s('film', { scale: 7, className: 'px-bob' })}
     <span class="fcv-pick-cta">Tocca per scegliere</span>
+    <small>Uno o più video: con più video si crea una coda, compressi uno dopo l'altro.</small>
     <small>Da «Scegli file» (app File) il video arriva intatto; da «Libreria foto» iOS può consegnare una copia ricodificata. Nessun caricamento: il video non lascia l'iPhone.</small>
   </label>
   <p class="fcv-drop-msg" data-ref="dropMsg" role="status" aria-live="polite" hidden></p>
@@ -100,8 +101,21 @@ function template(opts) {
       <div class="fcv-stat"><span class="px-label">Formato</span><span class="v px-digits" data-ref="fRes">—</span></div>
     </div>
     <p class="fcv-warn fcv-orig" data-ref="origNote" role="status" hidden></p>
-    <div class="fcv-file-actions"><label class="px-btn fcv-relabel" data-ref="change">Cambia video<input type="file" accept="video/*,.mov,.mp4" data-ref="input2" aria-label="Cambia video"></label></div>
+    <div class="fcv-file-actions"><label class="px-btn fcv-relabel">Aggiungi altri video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAddSingle" aria-label="Aggiungi altri video (coda)"></label><label class="px-btn fcv-relabel" data-ref="change">Cambia video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input2" aria-label="Cambia video"></label></div>
   </div>
+</section>
+
+<section class="px-panel fcv-card fcv-queue" data-ref="queue" hidden aria-labelledby="fcv-hq">
+  <header><span class="num">1</span><h2 class="px-title" id="fcv-hq">Coda di video</h2><span class="px-chip px-chip--num fcv-q-count" data-ref="qCount">0</span></header>
+  <p class="fcv-q-msg" data-ref="qMsg" role="status" aria-live="polite" hidden></p>
+  <p class="fcv-q-tot" data-ref="qTot" aria-live="polite"></p>
+  <ol class="fcv-q-list" data-ref="qList" aria-label="Video in coda"></ol>
+  <div class="fcv-q-actions">
+    <label class="px-btn px-btn--primary fcv-relabel" data-ref="qRelinkBox" hidden><span data-ref="qRelinkTxt">Riseleziona i video</span><input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qRelink" aria-label="Riseleziona i video della coda"></label>
+    <label class="px-btn fcv-relabel">Aggiungi video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAdd" aria-label="Aggiungi video alla coda"></label>
+    <button class="px-btn" type="button" data-ref="qClear">Svuota coda</button>
+  </div>
+  <p class="fcv-subtle">I video si comprimono uno alla volta, nell'ordine in cui li hai aggiunti; quelli aggiunti mentre lavora vanno in fondo. Le impostazioni valgono per tutta la coda.</p>
 </section>
 
 <section class="px-panel fcv-card fcv-step-set" aria-labelledby="fcv-h2">
@@ -167,6 +181,7 @@ function template(opts) {
 </section>
 
 <section class="px-panel fcv-prog" data-ref="prog" hidden aria-labelledby="fcv-hp">
+  <p class="fcv-q-now" data-ref="qNow" hidden></p>
   <div class="fcv-summary" data-ref="summary"></div>
   <div class="fcv-prog-top">
     <div class="fcv-phase"><span data-ref="phIcon">${s('analisi', { scale: 4 })}</span><div><b id="fcv-hp" data-ref="phName">Analisi</b><span data-ref="phSub"></span></div></div>
@@ -186,7 +201,8 @@ function template(opts) {
     <button class="px-btn px-btn--block" data-ref="pipBtn" type="button">Continua in Picture-in-Picture</button>
     <p class="fcv-pip-note" data-ref="pipNote">Puoi usare altre app: la compressione continua finché la finestrella resta aperta.</p>
   </div>
-  <button class="px-btn px-btn--danger fcv-cancel" data-ref="cancel">Annulla</button>
+  <div class="fcv-cancels"><button class="px-btn px-btn--danger fcv-cancel" data-ref="cancel">Annulla</button><button class="px-btn fcv-cancel" data-ref="qStop" type="button" hidden>Ferma la coda</button></div>
+  <p class="fcv-subtle fcv-q-stopnote" data-ref="qStopNote" hidden>«Annulla questo video» lo salta e la coda prosegue; «Ferma la coda» si ferma qui e il video in corso riprenderà dai segmenti già pronti.</p>
   <p class="px-sr" aria-live="polite" data-ref="live"></p>
 </section>
 
@@ -213,7 +229,25 @@ function template(opts) {
   <p class="fcv-outname" data-ref="outName"></p>
   <div class="fcv-done-more">
     <button class="px-btn" data-ref="again">Altre impostazioni</button>
-    <label class="px-btn fcv-relabel">Nuovo video<input type="file" accept="video/*,.mov,.mp4" data-ref="input3" aria-label="Scegli un nuovo video"></label>
+    <label class="px-btn fcv-relabel">Nuovo video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input3" aria-label="Scegli un nuovo video"></label>
+  </div>
+</section>
+
+<section class="px-panel fcv-done fcv-qdone" data-ref="qdone" hidden aria-labelledby="fcv-hqd">
+  <div class="fcv-confetti" data-ref="qConfetti" aria-hidden="true"></div>
+  <div class="fcv-done-title">${s('star', { scale: 4 })}<h2 class="px-title" id="fcv-hqd" data-ref="qdTitle">Coda finita!</h2>${s('star', { scale: 4 })}</div>
+  <div>
+    <div class="fcv-big px-digits" data-ref="qdBig">−0%</div>
+    <div class="fcv-big-sub" data-ref="qdSub"></div>
+  </div>
+  <table class="fcv-tbl fcv-qd-tbl"><caption class="fcv-subtle" data-ref="qdCap"></caption><thead><tr><th scope="col">Video</th><th scope="col">Dopo <small>MB</small></th><th scope="col">%</th><th scope="col">Tempo</th></tr></thead><tbody data-ref="qdBody"></tbody><tfoot data-ref="qdFoot"></tfoot></table>
+  <p class="fcv-pred-note" data-ref="qdNote" hidden></p>
+  <button class="px-btn px-btn--ok px-btn--xl px-btn--block" data-ref="qSaveAll">${s('scrittura', { scale: 3 })}<span data-ref="qSaveAllTxt">Salva tutti nelle Foto</span></button>
+  <p class="fcv-save-msg" data-ref="qdMsg" aria-live="polite"></p>
+  <div class="fcv-qd-files" data-ref="qdFiles" hidden></div>
+  <div class="fcv-done-more">
+    <button class="px-btn" type="button" data-ref="qNew">Nuova coda</button>
+    <label class="px-btn fcv-relabel">Aggiungi video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAdd2" aria-label="Aggiungi video alla coda"></label>
   </div>
 </section>
 
@@ -264,7 +298,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
     st.stage = stage;
     root.dataset.stage = stage;
     R.prog.hidden = stage !== 'busy';
-    R.done.hidden = stage !== 'done';
+    R.done.hidden = stage !== 'done' || st.qMode;
+    R.qdone.hidden = stage !== 'done' || !st.qMode;
     R.err.hidden = stage !== 'error';
     const steps = { pick: ['now', '', ''], ready: ['done', 'now', ''], busy: ['done', 'done', 'now'], done: ['done', 'done', 'done'], error: ['done', 'done', 'now'] }[stage];
     root.querySelectorAll('.fcv-steps li').forEach((li, i) => {
@@ -272,32 +307,55 @@ export function mountUI(root, handlers = {}, opts = {}) {
       li.querySelector('.n').innerHTML = steps[i] === 'done' ? sprite(SPRITES.check, { scale: 2 }) : String(i + 1);
       li.toggleAttribute('aria-current', steps[i] === 'now');
     });
-    R.go.disabled = !st.file || st.busy;
-    R.goNote.textContent = st.file ? 'Tieni Safari aperto e lo schermo acceso: la compressione avviene sul telefono.' : 'Scegli prima un video.';
+    syncGo();
+  }
+  // Pulsante «Comprimi»: singolo video o coda («Comprimi N video»: voci in attesa con il loro file).
+  function syncGo() {
+    if (!st.qMode) {
+      R.go.disabled = !st.file || st.busy;
+      R.go.firstChild.textContent = 'Comprimi ';
+      R.goNote.textContent = st.file ? 'Tieni Safari aperto e lo schermo acceso: la compressione avviene sul telefono.' : 'Scegli prima un video.';
+      return;
+    }
+    const items = st.queue?.items || [], n = items.filter((it) => it.status === 'attesa' && it.hasFile).length, miss = items.filter(needsFile).length;
+    R.go.disabled = st.busy || !n;
+    R.go.firstChild.textContent = n ? `Comprimi ${n} ${n === 1 ? 'video' : 'video'} ` : 'Comprimi ';
+    R.goNote.textContent = n ? `Uno alla volta, nell'ordine della coda. Tieni Safari aperto e lo schermo acceso.${miss ? ` ${miss} video da riselezionare: verranno saltati finché non li riselezioni.` : ''}`
+      : miss ? 'Riseleziona i video della coda (passo 1) per continuare.' : 'Nessun video in attesa: aggiungine alla coda.';
   }
   function setBusy(b) {
     st.busy = !!b; if (!b) st.pipOn = false; updatePip();
     root.dataset.busy = String(st.busy);
     root.querySelectorAll('.fcv-step-set input, [data-ref^="input"]').forEach((i) => { i.disabled = st.busy; });
-    R.go.disabled = !st.file || st.busy;
+    syncGo();
     if (st.busy) {
       R.resume.hidden = true;
       if (st.stage !== 'busy') startProgress();
     } else if (st.stage === 'busy') {
-      // finito senza 'result' né 'error' → annullato
-      setStage(st.file ? 'ready' : 'pick');
+      // finito senza 'result' né 'error' → annullato (coda: fermata o interrotta → torna alla lista)
+      setStage(st.file || st.qMode ? 'ready' : 'pick');
       R.resume.hidden = !st.resume;
       if (st.cancelling) R.goNote.textContent = 'Compressione annullata.';
     }
     st.cancelling = false;
-    R.cancel.disabled = false; R.cancel.textContent = 'Annulla';
+    resetCancel();
+  }
+  function resetCancel() {
+    R.cancel.disabled = false; R.cancel.textContent = st.qMode ? 'Annulla questo video' : 'Annulla';
+    R.qStop.hidden = R.qStopNote.hidden = !st.qMode; R.qStop.disabled = false; R.qStop.textContent = 'Ferma la coda';
   }
 
   // ---------- passo 1: file ----------
   function onPicked(e) {
-    const f = e.target.files?.[0]; e.target.value = '';
-    if (!f) return;
-    acceptFile(f);
+    const files = [...(e.target.files || [])]; e.target.value = '';
+    if (!files.length) return;
+    takeFiles(files.filter(isVideo).length ? files.filter(isVideo) : files);
+  }
+  // Uno o più video scelti/trascinati: un video in modalità singola = come prima; più video (o coda già aperta) = coda.
+  function takeFiles(files, { add = false, includeCurrent = false } = {}) {
+    R.dropMsg.hidden = true;
+    if (add || st.qMode || files.length > 1) { handlers.onQueueAdd?.(files, { includeCurrent }); return; }
+    acceptFile(files[0]);
   }
   function acceptFile(f) {
     R.dropMsg.hidden = true; setResume(null);
@@ -332,26 +390,31 @@ export function mountUI(root, handlers = {}, opts = {}) {
   let dragDepth = 0;
   const dropOn = (on) => { R.drop.hidden = !on; root.classList.toggle('fcv-dragging', on); };
   const dropMessage = (t) => { R.dropMsg.textContent = t; R.dropMsg.hidden = false; };
-  const onDragEnter = (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (st.busy) return; dragDepth++; dropOn(true); };
-  const onDragOver = (e) => { if (!hasFiles(e)) return; e.preventDefault(); try { e.dataTransfer.dropEffect = st.busy ? 'none' : 'copy'; } catch {} };
+  const canDrop = () => !st.busy || st.qMode; // durante la coda si possono aggiungere video (vanno in fondo)
+  const onDragEnter = (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (!canDrop()) return; dragDepth++; dropOn(true); };
+  const onDragOver = (e) => { if (!hasFiles(e)) return; e.preventDefault(); try { e.dataTransfer.dropEffect = canDrop() ? 'copy' : 'none'; } catch {} };
   const onDragLeave = (e) => { if (!hasFiles(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) dropOn(false); };
   const onDrop = (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault(); dragDepth = 0; dropOn(false);
-    if (st.busy) { dropMessage('Compressione in corso: attendi la fine prima di cambiare video.'); return; }
+    if (!canDrop()) { dropMessage('Compressione in corso: attendi la fine prima di cambiare video.'); return; }
     const files = [...(e.dataTransfer.files || [])];
     if (!files.length) for (const it of e.dataTransfer.items || []) { const f = it.kind === 'file' ? it.getAsFile() : null; if (f) files.push(f); }
     // Lo stesso elemento può arrivare in più rappresentazioni (WebKit carica il tipo più fedele e il primo tipo «contenuto»):
-    // fra i video con lo stesso nome base del primo si prende il più grande (più probabilmente l'originale).
-    const vids = files.filter(isVideo), stem = (f) => (f.name || '').replace(/\.[^.]*$/, '').toLowerCase();
-    const v = vids.filter((f) => stem(f) === stem(vids[0] || {})).sort((a, b) => b.size - a.size)[0];
-    if (!v) { dropMessage(files.length ? 'Questo non è un video: trascina un file video (MOV, MP4).' : 'Nessun file ricevuto: prova col pulsante «Tocca per scegliere».'); return; }
-    acceptFile(v);
-    if (files.length > 1) dropMessage('Rilasciati più file: uso solo il primo video.');
+    // per ogni nome base si prende il video più grande (più probabilmente l'originale). Più video diversi → coda.
+    const vids = files.filter(isVideo), stem = (f) => (f.name || '').replace(/\.[^.]*$/, '').toLowerCase(), best = new Map();
+    for (const f of vids) { const k = stem(f), o = best.get(k); if (!o || f.size > o.size) best.set(k, f); }
+    const list = [...best.values()];
+    if (!list.length) { dropMessage(files.length ? 'Questo non è un video: trascina un file video (MOV, MP4).' : 'Nessun file ricevuto: prova col pulsante «Tocca per scegliere».'); return; }
+    takeFiles(list);
+    if (files.length > vids.length) dropMessage(`Ignorati ${files.length - vids.length} file che non sono video.`);
   };
   const dndTargets = [['dragenter', onDragEnter], ['dragover', onDragOver], ['dragleave', onDragLeave], ['drop', onDrop]];
   for (const [t, h] of dndTargets) window.addEventListener(t, h);
   for (const k of ['input', 'input2', 'input3']) R[k].addEventListener('change', onPicked);
+  const pickedTo = (o) => (e) => { const files = [...(e.target.files || [])]; e.target.value = ''; if (files.length) takeFiles(files, o); };
+  for (const k of ['qAdd', 'qAdd2', 'qRelink']) R[k].addEventListener('change', pickedTo({ add: true }));
+  R.qAddSingle.addEventListener('change', pickedTo({ add: true, includeCurrent: true }));
 
   // ---------- passo 2: impostazioni ----------
   // «Riduci a 1080p»: visibile/attivo solo se il lato corto della sorgente supera 1080 (default OFF)
@@ -384,12 +447,14 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.brHint.textContent = st.settings.sceneQ ? `Qualità per scena attiva: ${br} Mbps è il limite massimo, ogni tratto riceve il minimo che resta «quasi perfetto».` : info.t;
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
+    if (st.qMode && st.queue) renderQueue();
     R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ' · 2 player' : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
     updateEstimate();
   }
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js
   const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: st.settings.par2, width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: st.settings.downscale }) : null; };
   function updateEstimate() {
+    if (st.qMode) { updateQueueEstimate(); return; }
     const d = st.file?.durationS, src = st.file?.sizeMB;
     R.warn.hidden = true; R.estSrc.hidden = true;
     if (!d) { R.est.innerHTML = R.estT.innerHTML = st.file ? '…' : '—'; return; }
@@ -408,9 +473,124 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   root.querySelector('.fcv-step-set').addEventListener('change', syncSettings);
 
+  // ---------- coda (v0.36) ----------
+  // Previsione di una voce con le impostazioni correnti (stesse formule del singolo: estimate.js).
+  const itemFile = (it) => (it?.info?.dur ? { durationS: it.info.dur, width: it.info.W, height: it.info.H, fps: it.info.fps, aacBps: it.info.aacBps, apacBps: it.info.apacBps, sizeMB: it.sizeMB } : null);
+  function predictItem(it) {
+    const f = itemFile(it); if (!f) return null; const s = st.settings;
+    const mb = estimateOutBytes({ durS: f.durationS, videoMbps: s.bitrateMbps, audioMode: s.audioMode, aacBps: f.aacBps, apacBps: s.apac ? f.apacBps : 0 }) / 1048576;
+    const t = estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: s.audioMode, par2: s.par2, width: f.width, height: f.height, sceneQ: s.sceneQ, downscale: s.downscale && Math.min(f.width, f.height) > 1080 });
+    return { mb, s: t?.s ?? null, pct: f.sizeMB ? (1 - mb / f.sizeMB) * 100 : null };
+  }
+  const needsFile = (it) => !it.hasFile && ['attesa', 'corso', 'errore', 'annullata'].includes(it.status);
+  const isPending = (it) => it.status === 'attesa' || it.status === 'corso';
+  function queueTotals() {
+    const items = st.queue?.items || [], pend = items.filter(isPending);
+    let inMB = 0, mb = 0, t = 0, unknown = 0;
+    for (const it of pend) { const p = predictItem(it); inMB += it.sizeMB; if (p) { mb += p.mb; t += p.s || 0; } else unknown++; }
+    return { n: items.length, pend: pend.length, inMB, mb, t, unknown };
+  }
+  function updateQueueEstimate() {
+    R.warn.hidden = true;
+    const T = queueTotals(), vary = st.settings.sceneQ;
+    if (!T.pend) { R.est.innerHTML = R.estT.innerHTML = '—'; R.estSrc.textContent = 'Nessun video in attesa.'; R.estSrc.hidden = false; return; }
+    if (T.unknown === T.pend) { R.est.innerHTML = R.estT.innerHTML = '…'; R.estSrc.hidden = true; return; }
+    const pct = T.inMB ? (1 - T.mb / T.inMB) * 100 : null;
+    R.est.innerHTML = `<small class="vary">${T.pend} video${vary ? ', al massimo' : ''}${T.unknown ? ` (${T.pend - T.unknown} letti)` : ''}</small><span class="v">${vary ? '≤' : '≈'} ${fmtMB(T.mb)} <small>MB</small></span>` + (pct != null && !T.unknown ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
+    R.estT.innerHTML = `<small class="vary">in totale${vary ? ', variabile' : ''}</small><span class="v">≈ ${fmtTime(T.t)} <small>m:ss</small></span>`;
+    R.estSrc.textContent = `Previsione per tutta la coda (${T.pend} video in attesa), uno dopo l'altro. Le stime per video sono nella lista.`; R.estSrc.hidden = false;
+  }
+  const chip = (t, c = '') => `<span class="px-chip${c ? ' ' + c : ''}">${t}</span>`;
+  function itemHTML(it, i) {
+    const inf = it.info, p = isPending(it) ? predictItem(it) : null, r = it.result, nf = needsFile(it), vary = st.settings.sceneQ;
+    const chips = [];
+    if (inf?.hdr) chips.push(chip('HDR', 'px-chip--hdr'));
+    if (inf?.dv) chips.push(chip('DV', 'px-chip--dv'));
+    if (inf?.W) chips.push(chip(esc(resLabel(inf.W, inf.H)), 'px-chip--num'));
+    if (inf?.dur) chips.push(chip(fmtTime(inf.dur), 'px-chip--num'));
+    chips.push(chip(`${fmtMB(it.sizeMB)} MB`, 'px-chip--num'));
+    let stTxt = '', act = '';
+    if (nf) stTxt = `<b class="fcv-q-badge" data-k="warn">Da riselezionare</b>${it.status === 'attesa' && (it.interrupted || it.resume) ? ' riprende dai segmenti già pronti' : ''}`;
+    else if (it.status === 'attesa') stTxt = `<b class="fcv-q-badge">In attesa</b>${it.resume ? ` riprende dal segmento ${it.resume.done + 1}/${it.resume.total}` : it.interrupted ? ' interrotto: riprende dai segmenti già pronti' : ''}${it.lost ? ' risultato perso: da ricomprimere' : ''}`;
+    else if (it.status === 'corso') stTxt = `<b class="fcv-q-badge" data-k="run">In corso</b> <span class="fcv-q-pct px-digits">${Math.max(0, st.lastPct)} %</span>`;
+    else if (it.status === 'fatto' && r) stTxt = `<b class="fcv-q-badge" data-k="ok">Fatto</b> <span class="fcv-q-res">${r.pct >= 0 ? '−' : '+'}${nf0.format(Math.abs(r.pct))} % · ${fmtMB(r.outMB)} MB · ${fmtTime(r.timeS)}</span>${it.saved ? ' <span class="fcv-q-saved">✓ salvato</span>' : ''}`;
+    else if (it.status === 'errore') stTxt = `<b class="fcv-q-badge" data-k="bad">Errore</b> <span class="fcv-q-err">${esc(it.error || '')}</span>`;
+    else if (it.status === 'annullata') stTxt = '<b class="fcv-q-badge" data-k="off">Annullata</b>';
+    if (it.status === 'fatto' && it.hasOut && !it.saved) act += `<button class="px-btn px-btn--ok" type="button" data-act="save" data-id="${it.id}">Salva nelle Foto</button>`;
+    if ((it.status === 'errore' || it.status === 'annullata')) act += `<button class="px-btn" type="button" data-act="retry" data-id="${it.id}">Riprova</button>`;
+    const est = p ? `<p class="fcv-q-est">→ ${vary ? '≤' : '≈'} ${fmtMB(p.mb)} MB${p.pct != null ? ` (${p.pct > 0 ? '−' : '+'}${nf0.format(Math.abs(p.pct))} %)` : ''} · ≈ ${fmtTime(p.s)}</p>` : isPending(it) && !inf && it.hasFile ? '<p class="fcv-q-est">lettura…</p>' : '';
+    const orig = inf?.exported ? `<p class="fcv-q-orig">Copia ricodificata da Foto, non l'originale (${esc(inf.exported[0] || '')}). Per l'originale: Foto › Condividi › Opzioni › «Attuale» › Salva in File, poi «Scegli file».</p>` : '';
+    const bad = inf?.error && isPending(it) ? `<p class="fcv-q-orig">Non leggibile: ${esc(inf.error)}</p>` : '';
+    return `<li class="fcv-q-item" data-qid="${it.id}" data-st="${it.status}"${nf ? ' data-nf' : ''}>
+      <div class="fcv-q-head"><span class="fcv-q-n">${i + 1}</span><b class="fcv-q-name">${esc(it.name)}</b>${it.status !== 'corso' ? `<button class="px-btn fcv-q-x" type="button" data-act="rm" data-id="${it.id}" aria-label="Rimuovi ${esc(it.name)} dalla coda">Rimuovi</button>` : ''}</div>
+      <div class="fcv-chips">${chips.join('')}</div>${est}
+      <p class="fcv-q-st">${stTxt}</p>${it.status === 'corso' ? `<div class="px-bar fcv-q-bar" style="--p:${Math.max(0, st.lastPct) / 100}"><i></i></div>` : ''}${orig}${bad}${act ? `<div class="fcv-q-btns">${act}</div>` : ''}
+    </li>`;
+  }
+  function renderQueue() {
+    const q = st.queue; if (!q) return;
+    const items = q.items, T = queueTotals(), S = items.filter((it) => it.status === 'fatto' && it.result);
+    R.qCount.textContent = `${items.length}`;
+    R.qList.innerHTML = items.map(itemHTML).join('');
+    R.qMsg.hidden = !q.msg; if (q.msg) { R.qMsg.textContent = q.msg.text; R.qMsg.dataset.kind = q.msg.kind || ''; }
+    const doneIn = S.reduce((a, it) => a + it.result.inMB, 0), doneOut = S.reduce((a, it) => a + it.result.outMB, 0);
+    R.qTot.innerHTML = `<b>${items.length} video</b>` + (T.pend ? ` · in attesa ${T.pend}: ${fmtMB(T.inMB)} → ${st.settings.sceneQ ? '≤' : '≈'} ${T.unknown === T.pend ? '…' : fmtMB(T.mb)} MB · ≈ ${fmtTime(T.t)}` : '') + (S.length ? ` · fatti ${S.length}: ${fmtMB(doneIn)} → ${fmtMB(doneOut)} MB` : '');
+    const miss = items.filter(needsFile).length;
+    R.qRelinkBox.hidden = !miss; R.qRelinkTxt.textContent = `Riseleziona i video (${miss})`;
+    R.qClear.hidden = !!q.running;
+    if (st.qCur) { // video aggiunti o rimossi durante il lavoro: «Video n di N» aggiornato
+      const i = items.findIndex((x) => x.id === st.qCur.id);
+      if (i >= 0) { st.qCur.idx = i + 1; st.qCur.n = items.length; R.qNow.innerHTML = `Video <b>${st.qCur.idx}</b> di <b>${st.qCur.n}</b>`; const c = R.summary.querySelector('[data-qchip]'); if (c) c.textContent = `${st.qCur.idx}/${st.qCur.n}`; }
+    }
+    // nuovo lavoro dopo la fine della coda (Riprova, video aggiunti o riselezionati) → di nuovo «Comprimi N video»
+    if (st.stage === 'done' && !st.busy && items.some((it) => it.status === 'attesa' && it.hasFile)) setStage('ready');
+    if (st.stage === 'done') renderQueueDone();
+    syncGo(); if (!st.busy) updateQueueEstimate();
+  }
+  R.qList.addEventListener('click', (e) => { // SINCRONO nel tap: «Salva» apre la share sheet
+    const b = e.target.closest('button[data-act]'); if (!b) return;
+    const id = +b.dataset.id, it = st.queue?.items.find((x) => x.id === id), act = b.dataset.act;
+    if (act === 'save') handlers.onQueueSave?.(id);
+    else if (act === 'retry') handlers.onQueueRetry?.(id);
+    else if (act === 'rm') {
+      if (it?.status === 'fatto' && it.hasOut && !it.saved && !confirm(`Il video compresso «${it.name}» non è ancora salvato nelle Foto. Toglierlo dalla coda e perderlo?`)) return;
+      handlers.onQueueRemove?.(id);
+    }
+  });
+  R.qdFiles.addEventListener('click', (e) => { const b = e.target.closest('button[data-act="save"]'); if (b) handlers.onQueueSave?.(+b.dataset.id); });
+  const unsaved = () => (st.queue?.items || []).filter((it) => it.status === 'fatto' && it.hasOut && !it.saved).length;
+  const clearAsk = () => { const n = unsaved(); if (n && !confirm(`${n === 1 ? 'Un video compresso non è ancora salvato' : `${n} video compressi non sono ancora salvati`} nelle Foto: svuotare la coda e perderli?`)) return; handlers.onQueueClear?.(); };
+  R.qClear.addEventListener('click', clearAsk);
+  R.qNew.addEventListener('click', clearAsk);
+  R.qStop.addEventListener('click', () => { R.qStop.disabled = true; R.qStop.textContent = 'Mi fermo…'; R.cancel.disabled = true; handlers.onQueueStop?.(); });
+  R.qSaveAll.addEventListener('click', () => handlers.onQueueSaveAll?.()); // sincrono: share sheet con tutti i file
+  function renderQueueDone() {
+    const items = st.queue?.items || [], S = items.filter((it) => it.status === 'fatto' && it.result);
+    const inMB = S.reduce((a, it) => a + it.result.inMB, 0), outMB = S.reduce((a, it) => a + it.result.outMB, 0), tS = S.reduce((a, it) => a + (it.result.timeS || 0), 0);
+    const pMB = S.reduce((a, it) => a + (it.result.predMB || 0), 0), pS = S.reduce((a, it) => a + (it.result.predS || 0), 0);
+    const err = items.filter((it) => it.status === 'errore').length, pct = inMB ? (1 - outMB / inMB) * 100 : 0;
+    R.qdTitle.textContent = err ? (S.length ? 'Coda finita, ma…' : 'Coda finita con errori') : 'Coda finita!';
+    R.qdBig.textContent = S.length ? `${pct >= 0 ? '−' : '+'}${nf0.format(Math.abs(pct))}%` : '—'; R.qdBig.classList.toggle('neg', pct < 0);
+    R.qdSub.textContent = S.length ? `${S.length} video · ${fmtMB(inMB)} → ${fmtMB(outMB)} MB${err ? ` · ${err} con errore` : ''}` : `${err} video con errore`;
+    R.qdBody.innerHTML = items.map((it) => {
+      const r = it.result, nm = `<th scope="row"><span class="fcv-qd-name">${esc(it.name)}</span>`;
+      if (it.status === 'fatto' && r) return `<tr>${nm}<small>da ${fmtMB(r.inMB)} MB</small></th><td>${fmtMB(r.outMB)}${r.predMB ? `<small>≈${fmtMB(r.predMB)}</small>` : ''}</td><td class="${r.pct >= 0 ? 'ok' : 'bad'}">${r.pct >= 0 ? '−' : '+'}${nf0.format(Math.abs(r.pct))}</td><td>${fmtTime(r.timeS)}${r.predS ? `<small>≈${fmtTime(r.predS)}</small>` : ''}</td></tr>`;
+      return `<tr>${nm}</th><td colspan="3" class="fcv-qd-st">${esc({ errore: 'errore', annullata: 'annullata', attesa: 'non fatta', corso: 'interrotta' }[it.status] || it.status)}</td></tr>`;
+    }).join('');
+    R.qdFoot.innerHTML = S.length > 1 ? `<tr><th scope="row">Totale<small>da ${fmtMB(inMB)} MB</small></th><td>${fmtMB(outMB)}${pMB ? `<small>≈${fmtMB(pMB)}</small>` : ''}</td><td class="${pct >= 0 ? 'ok' : 'bad'}">${pct >= 0 ? '−' : '+'}${nf0.format(Math.abs(pct))}</td><td>${fmtTime(tS)}${pS ? `<small>≈${fmtTime(pS)}</small>` : ''}</td></tr>` : '';
+    R.qdCap.textContent = S.length ? 'Reale e, sotto, previsto (≈)' : '';
+    const toSave = items.filter((it) => it.status === 'fatto' && it.hasOut && !it.saved);
+    R.qSaveAll.disabled = !toSave.length;
+    R.qSaveAllTxt.textContent = toSave.length ? (toSave.length === 1 ? 'Salva nelle Foto' : `Salva tutti nelle Foto (${toSave.length})`) : S.length ? 'Tutti salvati ✓' : 'Niente da salvare';
+    R.qdFiles.hidden = !(st.qShareFb && toSave.length);
+    R.qdFiles.innerHTML = toSave.map((it) => `<button class="px-btn px-btn--ok px-btn--block" type="button" data-act="save" data-id="${it.id}">Salva ${esc(it.name)}</button>`).join('');
+    R.qdNote.hidden = !(S.length && pMB && Math.abs(outMB / pMB - 1) > 0.15);
+    R.qdNote.textContent = 'Peso reale oltre il 15 % dalla previsione: la stima usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.';
+  }
+
   // ---------- passo 3: via ----------
   R.go.addEventListener('click', () => {
-    if (!st.file || st.busy) return;
+    if ((!st.file && !st.qMode) || st.busy) return;
     st.settings = readSettings();
     startProgress();
     handlers.onStart?.({ ...st.settings });
@@ -439,10 +619,12 @@ export function mountUI(root, handlers = {}, opts = {}) {
   });
 
   // ---------- avanzamento ----------
-  function startProgress() {
+  function startProgress({ keepLog = false } = {}) {
     st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = st.settings.par2; st.sceneUsed = st.settings.sceneQ; st.dsUsed = st.settings.downscale; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
-    clearLog();
+    if (!keepLog) clearLog();
     const s = st.settings;
+    R.qNow.hidden = !st.qCur;
+    if (st.qCur) R.qNow.innerHTML = `Video <b>${st.qCur.idx}</b> di <b>${st.qCur.n}</b>`;
     R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span>${s.downscale ? '<span class="px-chip px-chip--num">1080p</span>' : ''}<span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
     R.elapsed.textContent = '0:00';
@@ -451,7 +633,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     setPhase('analisi');
     setStage('busy');
     root.dataset.busy = 'true';
-    R.prog.scrollIntoView?.({ block: 'start' });
+    if (!keepLog || st.qCur?.idx === st.qFirstIdx) R.prog.scrollIntoView?.({ block: 'start' });
   }
   // PiP (v0.21): visibile dalla fase video in poi, solo se supportata; in PWA standalone solo una nota (bug WebKit 303885).
   const standalone = () => { try { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; } catch { return false; } };
@@ -502,6 +684,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       st.lastPct = pct;
       R.pct.innerHTML = `${pct}<small>%</small>`;
       R.bar.setAttribute('aria-valuenow', String(pct));
+      if (st.qCur) { const li = R.qList.querySelector(`[data-qid="${st.qCur.id}"]`); if (li) { const t = li.querySelector('.fcv-q-pct'), b = li.querySelector('.fcv-q-bar'); if (t) t.textContent = `${pct} %`; if (b) b.style.setProperty('--p', String(pct / 100)); } }
     }
   }
   let pendingProg = null;
@@ -557,10 +740,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
         devT = devOf(st.predT, realT);
         R.pT1.textContent = fmtTime(st.predT); R.pT2.textContent = fmtTime(realT); setDev(R.pT3, devT);
         tl = ` | tempo previsto ${fmtTime(st.predT)} · reale ${fmtTime(realT)} · scarto ${devT > 0 ? '+' : '−'}${nf1.format(Math.abs(devT))} %`;
-        // misura reale: frame totali / secondi della fase video (estrazione + codifica) → prossima previsione
-        const vs = (st.vtEnd || st.vt1) - st.vt0;
-        // con le prove per scena la fase video non misura la velocità di codifica: niente salvataggio
-        if (st.vFrames > 0 && vs > 1 && !st.sceneUsed) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height, downscale: st.dsUsed }, st.vFrames / vs, realT);
+        learnSpeed(realT);
       } else { R.pT1.textContent = R.pT2.textContent = R.pT3.textContent = '—'; R.pT3.className = ''; }
       R.pred.hidden = false;
       if (st.sceneUsed) { R.predNote.textContent = 'Qualità per scena: la previsione del peso è il massimo (bitrate scelto come limite); ogni tratto ha ricevuto solo il bitrate che gli serviva.'; R.predNote.hidden = false; }
@@ -574,13 +754,19 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (saved > 0 && !matchMedia('(prefers-reduced-motion: reduce)').matches) confetti();
     R.done.scrollIntoView?.({ block: 'start' });
   }
-  function confetti() {
+  // misura reale: frame totali / secondi della fase video (estrazione + codifica) → prossima previsione (anche per ogni voce della coda)
+  function learnSpeed(realT) {
+    const vs = (st.vtEnd || st.vt1) - st.vt0;
+    // con le prove per scena la fase video non misura la velocità di codifica: niente salvataggio
+    if (st.vFrames > 0 && vs > 1 && !st.sceneUsed) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height, downscale: st.dsUsed }, st.vFrames / vs, realT);
+  }
+  function confetti(el = R.confetti) {
     const cols = ['--px-yellow', '--px-lime', '--px-sky', '--px-orange', '--px-red', '--px-cyan'];
-    R.confetti.innerHTML = Array.from({ length: 22 }, (_, i) => {
+    el.innerHTML = Array.from({ length: 22 }, (_, i) => {
       const x = (i * 37) % 100, dx = ((i * 53) % 80) - 40, delay = (i % 7) * 70;
       return `<i style="left:${x}%;--dx:${dx}px;background:var(${cols[i % cols.length]});animation-delay:${delay}ms"></i>`;
     }).join('');
-    setTimeout(() => { R.confetti.innerHTML = ''; }, 2400);
+    setTimeout(() => { el.innerHTML = ''; }, 2400);
   }
   R.save.addEventListener('click', () => handlers.onSave?.()); // sincrono: la share sheet richiede il gesto dell'utente
 
@@ -637,6 +823,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   function headerText() {
     const f = st.file || {}, s = st.settings, bits = [];
+    if (st.qMode) { let set = ''; try { set = JSON.stringify(readSettings()); } catch {} return [`Compressore HDR ${opts.version || ''}`.trim(), `UA: ${navigator.userAgent}`, `Coda: ${(st.queue?.items || []).map((it) => `${it.name} (${fmtMB(it.sizeMB)} MB, ${it.status})`).join(' · ')}`, `Impostazioni: ${set}`].join('\n'); }
     if (f.width) bits.push(`${f.width}×${f.height}`);
     if (f.durationS) bits.push(`${Math.round(f.durationS)} s`);
     if (f.fps) bits.push(`${Math.round(f.fps)} fps`);
@@ -656,7 +843,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (navigator.clipboard?.writeText) navigator.clipboard.writeText(t).then(() => { R.logSel.hidden = true; setSaveCopyMsg(`Copiato! (riassunto, ${t.split('\n').length} righe)`); }, fallback); else fallback();
   }
   function saveLogFile() { // sincrono nel tap: la share sheet richiede il gesto dell'utente
-    const base = (st.file?.name || 'video').replace(/\.[^.]+$/, '').replace(/[^\w.\-]+/g, '_');
+    const base = (st.qMode ? 'coda' : st.file?.name || 'video').replace(/\.[^.]+$/, '').replace(/[^\w.\-]+/g, '_');
     const name = `${base}_log_${(opts.version || '').match(/v\d[\w.]*/)?.[0] || 'v'}.txt`;
     const file = new File([headerText() + '\n\n' + store.fullText() + '\n'], name, { type: 'text/plain' });
     const dl = () => { const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(file), download: name }); document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 30000); };
@@ -686,7 +873,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   writeSettings(DEFAULTS);
   setStage('pick');
-  root.dataset.busy = 'false';
+  root.dataset.busy = 'false'; root.dataset.queue = 'false';
 
   return {
     setBusy,
@@ -707,8 +894,34 @@ export function mountUI(root, handlers = {}, opts = {}) {
     getLog: () => store.fullText(),
     /** Riassunto compatto (intestazione + setup + warn/error + segmenti aggregati + PiP al minuto + summary). */
     getLogSummary: () => store.summaryText(headerText()),
+    /** Coda (v0.36): true = la lista della coda sostituisce la scheda del singolo video; false = torna al passo 1 vuoto. */
+    setQueueMode(on) {
+      st.qMode = !!on; root.dataset.queue = String(st.qMode); st.qShareFb = false;
+      if (st.qMode) { st.file = null; setResume(null); R.pick.hidden = true; R.fileBox.hidden = true; R.queue.hidden = false; if (st.stage === 'pick' || st.stage === 'done' || st.stage === 'error') setStage('ready'); }
+      else { st.queue = null; st.qCur = null; R.queue.hidden = true; R.pick.hidden = false; R.fileBox.hidden = true; R.qNow.hidden = true; if (!st.busy) setStage('pick'); }
+      resetCancel(); syncSettings();
+    },
+    /** Vista della coda dall'app: {running, curId, msg:{text,kind}|null, items:[{id,name,sizeMB,status,info,result,error,saved,hasFile,hasOut,interrupted,lost,resume}]}. */
+    setQueue(v) { st.queue = v || null; if (v) renderQueue(); },
+    /** Inizio della coda (dopo setBusy(true)): log già azzerato, nessuna voce corrente. */
+    queueStart() { st.qCur = null; st.qFirstIdx = null; st.qShareFb = false; resetCancel(); },
+    /** Inizio di una voce: {id, idx, n, name, sizeMB, durationS?, width?, height?, fps?, …} → pannello di avanzamento azzerato (il log resta). */
+    queueItemStart(m) {
+      if (st.qFirstIdx == null) st.qFirstIdx = m.idx;
+      st.qCur = m; st.file = { ...m }; st.cancelling = false; resetCancel();
+      st.settings = readSettings(); startProgress({ keepLog: true });
+      R.summary.insertAdjacentHTML('afterbegin', `<span class="px-chip px-chip--num" data-qchip>${m.idx}/${m.n}</span>`);
+    },
+    /** Voce finita: impara la velocità per le previsioni successive. */
+    queueItemDone(id, r) { if (pendingProg) { const x = pendingProg; pendingProg = null; applyProgress(x); } learnSpeed(r?.timeS || st.lastElapsed); st.qCur = null; },
+    /** Fine coda: schermata «Coda finita!» con tabella e «Salva tutti nelle Foto». */
+    showQueueDone() { st.qCur = null; setStage('done'); renderQueueDone(); R.qdone.removeAttribute('data-pop'); void R.qdone.offsetWidth; R.qdone.setAttribute('data-pop', ''); if (!matchMedia('(prefers-reduced-motion: reduce)').matches && /^−/.test(R.qdBig.textContent)) confetti(R.qConfetti); R.qdone.scrollIntoView?.({ block: 'start' }); },
+    /** «Salva tutti» non riuscito: un tasto per file nella schermata finale. */
+    setQueueShareFallback(on) { st.qShareFb = !!on; renderQueue(); if (st.stage === 'done') renderQueueDone(); R.qdMsg.textContent = on ? 'Salvataggio insieme non riuscito: salva un video alla volta con i tasti qui sotto.' : ''; },
+    /** Applica impostazioni (es. quelle salvate con la coda). */
+    applySettings(s = {}) { writeSettings({ ...readSettings(), ...s }); },
     /** Torna al passo 1 (nessun file). */
-    reset() { st.file = null; setResume(null); R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
+    reset() { st.file = null; setResume(null); st.qMode = false; st.queue = null; root.dataset.queue = 'false'; R.queue.hidden = true; R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
     destroy() { for (const [t, h] of dndTargets) window.removeEventListener(t, h); listeners.forEach(([t, h]) => bus.removeEventListener(t, h)); root.innerHTML = ''; },
   };
 }

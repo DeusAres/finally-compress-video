@@ -285,3 +285,75 @@ details.fcv-log > summary .count { margin-left: auto; }
 .fcv-open-safari[hidden] { display: none; }
 .fcv-est-tbl .vary { display: block; }
 .fcv-est-tbl .v { white-space: nowrap; }
+
+/* ---------- Coda di video (v0.36) ---------- */
+/* In modalità coda la lista sostituisce la scheda del singolo video; durante il lavoro e a fine coda sta sotto il pannello. */
+.fcv[data-queue="true"] .fcv-step-file { display: none; }
+.fcv:not([data-queue="true"]) .fcv-queue { display: none; }
+.fcv[data-queue="true"] > .fcv-log, .fcv[data-queue="true"] > .fcv-foot { order: 3; }
+.fcv[data-queue="true"][data-stage="busy"] > .fcv-queue, .fcv[data-queue="true"][data-stage="done"] > .fcv-queue, .fcv[data-queue="true"][data-stage="error"] > .fcv-queue { order: 2; }
+.fcv[data-queue="true"] > .fcv-qdone, .fcv[data-queue="true"] > .fcv-err { order: 1; }
+.fcv-queue > header .fcv-q-count { margin-left: auto; }
+.fcv-q-msg { margin: var(--px-border); padding: var(--sp-3); font: 400 var(--fs-sm)/var(--lh-text) var(--font-body); background: var(--surface-2); box-shadow: var(--px-ring); }
+.fcv-q-msg[data-kind="warn"] { background: var(--warn); color: var(--px-ink); }
+.fcv-q-msg[data-kind="bad"] { background: var(--danger); color: var(--danger-text); }
+.fcv-q-tot { font: 400 var(--fs-log)/1.25 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.fcv-q-tot b { font: 700 var(--fs-sm)/1.2 var(--font-body); color: var(--text); }
+.fcv-q-list { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; counter-reset: none; }
+.fcv-q-item { display: grid; gap: var(--sp-2); min-width: 0; margin: var(--px-border); padding: var(--sp-3); background: var(--surface-2); box-shadow: var(--px-ring); }
+.fcv-q-item[data-st="corso"] { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.fcv-q-item[data-st="fatto"] { background: color-mix(in srgb, var(--ok) 14%, var(--surface)); }
+.fcv-q-item[data-st="errore"] { background: color-mix(in srgb, var(--danger) 14%, var(--surface)); }
+.fcv-q-item[data-st="annullata"], .fcv-q-item[data-nf] { opacity: .85; }
+.fcv-q-head { display: flex; align-items: flex-start; gap: var(--sp-2); min-width: 0; }
+.fcv-q-n { display: grid; place-items: center; flex: none; width: 24px; height: 24px; background: var(--text); color: var(--surface); font: 400 var(--fs-xs)/1 var(--font-pixel); }
+.fcv-q-name { flex: 1; min-width: 0; font: 700 var(--fs-md)/1.3 var(--font-body); word-break: break-all; }
+.fcv-q-x { flex: none; min-height: 32px; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-xs); }
+.fcv-q-item .fcv-chips { margin-top: 0; }
+.fcv-q-est { font: 400 var(--fs-log)/1.2 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.fcv-q-st { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-1) var(--sp-2); font-size: var(--fs-sm); line-height: 1.35; min-width: 0; }
+.fcv-q-badge { flex: none; padding: 2px var(--sp-2); background: var(--surface); color: var(--text); font: 700 var(--fs-xs)/1.3 var(--font-body); text-transform: uppercase; letter-spacing: .03em; box-shadow: var(--px-ring); }
+.fcv-q-badge[data-k="run"] { background: var(--accent); color: var(--accent-text); }
+.fcv-q-badge[data-k="ok"] { background: var(--ok); color: var(--ok-text); }
+.fcv-q-badge[data-k="bad"] { background: var(--danger); color: var(--danger-text); }
+.fcv-q-badge[data-k="warn"] { background: var(--warn); color: var(--px-ink); }
+.fcv-q-badge[data-k="off"] { background: var(--muted); color: var(--surface); }
+.fcv-q-res, .fcv-q-pct { font: 400 var(--fs-log)/1.1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.fcv-q-err { overflow-wrap: anywhere; min-width: 0; }
+.fcv-q-saved { color: var(--ok-strong); font-weight: 700; }
+.fcv-q-bar { height: 12px; margin: var(--px-border); }
+.fcv-q-orig { margin: var(--px-border); padding: var(--sp-2); font-size: var(--fs-xs); line-height: 1.35; background: var(--warn); color: var(--px-ink); box-shadow: var(--px-ring); }
+.fcv-q-btns { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.fcv-q-btns .px-btn { flex: 1 1 auto; justify-content: center; }
+.fcv-q-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.fcv-q-actions .px-btn { flex: 1 1 auto; justify-content: center; text-align: center; }
+.fcv-q-now { font: 700 var(--fs-md)/1.2 var(--font-body); color: var(--muted); }
+.fcv-q-now b { color: var(--text); }
+.fcv-cancels { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sp-2); }
+.fcv-cancels .fcv-cancel { min-width: 0; flex: 1 1 40%; justify-content: center; }
+.fcv-file-actions { flex-wrap: wrap; gap: var(--sp-2); }
+.fcv-pick small + small { margin-top: calc(-1 * var(--sp-2)); }
+/* fine coda: tabella file / dopo / % / tempo senza overflow anche a 320 px */
+.fcv-qd-tbl th[scope="row"] { width: auto; text-align: left; white-space: normal; }
+.fcv-qd-tbl thead th:first-child { text-align: left; }
+.fcv-qd-tbl thead th:nth-child(2) { width: 25%; }
+.fcv-qd-tbl thead th:nth-child(3) { width: 16%; }
+.fcv-qd-tbl thead th:nth-child(4) { width: 22%; }
+.fcv-qd-tbl td, .fcv-qd-tbl th { padding-inline: var(--sp-2); vertical-align: top; }
+.fcv-qd-name { display: block; font: 600 var(--fs-sm)/1.25 var(--font-body); overflow-wrap: anywhere; word-break: break-all; }
+.fcv-qd-tbl small { display: block; white-space: nowrap; color: var(--muted); }
+.fcv-qd-tbl th small { white-space: normal; }
+.fcv-qd-tbl caption { padding: 0 0 var(--sp-2); text-align: left; }
+.fcv-tbl td.bad { color: var(--danger-strong); }
+.fcv-qd-tbl td.fcv-qd-st { text-align: left; font: 600 var(--fs-sm)/1.25 var(--font-body); color: var(--danger-strong); white-space: normal; }
+.fcv-qd-tbl tfoot th, .fcv-qd-tbl tfoot td { border-top: 4px solid var(--line); }
+.fcv-qd-files { display: grid; gap: var(--sp-2); }
+.fcv-qdone[data-pop] .fcv-big { animation: px-pop 360ms steps(3) both; }
+@media (max-width: 374px) {
+  .fcv-qd-tbl td, .fcv-qd-tbl th { padding-inline: 2px; font-size: var(--fs-mono); }
+  .fcv-qd-tbl th[scope="row"] { padding-left: var(--sp-2); }
+  .fcv-qd-tbl thead th { font-size: var(--fs-xs); text-transform: none; letter-spacing: 0; }
+  .fcv-qd-tbl thead th:nth-child(2) { width: 27%; }
+  .fcv-qd-tbl thead th:nth-child(4) { width: 24%; }
+  .fcv-q-tot { font-size: var(--fs-mono); }
+}
