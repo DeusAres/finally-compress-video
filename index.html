@@ -31,6 +31,7 @@ import { startKeepAlive } from './app/lib/keepalive.js?v=0.35.4';
 import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.35.4';
 import { createPip, pipSupported } from './app/lib/pip.js?v=0.35.4';
 import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, lumaTestLine, SCENE } from './app/lib/scenesearch.js?v=0.35.4';
+import { inspectMovie, judgeOrigin } from './app/lib/origin.js?v=0.35.4';
 import { mountUI } from './app/ui/ui.js?v=0.35.4';
 import { bus, emit } from './app/ui/bus.js?v=0.35.4';
 import * as MB from './vendor/mediabunny-1.65.1.min.mjs';
@@ -128,6 +129,8 @@ async function inspectFile(f) {
     const r = { W: await vt.getDisplayWidth(), H: await vt.getDisplayHeight(), dur: await input.computeDuration(), hdr: false, dv: false, fps: 0 };
     try { const cs = await vt.getColorSpace(); r.hdr = cs?.transfer === 'hlg' || cs?.transfer === 'pq'; } catch {}
     try { const rf = async (o, l) => new Uint8Array(await f.slice(o, o + l).arrayBuffer()); const loc = await locateMoov(rf, f.size); const mv = loc ? await rf(loc.offset, loc.size) : null; r.dv = !!(mv && extractDoviConfigBox(mv));
+      // v0.35.5: originale della fotocamera o copia ricodificata da Foto («versione compatibile» di Libreria foto / trascinamento)?
+      try { if (mv) { r.origin = judgeOrigin(inspectMovie(mv, await rf(0, 64)), f.name); } } catch { r.origin = null; }
       // tracce iPhone copiabili byte per byte (app/lib/passthrough.js, v0.33): audio spaziale 'apac' + metadati temporizzati 'mebx'
       try { const pt = mv && readPassthrough(mv), t = pt?.apac; r.apac = !!t; r.apacBps = t ? Math.round(t.totalBytes * 8 / Math.max(0.1, t.mdhd.duration / t.mdhd.timescale)) : 0;
         r.meta = pt ? pt.meta.map((m) => m.label) : []; r.ptErr = pt ? pt.errors : []; } catch (e) { r.apac = false; r.apacBps = 0; r.meta = []; r.ptErr = [{ message: e?.message || String(e) }]; } } catch {}
@@ -168,8 +171,9 @@ async function onFile(f) {
   const r = await inspectFile(f); if (f !== file) return; info = r;
   if (r.error) { log('Impossibile leggere il video: ' + r.error); notice('Impossibile leggere il video: ' + r.error, 'bad'); return; }
   log(`${r.W}×${r.H} · ${fmtT(r.dur)} · HDR ${r.hdr ? 'sì' : 'no'} · Dolby Vision ${r.dv ? 'sì' : 'no'} · audio spaziale ${r.apac ? `sì (apac, ${(r.apacBps / 1000).toFixed(0)} kbps)` : 'no'} · metadati iPhone ${r.meta?.length ? `${r.meta.length} (${r.meta.join(', ')})` : 'no'}${r.fps ? ' · ' + r.fps.toFixed(1) + ' fps' : ''}`, 'setup');
+  if (r.origin) log(`origine: ${r.origin.verdict}${r.origin.reasons.length ? ' — ' + r.origin.reasons.join('; ') : ''}${r.origin.notes.length ? ' · ' + r.origin.notes.join('; ') : ''}`, r.origin.verdict === 'esportato' ? 'warn' : 'setup');
   for (const e of r.ptErr || []) log(`tracce iPhone: traccia ${e.trackId ?? '?'} (${e.entry ?? '?'}) non leggibile — ${e.message} → non verrà copiata`, 'warn');
-  emit('file', { name: f.name, sizeMB: f.size / MB_, durationS: r.dur, width: r.W, height: r.H, hdr: r.hdr, dolbyVision: r.dv, fps: r.fps, aacBps: r.aacBps, apac: !!r.apac, apacBps: r.apacBps || 0, meta: r.meta?.length || 0 });
+  emit('file', { name: f.name, sizeMB: f.size / MB_, durationS: r.dur, width: r.W, height: r.H, hdr: r.hdr, dolbyVision: r.dv, fps: r.fps, aacBps: r.aacBps, apac: !!r.apac, apacBps: r.apacBps || 0, meta: r.meta?.length || 0, exported: r.origin?.verdict === 'esportato' ? r.origin.reasons : null });
   await refreshResume(); if (f !== file) return;
   await updateEstimate();
 }

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Import originale</title>
+<style>
+/* Layout: colonna unica da laboratorio, card impilate (stile di tools/diag/downscale10.html) */
+:root{--bg:#f6f7f9;--fg:#15191f;--mut:#5b6573;--card:#fff;--line:#dde2e8;--acc:#1d5fd1;--ok:#137a3a;--ko:#b3261e;--warn:#9a6700;--mono:ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif;margin:0 auto;padding:20px max(16px,env(safe-area-inset-right)) 40px max(16px,env(safe-area-inset-left));max-width:820px}
+h1{font-size:1.35rem;margin:0 0 4px;text-wrap:balance}h2{font-size:1rem;margin:0}
+p,li{color:var(--mut)}p{margin:0 0 12px}ol,ul{margin:0;padding-left:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;display:grid;gap:10px;min-width:0}
+button{font:inherit;background:var(--acc);color:var(--bg);border:0;border-radius:8px;padding:10px 14px;cursor:pointer;justify-self:start}
+button:focus-visible{outline:3px solid var(--fg)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+label{color:var(--fg)}select,input[type=file]{font:inherit;max-width:100%}
+.inputs{display:grid;gap:8px}.inputs label{display:grid;gap:2px;border:1px solid var(--line);border-radius:8px;padding:8px}
+.inputs code{font:12px var(--mono);color:var(--mut)}
+pre{font:12px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:340px;margin:0;white-space:pre-wrap;word-break:break-word}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;font:12px var(--mono);min-width:100%}
+th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+.ok{color:var(--ok)}.ko{color:var(--ko)}.warn{color:var(--warn)}
+#drop{border:2px dashed var(--acc);border-radius:10px;padding:28px 14px;text-align:center;color:var(--acc);font-weight:600}
+#drop.on{background:color-mix(in srgb,var(--acc) 14%,transparent)}
+</style>
+</head>
+<body>
+<h1>Import: originale o copia ricodificata? <small style="font-size:.55em;opacity:.75">v1 · 25/11</small></h1>
+<p>Prova da dove arriva l'<b>originale</b> del video dell'iPhone. Per ogni file ricevuto: nome, tipo, peso e un'analisi dei box MOV/MP4 (codec, bit, Dolby Vision, HLG, audio spaziale apac, tracce metadati mebx, chiavi com.apple.quicktime.*) con il giudizio «originale» / «esportato». Procedura: scegli lo <b>stesso video</b> (meglio 4K con audio spaziale) in più modi — indica ogni volta come l'hai scelto nel menu qui sotto — poi <b>Copia risultati</b> e incolla in chat. Dettagli: docs/research/17-import-originale.md.</p>
+
+<div class="card">
+  <h2>1 · Come stai scegliendo il prossimo file?</h2>
+  <select id="how">
+    <option value="libreria">Libreria foto (senza toccare Opzioni)</option>
+    <option value="libreria-attuale">Libreria foto › Opzioni › Formato «Attuale»</option>
+    <option value="libreria-compatibile">Libreria foto › Opzioni › «Più compatibile»</option>
+    <option value="file">Scegli file (app File) — salvato da Foto con «Attuale»</option>
+    <option value="file-auto">Scegli file (app File) — salvato da Foto senza Opzioni</option>
+    <option value="drag-foto">Trascinamento da Foto</option>
+    <option value="drag-file">Trascinamento da File</option>
+    <option value="altro">Altro (scrivilo in chat)</option>
+  </select>
+</div>
+
+<div class="card">
+  <h2>2 · Selettori con accept diversi</h2>
+  <p style="margin:0">Il menu di Safari offre «Libreria foto», «Scatta/registra», «Scegli file». Con accept senza tipi immagine/video (ultimo) Safari dovrebbe aprire direttamente File.</p>
+  <div class="inputs" id="inputs"></div>
+</div>
+
+<div class="card">
+  <h2>3 · Trascinamento</h2>
+  <div id="drop">Trascina qui un video (da Foto o da File)</div>
+  <pre id="dlog">In attesa.</pre>
+</div>
+
+<div class="card"><h2>Riepilogo</h2><div class="tw" id="sum">Nessun file.</div>
+<p style="margin:0">Giudizio «esportato» = copia ricodificata da Foto (chiave displayname, AAC prima del video). Confronta peso, risoluzione e apac fra i modi di import dello stesso video: l'originale è il più pesante, ha il video come prima traccia e, se registrato con audio spaziale, la traccia apac.</p></div>
+<div class="card"><h2>Risultati</h2><div class="row"><button id="copy">Copia risultati</button><button id="clear">Azzera</button><span id="copied" class="ok"></span></div><pre id="oc">{}</pre></div>
+
+<script type="module">
+import { locateMoov } from '../../app/lib/dovi.js';
+import { inspectMovie, judgeOrigin } from '../../app/lib/origin.js';
+
+const $ = (id) => document.getElementById(id);
+const R = { page: 'import v1', ua: navigator.userAgent, when: new Date().toISOString(), files: [], drops: [] };
+const show = () => { $('oc').textContent = JSON.stringify(R, null, 1); renderSum(); };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const INPUTS = [
+  ['app', 'video/*,.mov,.mp4', false, 'come l\'app (v0.35)'],
+  ['video', 'video/*', false, ''],
+  ['video-multi', 'video/*', true, 'con multiple'],
+  ['quicktime', 'video/quicktime', false, ''],
+  ['dotmov', '.mov', false, ''],
+  ['img-video', 'image/*,video/*', false, 'con immagini (su WebKit cambierebbe la modalità solo se la preferenza interna «originale» fosse attiva)'],
+  ['none', null, false, 'nessun accept'],
+  ['none-multi', null, true, 'nessun accept, multiple'],
+  ['any', '*/*', false, ''],
+  ['octet', 'application/octet-stream', false, 'nessun tipo media: dovrebbe aprire subito File'],
+];
+for (const [id, accept, multi, note] of INPUTS) {
+  const l = document.createElement('label'), i = document.createElement('input');
+  i.type = 'file'; if (accept != null) i.accept = accept; if (multi) i.multiple = true;
+  i.addEventListener('change', async () => { const fs = [...(i.files || [])]; i.value = ''; for (const f of fs) await addFile(f, `input:${id}`); });
+  l.innerHTML = `<b>${esc(id)}</b><code>accept=${accept == null ? '(assente)' : '"' + esc(accept) + '"'}${multi ? ' multiple' : ''}${note ? ' — ' + esc(note) : ''}</code>`;
+  l.append(i); $('inputs').append(l);
+}
+
+async function sha(f, n = 4 << 20) {
+  try { const d = await crypto.subtle.digest('SHA-256', await f.slice(0, n).arrayBuffer()); return [...new Uint8Array(d)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join(''); } catch (e) { return 'ERR ' + e.message; }
+}
+async function analyze(f) {
+  const rf = async (o, l) => new Uint8Array(await f.slice(o, o + l).arrayBuffer());
+  const loc = await locateMoov(rf, f.size); if (!loc) return { err: 'moov non trovato' };
+  const info = inspectMovie(await rf(loc.offset, loc.size), await rf(0, 64));
+  return { moovAt: loc.offset, moovKB: +(loc.size / 1024).toFixed(1), ...info, judge: judgeOrigin(info, f.name) };
+}
+async function addFile(f, source, extra = {}) {
+  const e = { source, how: $('how').value, name: f.name, type: f.type, size: f.size, sizeMB: +(f.size / 1048576).toFixed(2), lastModified: f.lastModified ? new Date(f.lastModified).toISOString() : null, received: new Date().toISOString(), ...extra };
+  try { e.head4MB = await sha(f); e.analysis = await analyze(f); } catch (err) { e.analysis = { err: err?.message || String(err) }; }
+  R.files.push(e); show();
+}
+function renderSum() {
+  if (!R.files.length) { $('sum').textContent = 'Nessun file.'; return; }
+  const rows = R.files.map((e) => {
+    const a = e.analysis || {}, tr = a.tracks || [], v = tr.find((t) => t.handler === 'vide') || {}, j = a.judge || {};
+    const cls = j.verdict === 'originale' ? 'ok' : j.verdict === 'esportato' ? 'ko' : 'warn';
+    return `<tr><td>${esc(e.source)}<br><small>${esc(e.how)}</small></td><td>${esc(e.name)}<br><small>${esc(e.type || '(vuoto)')}</small></td><td>${e.sizeMB}</td>`
+      + `<td>${esc(v.codec || '?')} ${v.bitDepth ? v.bitDepth + ' bit' : ''}<br>${v.w ? v.w + '×' + v.h : ''} ${v.kbps ? (v.kbps / 1000).toFixed(1) + ' Mbps' : ''}</td>`
+      + `<td>${v.dv ? 'DV ' + v.dv.profile + '.' + v.dv.compat : '—'}<br>${esc(v.transfer || '—')}</td>`
+      + `<td>${tr.some((t) => t.entry === 'apac') ? 'apac' : '—'}<br>mebx ${tr.filter((t) => t.entry === 'mebx').length}</td>`
+      + `<td>${esc(tr.map((t) => t.entry).join(' '))}</td><td class="${cls}">${esc(j.verdict || a.err || '?')}</td></tr>`;
+  });
+  $('sum').innerHTML = `<table><thead><tr><th>Da</th><th>File</th><th>MB</th><th>Video</th><th>DV/TF</th><th>Audio</th><th>Tracce</th><th>Giudizio</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+}
+
+// ---- trascinamento: tipi, item, File, entry ----
+const dz = $('drop'), dlog = (s) => { const o = $('dlog'); o.textContent = (o.textContent === 'In attesa.' ? '' : o.textContent + '\n') + s; };
+const types = (dt) => { try { return [...(dt?.types || [])]; } catch (e) { return ['ERR ' + e.message]; } };
+let lastOver = '';
+for (const t of ['dragenter', 'dragover']) window.addEventListener(t, (ev) => {
+  ev.preventDefault(); dz.classList.add('on');
+  const s = `${t}: types=${JSON.stringify(types(ev.dataTransfer))} items=${ev.dataTransfer?.items?.length ?? '?'}`;
+  if (s !== lastOver) { lastOver = s; dlog(s); }
+});
+window.addEventListener('dragleave', () => dz.classList.remove('on'));
+window.addEventListener('drop', async (ev) => {
+  ev.preventDefault(); dz.classList.remove('on'); lastOver = '';
+  const dt = ev.dataTransfer, d = { at: new Date().toISOString(), how: $('how').value, types: types(dt), effectAllowed: dt?.effectAllowed, dropEffect: dt?.dropEffect, data: {}, items: [], files: [] };
+  for (const ty of d.types) if (ty !== 'Files') { try { d.data[ty] = String(dt.getData(ty)).slice(0, 300); } catch (e) { d.data[ty] = 'ERR ' + e.message; } }
+  // tutto in modo sincrono durante l'evento (dopo, il DataTransfer viene svuotato)
+  const viaFiles = [...(dt?.files || [])], viaItems = [], entries = [];
+  for (const it of [...(dt?.items || [])]) {
+    const r = { kind: it.kind, type: it.type };
+    if (it.kind === 'file') {
+      try { const f = it.getAsFile(); r.getAsFile = f ? { name: f.name, type: f.type, size: f.size } : null; if (f) viaItems.push(f); } catch (e) { r.getAsFile = 'ERR ' + e.message; }
+      try { const en = it.webkitGetAsEntry?.(); r.entry = en ? { isFile: en.isFile, isDirectory: en.isDirectory, name: en.name, fullPath: en.fullPath } : null; if (en?.isFile) entries.push(en); } catch (e) { r.entry = 'ERR ' + e.message; }
+    }
+    d.items.push(r);
+  }
+  d.files = viaFiles.map((f) => ({ name: f.name, type: f.type, size: f.size, lastModified: f.lastModified }));
+  d.sameObject = viaFiles.map((f) => viaItems.includes(f));
+  dlog(`drop: types=${JSON.stringify(d.types)} files=${viaFiles.length} items=${d.items.length} → ${viaFiles.map((f) => `${f.name} ${(f.size / 1048576).toFixed(1)} MB`).join(', ') || 'nessun file'}`);
+  R.drops.push(d); show();
+  const seen = new Set(), key = (f) => `${f.name}|${f.size}|${f.lastModified}`;
+  for (const f of viaFiles) { seen.add(key(f)); await addFile(f, 'drop:files'); }
+  for (const f of viaItems) if (!seen.has(key(f))) { seen.add(key(f)); await addFile(f, 'drop:getAsFile'); }
+  for (const en of entries) {
+    try { const f = await new Promise((res, rej) => en.file(res, rej)); if (!seen.has(key(f))) { seen.add(key(f)); await addFile(f, 'drop:entry.file'); } else dlog(`entry.file(${en.name}): stesso file di dataTransfer.files`); }
+    catch (e) { dlog(`entry.file(${en.name}): ERR ${e?.message || e}`); }
+  }
+});
+
+$('copy').onclick = async () => {
+  const t = JSON.stringify(R, null, 1);
+  try { await navigator.clipboard.writeText(t); $('copied').textContent = 'copiato'; }
+  catch { const a = document.createElement('textarea'); a.value = t; document.body.append(a); a.select(); try { document.execCommand('copy'); $('copied').textContent = 'copiato'; } catch { $('copied').textContent = 'copia a mano dal riquadro'; } a.remove(); }
+  setTimeout(() => { $('copied').textContent = ''; }, 2500);
+};
+$('clear').onclick = () => { R.files = []; R.drops = []; $('dlog').textContent = 'In attesa.'; show(); };
+show();
+</script>
+</body>
+</html>

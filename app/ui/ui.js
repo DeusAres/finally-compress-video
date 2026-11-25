@@ -89,7 +89,7 @@ function template(opts) {
     <input type="file" accept="video/*,.mov,.mp4" data-ref="input" aria-label="Scegli un video">
     ${s('film', { scale: 7, className: 'px-bob' })}
     <span class="fcv-pick-cta">Tocca per scegliere</span>
-    <small>Dalla Libreria Foto o da File. Nessun caricamento: il video non lascia l'iPhone.</small>
+    <small>Da «Scegli file» (app File) il video arriva intatto; da «Libreria foto» iOS può consegnare una copia ricodificata. Nessun caricamento: il video non lascia l'iPhone.</small>
   </label>
   <p class="fcv-drop-msg" data-ref="dropMsg" role="status" aria-live="polite" hidden></p>
   <div class="fcv-file" data-ref="fileBox" hidden>
@@ -99,6 +99,7 @@ function template(opts) {
       <div class="fcv-stat"><span class="px-label">Durata</span><span class="v px-digits" data-ref="fDur">—</span></div>
       <div class="fcv-stat"><span class="px-label">Formato</span><span class="v px-digits" data-ref="fRes">—</span></div>
     </div>
+    <p class="fcv-warn fcv-orig" data-ref="origNote" role="status" hidden></p>
     <div class="fcv-file-actions"><label class="px-btn fcv-relabel" data-ref="change">Cambia video<input type="file" accept="video/*,.mov,.mp4" data-ref="input2" aria-label="Cambia video"></label></div>
   </div>
 </section>
@@ -320,6 +321,9 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (fi.width && fi.height) chips.push(`<span class="px-chip px-chip--num">${fi.width}×${fi.height}</span>`);
     if (fi.fps) chips.push(`<span class="px-chip px-chip--num">${Math.round(fi.fps)} fps</span>`);
     R.fChips.innerHTML = chips.join('');
+    // v0.35.5: copia ricodificata da Foto (Libreria foto / trascinamento) invece dell'originale → come ottenere l'originale
+    R.origNote.hidden = !fi.exported;
+    if (fi.exported) R.origNote.innerHTML = `Questa sembra la <b>copia ricodificata</b> che iOS consegna da «Libreria foto» o dal trascinamento, non l'originale (${fi.exported[0]}): di solito è ridotta (es. 4K → 1080p) e senza audio spaziale. Per comprimere l'originale: in <b>Foto</b> › Condividi › <b>Opzioni</b> › Formato «Attuale» › <b>Salva in File</b>; poi qui «Cambia video» › <b>Scegli file</b> e prendilo da File.`;
     syncDs(); // mostra/nasconde «Riduci a 1080p» e aggiorna le stime
   }
   // ---------- drag & drop (pagina intera; iPad/iPhone: trascinamento da Foto in Split View / Slide Over) ----------
@@ -337,7 +341,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (st.busy) { dropMessage('Compressione in corso: attendi la fine prima di cambiare video.'); return; }
     const files = [...(e.dataTransfer.files || [])];
     if (!files.length) for (const it of e.dataTransfer.items || []) { const f = it.kind === 'file' ? it.getAsFile() : null; if (f) files.push(f); }
-    const v = files.find(isVideo);
+    // Lo stesso elemento può arrivare in più rappresentazioni (WebKit carica il tipo più fedele e il primo tipo «contenuto»):
+    // fra i video con lo stesso nome base del primo si prende il più grande (più probabilmente l'originale).
+    const vids = files.filter(isVideo), stem = (f) => (f.name || '').replace(/\.[^.]*$/, '').toLowerCase();
+    const v = vids.filter((f) => stem(f) === stem(vids[0] || {})).sort((a, b) => b.size - a.size)[0];
     if (!v) { dropMessage(files.length ? 'Questo non è un video: trascina un file video (MOV, MP4).' : 'Nessun file ricevuto: prova col pulsante «Tocca per scegliere».'); return; }
     acceptFile(v);
     if (files.length > 1) dropMessage('Rilasciati più file: uso solo il primo video.');
