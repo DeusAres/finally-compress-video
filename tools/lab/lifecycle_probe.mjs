@@ -30,7 +30,7 @@ const ONLY = arg('--only', 'nuovo,annulla,errore,impostazioni,ripresa').split(',
 // ---- campione H.264 (Chromium) ----
 const tmp = mkdtempSync(join(tmpdir(), 'fcv-life-'));
 const AVC = join(tmp, 'clip_avc.mov'), AVC2 = join(tmp, 'clip2_avc.mov');
-execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', SRC, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=640:-2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', AVC]);
+execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', SRC, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=320:-2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', AVC]);
 execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', AVC, '-c', 'copy', '-metadata', 'title=b', AVC2]); // secondo file (altro nome/dimensione)
 
 // ---- server statico (127.0.0.1: niente service worker, che index.html registra solo su https/localhost) ----
@@ -53,11 +53,12 @@ const INIT = () => {
   const track = (f) => { P.frames.add(f); P.made.frames++; return f; };
   VF.prototype.close = function () { P.frames.delete(this); return close.call(this); };
   window.VideoFrame = new Proxy(VF, { construct(t, a, nt) { return track(Reflect.construct(t, a, nt)); } });
-  const mapCodec = (c) => (c && /^hvc1|^hev1/.test(c.codec) ? { ...c, codec: 'avc1.640028' } : c); // SOLO prova: Chromium non ha HEVC
+  // SOLO prova: Chromium non ha HEVC. Bitrate ×20 all'encoder: OpenH264 altrimenti salta fotogrammi (pacchetti < fotogrammi)
+  const mapCodec = (c, enc) => (c && /^hvc1|^hev1/.test(c.codec) ? { ...c, codec: 'avc1.640028', ...(enc && c.bitrate ? { bitrate: c.bitrate * 20 } : {}) } : c);
   const wrapCodec = (Base, kind) => new Proxy(Base, { construct(t, [init], nt) {
     const o = init?.output; const i2 = { ...init, output: kind === 'dec' ? (f, m) => o(track(f), m) : (ch, m) => { if (m?.decoderConfig && /^avc1/.test(m.decoderConfig.codec)) m = { ...m, decoderConfig: { ...m.decoderConfig, codec: 'hvc1.2.4.L123.B0' } }; o(ch, m); } };
     const x = Reflect.construct(t, [i2], nt); P.codecs.add(x); P.made[kind]++;
-    const cf = x.configure.bind(x), cl = x.close.bind(x); x.configure = (c) => cf(mapCodec(c)); x.close = () => { P.codecs.delete(x); return cl(); };
+    const cf = x.configure.bind(x), cl = x.close.bind(x); x.configure = (c) => cf(mapCodec(c, kind === 'enc')); x.close = () => { P.codecs.delete(x); return cl(); };
     return x; } });
   window.VideoEncoder = wrapCodec(window.VideoEncoder, 'enc'); window.VideoDecoder = wrapCodec(window.VideoDecoder, 'dec');
   const W = window.Worker, term = W.prototype.terminate;
