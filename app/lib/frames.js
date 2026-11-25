@@ -59,10 +59,13 @@ export const newStats = () => ({ n: 0, dup: 0, off: 0, noCallback: 0, retried: 0
 
 /**
  * Estrae UN frame: rVFC richiesto PRIMA del seek, attesa 'seeked', controllo mediaTime (se `ps` è dato), poi new VideoFrame(video).
- * Ritorna {vf, bad}: bad = mediaTime assente/doppione/fuori posto (il frame è comunque creato; decide il chiamante).
+ * Ritorna {vf, bad, mt}: bad = mediaTime assente/doppione/fuori posto (il frame è comunque creato; decide il chiamante).
+ * v0.36.3: `frac` = punto del seek dentro l'intervallo del frame (0.5 = centro; i nuovi tentativi guidati dal mediaTime lo spostano);
+ * l'intervallo è `span` (vedi withSpan) e non più `dur`: con VFR/riordino la durata del campione può superare la distanza dal frame
+ * successivo. «Fuori posto» ora vale anche per il frame SUCCESSIVO: prima il limite ts+dur+2 ms lo accettava (mt = ts del successivo).
  */
-async function grabFrame(video, f, ps, signal) {
-  const target = (f.ts + f.dur / 2) / 1e6;
+async function grabFrame(video, f, ps, signal, frac = 0.5) {
+  const span = spanOf(f), target = (f.ts + span * frac) / 1e6;
   // v0.35: dopo i 250 ms si concede ancora RVFC_GRACE_MS: se il thread principale era occupato (primo drawImage HLG, configure
   // degli encoder di prova…) il timer scaduto passa prima del passo di rendering in cui gira la callback rVFC → falso «assente».
   const pr = ps ? new Promise((res) => {
@@ -86,16 +89,35 @@ async function grabFrame(video, f, ps, signal) {
     if (mt == null) { ps.noCallback++; bad = true; }
     else {
       if (ps.prevMT != null && Math.abs(mt - ps.prevMT) < 1e-4) { ps.dup++; bad = true; }
-      if (mt < f.ts / 1e6 - 2e-3 || mt > (f.ts + f.dur) / 1e6 + 2e-3) { ps.off++; bad = true; if (ps.samples.length < 5) ps.samples.push([+(f.ts / 1e6).toFixed(4), +mt.toFixed(4)]); }
+      if (isOff(f, mt)) { ps.off++; bad = true; if (ps.samples.length < 5) ps.samples.push([+(f.ts / 1e6).toFixed(4), +mt.toFixed(4)]); }
       ps.prevMT = mt;
     }
   }
   return { vf: new VideoFrame(video, { timestamp: f.ts, duration: f.dur }), bad, mt };
 }
 
-/** Sposta il player su un frame vicino (precedente, o successivo per il primo) e attende la sua presentazione (rVFC prima del seek). */
-async function nudge(video, f, signal) {
-  const t = (f.ts > f.dur ? f.ts - f.dur / 2 : f.ts + 1.5 * f.dur) / 1e6;
+/** Intervallo di presentazione del frame (µs): `span` se calcolato da withSpan, altrimenti la durata del campione. */
+const spanOf = (f) => (f.span > 0 ? f.span : f.dur);
+/** mediaTime fuori dal frame atteso: prima di ts (−2 ms) o oltre metà dell'intervallo (cioè più vicino al frame successivo). */
+const isOff = (f, mt) => mt < f.ts / 1e6 - 2e-3 || mt > (f.ts + Math.max(spanOf(f) / 2, 2000)) / 1e6;
+
+/**
+ * v0.36.3: aggiunge a ogni frame `span` = min(dur, ts del successivo − ts). La durata del demuxer è quella del campione in ordine
+ * di DECODIFICA (stts), assegnata al frame dopo l'ordinamento per presentazione: con VFR (durate 32/33/35/42 ms) e riordino può
+ * superare la distanza reale dal frame successivo, e il centro ts+dur/2 cadere al confine o nel frame dopo.
+ */
+export function withSpan(frames) {
+  return frames.map((f, i) => {
+    const g = i + 1 < frames.length ? frames[i + 1].ts - f.ts : 0;
+    return g > 0 && g < f.dur ? { ...f, span: g } : f;
+  });
+}
+
+/** Sposta il player lontano dal frame (precedente, o successivo per il primo; `far`: ~0.5 s, riparte dal keyframe) e attende la presentazione. */
+async function nudge(video, f, signal, far = false) {
+  const d = spanOf(f);
+  let t = far ? (f.ts > 600000 ? f.ts - 500000 : f.ts + 500000) : f.ts > d ? f.ts - d / 2 : f.ts + 1.5 * d;
+  t /= 1e6; if (far && video.duration > 0 && t > video.duration - 0.05) t = Math.max(0, f.ts / 1e6 - 0.5);
   const rv = new Promise((res) => { const to = setTimeout(res, 150); video.requestVideoFrameCallback(() => { clearTimeout(to); res(); }); });
   if (signal?.aborted) throw interruptError();
   video.currentTime = t;
@@ -137,12 +159,17 @@ export async function warmPlayers(videos, frameFor, signal = null, { tries = 4, 
  * Yields VideoFrames for the given source timestamps (microseconds, from the demuxer).
  * Seeks to the centre of each frame so VFR (17/33 ms) frames are hit exactly once.
  * Caller MUST close() every frame.
+ * v0.36.3: con `stats` ogni frame è VERIFICATO (verifiedGrab): un frame non verificabile non viene mai consegnato in silenzio.
+ * Opzioni: onBad 'fail' (default: errore FramesUnverified) | 'mark' (prove per scena: consegnato e segnato, isUnverified(vf));
+ * budget {reopens, max}: ricreazioni del <video> per frame non verificati, condivise dal chiamante (job); reopenBad false: nessuna;
+ * base: indice del primo frame (solo per i messaggi).
  */
-export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentation order */, stats = null, signal = null, { reopen = null, onReopen = () => {} } = {}) {
+export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentation order */, stats = null, signal = null, { reopen = null, onReopen = () => {}, budget = null, onBad = 'fail', reopenBad = true, base = 0 } = {}) {
   // stats (optional): verify via rVFC which frame was actually presented after each seek.
   if (stats) { stats.retried ||= 0; stats.prevMT ??= null; }
-  const grab = reopenGrab(() => video, (v) => { video = v; }, 0, reopen, onReopen, stats);
-  for (const f of frames) yield (await grab(f, signal)).vf;
+  frames = withSpan(frames);
+  const grab = verifiedGrab({ get: () => video, set: (v) => { video = v; }, p: 0, reopen, onReopen, stats, budget: reopenBad ? budget : { reopens: 0, max: 0 }, onBad });
+  for (let i = 0; i < frames.length; i++) yield (await grab(frames[i], signal, base + i)).vf;
 }
 
 /**
@@ -153,14 +180,87 @@ export async function* seekFrames(video, frames /* [{ts, dur}] in µs, presentat
 export const MAX_REOPEN = 2;
 function reopenGrab(get, set, p, reopen, onReopen, stats, max = MAX_REOPEN) {
   let n = 0;
-  return async (f, signal) => {
-    try { return await grabFrame(get(), f, stats, signal); }
+  return async (f, signal, frac) => {
+    try { return await grabFrame(get(), f, stats, signal, frac); }
     catch (e) {
       if (!reopen || !isSeekTimeout(e) || n >= max || signal?.aborted) throw e;
       n++; onReopen(p, e, n);
       const v = await reopen(p); set(v); if (stats) stats.prevMT = null;
-      return await grabFrame(v, f, stats, signal);
+      return await grabFrame(v, f, stats, signal, frac);
     }
+  };
+}
+
+/** v0.36.3: nuovi seek guidati per frame non verificato, prima di ricreare il <video> (l'ultimo dopo uno spostamento di ~0.5 s). */
+export const MAX_BAD_TRIES = 3;
+/** v0.36.3: ricreazioni del <video> per frame non verificati (default per estrazione; il job ne passa uno condiviso con `budget`). */
+export const MAX_BAD_REOPEN = 3;
+export const framesUnverifiedError = (msg) => Object.assign(new Error(msg), { name: 'FramesUnverified' });
+const unverified = new WeakSet();
+/** Frame consegnato SENZA verifica (solo onBad 'mark', prove per scena): da escludere dalla metrica. */
+export const isUnverified = (vf) => unverified.has(vf);
+const desc = (f, mt) => `mediaTime ${mt == null ? 'assente' : mt.toFixed(4)}, atteso ${(f.ts / 1e6).toFixed(4)}`;
+// punto del nuovo seek dentro il frame, guidato dal mediaTime dell'ultimo tentativo: presentato un frame PRECEDENTE → più avanti,
+// SUCCESSIVO → più indietro; assente/doppione → piccoli spostamenti attorno al centro (stesso istante = nessuna nuova presentazione)
+const steer = (f, mt, j) => {
+  const a = [0.7, 0.85, 0.9][Math.min(j, 3) - 1];
+  if (mt == null) return [0.5, 0.35, 0.65][(j - 1) % 3];
+  if (mt < f.ts / 1e6 - 2e-3) return a;
+  if (isOff(f, mt)) return 1 - a;
+  return [0.4, 0.6, 0.5][(j - 1) % 3];
+};
+// quale tentativo tenere se nessuno è verificato: il più vicino al frame atteso (assente = mezzo frame)
+const score = (f, r) => (!r.bad ? -1 : r.mt == null ? 0.5 : Math.abs(r.mt - f.ts / 1e6) / (spanOf(f) / 1e6));
+
+/**
+ * v0.36.3 estrazione VERIFICATA di un frame. Frame «bad» (mediaTime assente/doppione/fuori posto) → fino a `tries` nuovi seek,
+ * ciascuno dopo uno spostamento del player (nudge) e con il punto di seek corretto dal mediaTime ottenuto (steer); poi, se il
+ * budget lo consente, il <video> è RICREATO (reopen) e si rifà il giro. Ancora bad: onBad 'fail' → errore FramesUnverified
+ * (il frame NON va all'encoder); 'mark' → consegnato e segnato (isUnverified); 'return' → restituito bad (decide il chiamante).
+ * stats: + recovered (frame recuperati), recoverMs (tempo speso a recuperare), reopenBad, unverified, unvSamples [[i, ts, mt]].
+ */
+function verifiedGrab({ get, set = () => {}, p = 0, reopen = null, onReopen = () => {}, stats = null, tries = MAX_BAD_TRIES, budget = null, onBad = 'fail', alive = () => true }) {
+  const raw = reopenGrab(get, set, p, reopen, onReopen, stats);
+  budget ||= { reopens: 0, max: MAX_BAD_REOPEN };
+  return async (f, signal, idx) => {
+    if (!stats) return raw(f, signal);
+    const prev = stats.prevMT; // doppione = uguale all'ultimo frame CONSEGNATO da questo player, non all'ultimo tentativo
+    const r0 = await raw(f, signal);
+    if (!r0.bad) return r0;
+    const t0 = performance.now(); let best = r0, last = r0, k = 0, reopened = 0;
+    const keep = (x) => { last = x; if (score(f, x) < score(f, best)) { best.vf.close(); best = x; } else x.vf.close(); };
+    const cycle = async () => {
+      for (let j = 1; j <= tries && best.bad && alive() && !signal?.aborted; j++) {
+        k++; stats.retried++;
+        // v0.35: un nuovo seek allo STESSO istante non presenta nulla (rVFC muta): prima ci si sposta. L'ultimo spostamento è
+        // lontano (~0.5 s): il decoder riparte dal keyframe invece di proseguire dallo stato che ha dato il frame sbagliato.
+        await nudge(get(), f, signal, j === tries && tries > 1);
+        stats.prevMT = prev;
+        keep(await raw(f, signal, steer(f, last.mt, j)));
+      }
+    };
+    try {
+      await cycle();
+      if (best.bad && reopen && onBad !== 'return' && budget.reopens < budget.max && alive() && !signal?.aborted) {
+        budget.reopens++; reopened++; stats.reopenBad = (stats.reopenBad || 0) + 1;
+        onReopen(p, new Error(`frame ${idx ?? '?'} non verificato dopo ${k + 1} seek (${desc(f, last.mt)})`), budget.reopens);
+        set(await reopen(p)); stats.prevMT = prev; k++;
+        keep(await raw(f, signal));
+        await cycle();
+      }
+    } catch (e) { try { best.vf.close(); } catch {} throw e; }
+    stats.recoverMs = (stats.recoverMs || 0) + performance.now() - t0;
+    if (!best.bad) { stats.recovered = (stats.recovered || 0) + 1; stats.prevMT = best.mt; return best; }
+    stats.prevMT = prev;
+    if (onBad === 'return') return best;
+    stats.unverified = (stats.unverified || 0) + 1;
+    if ((stats.unvSamples ||= []).length < 5) stats.unvSamples.push([idx ?? null, +(f.ts / 1e6).toFixed(4), best.mt == null ? null : +best.mt.toFixed(4)]);
+    if (onBad === 'fail') {
+      best.vf.close();
+      throw framesUnverifiedError(`frame ${idx ?? '?'} (${(f.ts / 1e6).toFixed(3)} s) non verificabile dopo ${k + 1} seek${reopened ? ' e la ricreazione del player' : ''} (${desc(f, best.mt)}): voce interrotta invece di scrivere un file con frame ripetuti o fuori ordine`);
+    }
+    unverified.add(best.vf); if (best.mt != null) stats.prevMT = best.mt;
+    return best;
   };
 }
 
@@ -172,11 +272,12 @@ function reopenGrab(get, set, p, reopen, onReopen, stats, max = MAX_REOPEN) {
  * scartato e riestratto in sequenza. Ogni frame non consegnato è chiuso. `stats`: {n,dup,off,noCallback,retried,samples (globali),
  * players:[stats per player], fellBack, fallbackReason}. Con 1 solo video equivale a seekFrames.
  */
-export async function* parallelFrames(videos, frames, stats, signal = null, { maxFlight = 4, onFallback = () => {}, reopen = null, onReopen = () => {} } = {}) {
+export async function* parallelFrames(videos, frames, stats, signal = null, { maxFlight = 4, onFallback = () => {}, reopen = null, onReopen = () => {}, budget = null, onBad = 'fail', reopenBad = true, base = 0 } = {}) {
+  frames = withSpan(frames);
   videos = [...videos]; // v0.36.2: un player ricreato (reopen) sostituisce il suo elemento solo qui dentro
   const P = videos.length, N = frames.length;
   stats.players = videos.map(() => newStats()); stats.fellBack = false; stats.fallbackReason = '';
-  stats.n = 0; stats.dup = 0; stats.off = 0; stats.noCallback = 0; stats.retried = 0; stats.samples = [];
+  stats.n = 0; stats.dup = 0; stats.off = 0; stats.noCallback = 0; stats.retried = 0; stats.samples = []; stats.unvSamples = [];
   const buf = new Map(); // indice → {vf, bad, mt}
   let next = 0, degraded = false, stop = false, waiters = [], prevMT = null;
   const notify = () => { const w = waiters; waiters = []; w.forEach((r) => r()); };
@@ -185,22 +286,15 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
   const degrade = (why) => { if (degraded) return; degraded = true; stats.fellBack = true; stats.fallbackReason = why; onFallback(why); notify(); };
   const failures = [], broken = new Set(); // broken: player andati in errore (v0.36.2: il fallback continua con un player SANO)
   const worker = async (p) => {
+    // v0.22.1/v0.35: frame bad → nuovi seek (dopo uno spostamento) prima di arrendersi; ancora bad → 1 player (il sequenziale lo riprova)
+    const wg = verifiedGrab({ get: () => videos[p], p, stats: stats.players[p], alive: () => !stop && !degraded, onBad: 'return' });
     try {
       for (let i = p; i < N; i += P) {
         while (!stop && !degraded && !signal?.aborted && i >= next + maxFlight) await wake(); // finestra: max frame vivi
         if (stop || degraded || signal?.aborted) return;
-        let r = await grabFrame(videos[p], frames[i], stats.players[p], signal);
-        // v0.22.1: su iPhone il 2° player può non confermare i primi frame (riscaldamento): ritenta lo stesso frame
-        // fino a 3 volte prima di arrendersi (prima: fallback immediato al primo mediaTime assente).
-        for (let k = 0; r.bad && k < 3 && !stop && !degraded && !signal?.aborted; k++) {
-          r.vf.close(); stats.players[p].retried++;
-          // v0.35: se il frame era stato presentato ma la rVFC è arrivata tardi, un nuovo seek allo STESSO istante non presenta
-          // nulla di nuovo e la rVFC non scatta più (3 tentativi persi): prima ci si sposta su un frame vicino, poi si ritenta.
-          await nudge(videos[p], frames[i], signal);
-          r = await grabFrame(videos[p], frames[i], stats.players[p], signal);
-        }
+        const r = await wg(frames[i], signal, base + i); // v0.36.3: stessi nuovi seek guidati del sequenziale (senza ricreare il player)
         if (stop || degraded) { r.vf.close(); return; }
-        if (r.bad) { r.vf.close(); degrade(`player ${p + 1}: frame ${i} non verificato dopo 3 tentativi (mediaTime ${r.mt == null ? 'assente' : r.mt.toFixed(4)})`); return; }
+        if (r.bad) { r.vf.close(); degrade(`player ${p + 1}: frame ${base + i} non verificato dopo ${MAX_BAD_TRIES + 1} seek (${desc(frames[i], r.mt)})`); return; }
         buf.set(i, r); notify();
       }
     } catch (e) {
@@ -212,7 +306,7 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
     }
   };
   const workers = P > 1 ? videos.map((_, p) => worker(p)) : [];
-  const sum = () => { for (const k of ['n', 'off', 'noCallback', 'retried']) stats[k] = stats.players.reduce((a, q) => a + q[k], 0); stats.samples = stats.players.flatMap((q) => q.samples).slice(0, 5); };
+  const sum = () => { for (const k of ['n', 'off', 'noCallback', 'retried', 'recovered', 'recoverMs', 'reopenBad', 'unverified']) stats[k] = stats.players.reduce((a, q) => a + (q[k] || 0), 0); stats.samples = stats.players.flatMap((q) => q.samples).slice(0, 5); stats.unvSamples = stats.players.flatMap((q) => q.unvSamples || []).slice(0, 5); };
   try {
     while (next < N) {
       if (signal?.aborted) throw interruptError();
@@ -225,9 +319,9 @@ export async function* parallelFrames(videos, frames, stats, signal = null, { ma
         for (const x of buf.values()) x.vf.close(); buf.clear();
         // v0.36.2: un player sano (prima: sempre il player 1, anche quando era proprio lui ad essersi bloccato)
         const sp = P > 1 && broken.has(0) && !broken.has(1) ? 1 : 0, ps = stats.players[sp]; ps.prevMT = null; stats.soloPlayer = sp + 1;
-        const grab = reopenGrab(() => videos[sp], (v) => { videos[sp] = v; }, sp, reopen, onReopen, ps);
+        const grab = verifiedGrab({ get: () => videos[sp], set: (v) => { videos[sp] = v; }, p: sp, reopen, onReopen, stats: ps, budget: reopenBad ? budget : { reopens: 0, max: 0 }, onBad });
         for (; next < N; next++) {
-          const g = await grab(frames[next], signal);
+          let g; try { g = await grab(frames[next], signal, base + next); } finally { sum(); }
           if (prevMT != null && g.mt != null && Math.abs(g.mt - prevMT) < 1e-4) stats.dup++;
           if (g.mt != null) prevMT = g.mt;
           sum(); notify();

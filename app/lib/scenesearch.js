@@ -233,6 +233,7 @@ export function makeCanvasLuma(W, H, factor = SCENE.factor, { gpu = false } = {}
  * Implementazioni browser di encodeTrial/measure per ratecontrol.searchBitrate.
  *  W,H: dimensioni dei frame nativi; frames: [{ts,dur}] in secondi (index.html);
  *  frameSource(startIdx, endIdx) → async iterable di VideoFrame (seekFrames/parallelFrames, il chiamante li riceve e li chiude QUI);
+ *  skipFrame(vf) → true per i frame non verificati (v0.36.3): codificati ma esclusi dalla metrica;
  *  makeEncoder({width,height,bitrate,framerate,onChunk,onError}) → wrapper come encode.createHevcEncoder (encode/drain/flush/close);
  *  colorSpace: VideoColorSpaceInit da forzare sul decoder di prova (HLG come il file finale), facoltativo.
  *  encW/encH (default W/H): dimensioni dell'encoder se diverse dai frame nativi (v0.31 «Riduci a 1080p»); verifyOutput(decoderConfig): lancia se l'uscita non è quella chiesta.
@@ -246,7 +247,7 @@ export function makeCanvasLuma(W, H, factor = SCENE.factor, { gpu = false } = {}
  * decoder in diretta → i chunk sono ancora lì e si misura dopo come prima (measure); se il decoder non si crea/configura,
  * la diretta si spegne per il resto del job.
  */
-export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorSpace, stride = SCENE.stride, factor = SCENE.factor, onStat = () => {}, encW = W, encH = H, framerate, verifyOutput,
+export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => false, makeEncoder, colorSpace, stride = SCENE.stride, factor = SCENE.factor, onStat = () => {}, encW = W, encH = H, framerate, verifyOutput,
   makeDecoder = (init) => new VideoDecoder(init), live = true, now = () => performance.now(), players = () => 0, lumaFn = null, gpuLumaFn = null, decodeFn = decodeChunks }) {
   // «Riduci a 1080p»: W×H = frame nativi (4K), encW×encH = dimensioni dell'encoder. La luma si prende SEMPRE a 1/factor di encW×encH:
   // sorgente 4K (drawImage ridimensiona) e frame decodificato 1080p finiscono nella stessa griglia → confronto a risoluzione comune.
@@ -318,7 +319,8 @@ export function createTrialDeps({ W, H, frames, frameSource, makeEncoder, colorS
           T.extract += now() - t;
           try {
             for (const o of outs) { if (o.err) throw o.err; o.enc.encode(vf, j === 0); }
-            if (capture && j % stride === 0) { const t0 = now(); src[j] = luma(vf); T.lumaSrc += now() - t0; T.nSrc++; }
+            // v0.36.3: frame non verificato (skipFrame, frames.isUnverified): niente luma sorgente → escluso dalla metrica
+            if (capture && j % stride === 0 && !skipFrame(vf)) { const t0 = now(); src[j] = luma(vf); T.lumaSrc += now() - t0; T.nSrc++; }
           } finally { vf.close(); }
           j++; T.frames++;
           const t1 = now(); for (const o of outs) await o.enc.drain(2); T.encWait += now() - t1;

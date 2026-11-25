@@ -15,7 +15,7 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers, isSeekTimeout } from './app/lib/frames.js?v=0.36.2';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers, isSeekTimeout, isUnverified } from './app/lib/frames.js?v=0.36.2';
 import { installMediaDiag, mediaDiagLine } from './app/lib/mediadiag.js?v=0.36.2';
 import { estimateOutBytes, estimateTimeS } from './app/ui/estimate.js?v=0.36.2';
 import { createHevcEncoder } from './app/lib/encode.js?v=0.36.2';
@@ -247,6 +247,7 @@ function friendlyError(e) {
   const n = e?.name || '';
   if (n === 'Cancelled') return 'Elaborazione annullata.';
   if (n === 'DownscaleError') return e.message; // «Safari non riesce a ridurre la risoluzione…»: nessun ripiego, il job si ferma (v0.31)
+  if (n === 'FramesUnverified') return 'Safari non ha restituito il fotogramma giusto (' + (e.message.split(':')[0]) + ') nemmeno dopo nuovi tentativi e con i player ricreati: la voce è stata fermata invece di creare un file con scatti. I segmenti già pronti restano salvati: chiudi e riapri l\'app e tocca Riprova.';
   if (n === 'QuotaExceededError' || /quota|no space|spazio/i.test(e?.message || '')) return 'Spazio di archiviazione esaurito durante la scrittura. Libera spazio sul telefono e riprova (o scegli un bitrate più basso).';
   return 'Errore: ' + (n ? n + ': ' : '') + (e?.message || e) + '. I segmenti già pronti restano salvati: tocca Riprova (o riseleziona lo stesso video) per riprendere da dove si era fermato. Se la pagina si è ricaricata da sola, la memoria è finita: riprova con l\'app in primo piano.';
 }
@@ -345,7 +346,7 @@ async function exportCurrent({ beforeRun } = {}) {
   await acquireWake();
   if (!Q || !qRun?.said) { log('Tieni l\'app aperta e lo schermo acceso finché finisce: se cambi app o blocchi lo schermo, iOS ferma l\'elaborazione (i segmenti già pronti restano salvati e si riprende da lì).'); if (qRun) qRun.said = true; }
   if (cfg.bgAudio && !hb) { log(`[${clock()}] TEST BACKGROUND CON AUDIO attivo: battito ogni secondo, riepilogo a fine job.`); startHeartbeat(); }
-  let auto = 0, fresh = false, seekRetry = false;
+  let auto = 0, fresh = false, seekRetry = false, unvRetry = false;
   for (;;) {
     const bgN = bg.n; segsSaved = 0;
     try { return await run({ forceFresh: fresh }); }
@@ -367,6 +368,14 @@ async function exportCurrent({ beforeRun } = {}) {
         seekRetry = true; seekInfo.renewed += seekEls.filter(Boolean).length; dropPlayers();
         const m = `Lettura del video bloccata (${e.message}): ricreo i player e riprovo questo video una volta.`;
         log(`[${clock()}] ⚠️ ${m} ${resLine('dopo il blocco')}`); ui.setProgNote(m, 'warn');
+        await whenVisible(); continue;
+      }
+      // v0.36.3: frame non verificabile anche dopo nuovi seek e ricreazione del player → la voce riparte UNA volta (dai segmenti
+      // già salvati) con 2 <video> nuovi; se si ripete si ferma con l'errore (mai un file con frame ripetuti/fuori ordine).
+      if (e?.name === 'FramesUnverified' && !unvRetry && !cancelled) {
+        unvRetry = true; seekInfo.renewed += seekEls.filter(Boolean).length; dropPlayers();
+        const m = `Frame non verificabile (${e.message.split(':')[0]}): ricreo i player e riprendo questo video una volta.`;
+        log(`[${clock()}] ⚠️ ${m} ${resLine('dopo il frame non verificato')}`); ui.setProgNote(m, 'warn');
         await whenVisible(); continue;
       }
       if ((e?.name === 'HvccMismatch' || e?.name === 'JobMismatch') && !fresh) {
@@ -493,6 +502,7 @@ async function runWith(input, { forceFresh = false } = {}) {
     // v0.36.2: player bloccato (seek timeout) → ricreato e frame riprovato una volta (frames.js); qui si aggiornano i riferimenti
     const sig = vidRun.signal;
     const reopen = async (p) => { const v = await openPlayer(p, sig, { fresh: true }); if (p === 0) { video = v; cur.video = v; } else { video2 = v; cur.video2 = v; } return v; };
+    const badBudget = { reopens: 0, max: 3 }; // v0.36.3: ricreazioni per frame non verificati in questa run (costo limitato)
     const onReopen = (p, e, n) => log(`[${clock()}] ⚠️ player ${p + 1}: ${e?.message || e} → ricreo il <video>${n ? ` e riprovo lo stesso frame (${n}ª volta in questa estrazione)` : ' (questa estrazione continua con l\'altro player)'}`);
     if (cfg.par2 && !parOff) { try { video2 = await openPlayer(1, vidRun.signal); cur.video2 = video2; if (video2.videoWidth !== video.videoWidth || video2.videoHeight !== video.videoHeight) throw new Error('dimensioni diverse tra i due player'); } catch (e) { if (e?.name === 'BackgroundInterrupt') throw e; log(`[${clock()}] estrazione parallela non disponibile (${e?.message || e}): 1 player`); try { if (video2) releaseVideoElement(video2); } catch {} video2 = null; cur.video2 = null; parOff = true; } }
     const W = video.videoWidth, H = video.videoHeight; log(`frame nativi ${W}×${H}${video2 ? ' · estrazione parallela: 2 player (pari/dispari)' : ''}`);
@@ -529,14 +539,16 @@ async function runWith(input, { forceFresh = false } = {}) {
       if (todo) log(`[${clock()}] qualità per scena: prove su ${todo} segmenti (finestra ~${SCENE.trialSec} s al centro, 1–2 bitrate in parallelo con misura in diretta, VMAF stimato ≥ 88 + guardia p5), limite ${cfg.bitrateMbps} Mbps`);
       const trialFrames = (a, b) => {
         const list = frames.slice(a, b).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), st = newStats();
-        return video2 && !parOff && !parTrialOff ? parallelFrames([video, video2], list, st, vidRun.signal, { maxFlight: 4, reopen, onReopen, onFallback: (why) => { parTrialOff = true; log(`[${clock()}] ⚠️ estrazione parallela (prove): ${why} → 1 player per le prove; la codifica finale riprova con 2 player`); } })
-          : seekFrames(video, list, (st.players = [st], st), vidRun.signal, { reopen, onReopen });
+        // v0.36.3: nelle prove un frame non verificabile (dopo i nuovi seek; senza ricreare il player) è consegnato SEGNATO ed escluso dalla metrica
+        const tv = { onBad: 'mark', reopenBad: false, base: a };
+        return video2 && !parOff && !parTrialOff ? parallelFrames([video, video2], list, st, vidRun.signal, { ...tv, maxFlight: 4, reopen, onReopen, onFallback: (why) => { parTrialOff = true; log(`[${clock()}] ⚠️ estrazione parallela (prove): ${why} → 1 player per le prove; la codifica finale riprova con 2 player`); } })
+          : seekFrames(video, list, (st.players = [st], st), vidRun.signal, { ...tv, reopen, onReopen });
       };
       const makeTrialEnc = !dsOn ? createHevcEncoder : (o) => { // prove con downscale: errori prima del primo chunk = downscale non riuscito (fatale, mai assorbito come «prova fallita»)
         let got = false; const e = createHevcEncoder({ ...o, onChunk: (c, m) => { got = true; o.onChunk(c, m); }, onError: (x) => o.onError(got ? x : dsWrap(x, 'prova: encoder')) });
         return { ...e, encode: (f, k) => { try { e.encode(f, k); } catch (x) { throw got ? x : dsWrap(x, 'prova: encode()'); } } };
       };
-      const deps = createTrialDeps({ W, H, frames, frameSource: trialFrames, makeEncoder: makeTrialEnc, encW: outW, encH: outH, framerate,
+      const deps = createTrialDeps({ W, H, frames, frameSource: trialFrames, skipFrame: isUnverified, makeEncoder: makeTrialEnc, encW: outW, encH: outH, framerate,
         players: () => (video2 && !parOff && !parTrialOff ? 2 : 1),
         live: (() => { try { return localStorage.getItem('fcv.sceneLive') !== '0'; } catch { return true; } })(), // v0.35 misura in diretta; '0' = A/B di debug (misura dopo, come v0.34)
         verifyOutput: dsOn ? (c) => { if (!c?.description) throw dsError('prova: decoderConfig senza description'); return dsCheck(c.description, 'prova'); } : undefined,
@@ -633,8 +645,8 @@ async function runWith(input, { forceFresh = false } = {}) {
     const vstats = newStats();
     const srcFrames = frames.slice(runStart).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) }));
     const gen = video2 && !parOff
-      ? parallelFrames([video, video2], srcFrames, vstats, vidRun.signal, { maxFlight: 4, reopen, onReopen, onFallback: (why) => { parOff = true; log(`[${clock()}] ⚠️ estrazione parallela: ${why} → passo a 1 player per il resto del job`); } })
-      : seekFrames(video, srcFrames, (vstats.players = [vstats], vstats), vidRun.signal, { reopen, onReopen });
+      ? parallelFrames([video, video2], srcFrames, vstats, vidRun.signal, { maxFlight: 4, reopen, onReopen, budget: badBudget, base: runStart, onFallback: (why) => { parOff = true; log(`[${clock()}] ⚠️ estrazione parallela: ${why} → passo a 1 player per il resto del job`); } })
+      : seekFrames(video, srcFrames, (vstats.players = [vstats], vstats), vidRun.signal, { reopen, onReopen, budget: badBudget, base: runStart });
     for await (const vf of gen) {
       const k = runStart + i; while (k >= segEnd(segStarts, s, NF)) s++;
       if (s !== inSeg) { inSeg = s; const c = rc.configured(s); if (Math.abs(c - curBr) > curBr * 0.005) { curBr = c; enc.setBitrate(curBr); job.manifest.encBitrate = curBr; } } // nuovo target: configure PRIMA del keyframe del segmento
@@ -659,6 +671,8 @@ async function runWith(input, { forceFresh = false } = {}) {
     const encSec = (performance.now() - tE) / 1000;
     if (video2) { const fps = (x) => (x.n / encSec).toFixed(0); vstats.players.forEach((q, p) => log(`verifica player ${p + 1}: ${q.n} seek (${fps(q)} fps), doppioni ${q.dup}, fuori posto ${q.off}, senza callback ${q.noCallback}${q.retried ? `, seek ripetuti ${q.retried}` : ''}`)); log(`estrazione parallela: ${i} frame in ${encSec.toFixed(1)} s = ${(i / encSec).toFixed(0)} fps${vstats.fellBack ? ` · FALLBACK a 1 player (${vstats.fallbackReason}; continua il player ${vstats.soloPlayer || 1})` : ''}`); }
     log(`verifica frame${video2 ? ' (globale)' : ''}: ${vstats.n} seek, doppioni ${vstats.dup}, fuori posto ${vstats.off}, senza callback ${vstats.noCallback}${vstats.retried ? `, seek ripetuti ${vstats.retried}` : ''} ${vstats.samples.length ? 'es. ' + JSON.stringify(vstats.samples) : ''}`);
+    // v0.36.3: i contatori qui sopra sono per SEEK (tentativi compresi); nel file vanno solo frame verificati (altrimenti errore FramesUnverified)
+    log(`frame consegnati all'encoder: ${i}, tutti verificati · recuperati con nuovi seek: ${vstats.recovered || 0} (${((vstats.recoverMs || 0) / 1000).toFixed(1)} s)${vstats.reopenBad ? ` · <video> ricreati per frame non verificati: ${vstats.reopenBad}` : ''}`);
     { const d = frames.map((f) => Math.round(f.dur * 1000)); const h = {}; d.forEach((x) => h[x] = (h[x] || 0) + 1); log(`durate frame sorgente (ms→n): ${JSON.stringify(h)}`); }
     log(`codificati ${i} frame → ${nChunks} chunk in ${encSec.toFixed(1)} s (${(i / encSec).toFixed(0)} fps). NAL nel primo frame: ${firstKeyNal} (19/20 = IDR, 21 = CRA, 39 = SEI, 32-34 = parametri). Timestamp encoder spostati >2 ms: ${tsDrift}.${notKey ? ` ⚠️ ${notKey} segmenti non iniziano con un keyframe` : ''}`);
   } else log('tutti i segmenti video erano già pronti: passo all\'assemblaggio');
@@ -1062,7 +1076,7 @@ async function runQueueItem(it) {
       } else {
         logFailure(e);
         dropPlayers(); // v0.36.2: dopo un errore la voce successiva parte con <video> di seek nuovi (mai un elemento che si è bloccato)
-        it.status = ST.ERR; it.error = e?.name === 'QuotaExceededError' || e?.name === 'DownscaleError' ? friendlyError(e) : `${e?.name ? e.name + ': ' : ''}${e?.message || e}`;
+        it.status = ST.ERR; it.error = e?.name === 'QuotaExceededError' || e?.name === 'DownscaleError' || e?.name === 'FramesUnverified' ? friendlyError(e) : `${e?.name ? e.name + ': ' : ''}${e?.message || e}`;
         chimeFail(`${it.key.name}: ${it.error}`.slice(0, 120)); res = 'err';
       }
     }
