@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.36.0';
-import { sprite, SPRITES } from './sprite.js?v=0.36.0';
-import { createLogStore } from './logstore.js?v=0.36.0';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.36.0';
+import { bus } from './bus.js?v=0.36.1';
+import { sprite, SPRITES } from './sprite.js?v=0.36.1';
+import { createLogStore } from './logstore.js?v=0.36.1';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.36.1';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -54,8 +54,9 @@ const resLabel = (w, h) => { const m = Math.min(w || 0, h || 0); return m >= 216
 
 function ensureStyles() {
   for (const name of ['theme.css', 'ui.css']) {
-    const href = new URL(name, import.meta.url).href;
-    if (![...document.styleSheets].some((s) => s.href === href) && !document.querySelector(`link[href="${href}"]`)) {
+    // v0.36.1: confronto senza query (index.html li carica con ?v= per non ricevere CSS vecchi dalla cache di Safari)
+    const href = new URL(name, import.meta.url).href, bare = (u) => { try { const x = new URL(u, location.href); return x.origin + x.pathname; } catch { return u; } };
+    if (![...document.styleSheets].some((s) => s.href && bare(s.href) === bare(href)) && ![...document.querySelectorAll('link[rel="stylesheet"]')].some((l) => bare(l.href) === bare(href))) {
       document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href }));
     }
   }
@@ -585,7 +586,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.qdFiles.hidden = !(st.qShareFb && toSave.length);
     R.qdFiles.innerHTML = toSave.map((it) => `<button class="px-btn px-btn--ok px-btn--block" type="button" data-act="save" data-id="${it.id}">Salva ${esc(it.name)}</button>`).join('');
     R.qdNote.hidden = !(S.length && pMB && Math.abs(outMB / pMB - 1) > 0.15);
-    R.qdNote.textContent = 'Peso reale oltre il 15 % dalla previsione: la stima usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.';
+    R.qdNote.textContent = 'Peso reale lontano più del 15 % dalla previsione: la stima usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.';
   }
 
   // ---------- passo 3: via ----------

@@ -20,6 +20,7 @@ LABEL="v$V · $when"
 sed -i -E "s#(\./app/(lib|ui)/[a-z0-9-]+\.js)(\?v=[^']*)?'#\1?v=$V'#g" index.html
 sed -i -E "s#(from '\./[a-z0-9-]+\.js)(\?v=[^']*)?'#\1?v=$V'#g" app/lib/*.js app/ui/*.js app/ui/preview.html
 sed -i -E "s#(opfs-worker\.js)(\?v=[^']*)?'#\1?v=$V'#g" app/lib/opfs.js
+sed -i -E 's#(app/ui/(theme|ui)\.css)(\?v=[^"]*)?"#\1?v='"$V"'"#g' index.html  # v0.36.1: CSS versionati (Safari serviva ui.css vecchio)
 sed -i -E "s#Compressore HDR v[0-9][0-9A-Za-z.]*#Compressore HDR v$V#g" index.html
 # 2) BUILD_ID / etichetta in index.html (le costanti vengono riscritte, qualunque valore avessero)
 sed -i -E "s#^(const BUILD_ID = )'[^']*';#\1'$BUILD_ID';#; s#^(const BUILD_LABEL = )'[^']*';#\1'$LABEL';#" index.html
@@ -41,7 +42,7 @@ def visit(path, ref):                       # path: file su disco; ref: URL come
         visit(t, t + '?v=' + v)
 for m in re.finditer(r"from '\./(app/[^'?]+\.js)\?v=[^']*'", html): visit(m.group(1), m.group(1) + '?v=' + v)
 if not seen: sys.exit('stamp-version: nessun modulo in index.html')
-css = re.findall(r'<link rel="stylesheet" href="(app/[^"?]+\.css)"', html)
+css = re.findall(r'<link rel="stylesheet" href="(app/[^"?]+\.css(?:\?v=[^"]*)?)"', html)  # v0.36.1: con ?v= come li chiede la pagina
 icons = sorted('icons/' + f for f in os.listdir('icons') if f.endswith('.png'))
 # v0.30: dipendenze in locale come in finally-cool-film (offline su iOS): bundle Mediabunny e font Google copiati in vendor/
 vend = re.findall(r"from '\./(vendor/[^'?]+)'", html)
@@ -71,5 +72,5 @@ grep -q "<title>Compressore HDR v$V</title>" index.html || fail "titolo non timb
 grep -q "^const VERSION = '$BUILD_ID';" sw.js || fail "VERSION non timbrata in sw.js"
 [ "$(cat version.txt)" = "$BUILD_ID" ] || fail "version.txt"
 grep -q "__BUILD" index.html sw.js && fail "segnaposto rimasti" || true
-grep -rhoE "\?v=[^'\"]*['\"]" index.html app --include=*.js --include=*.html | grep -vxF "?v=$V'" | grep -q . && fail "?v= con valore diverso da $V" || true
+grep -rhoE "\?v=[^'\"]*['\"]" index.html app --include=*.js --include=*.html | grep -vxF -e "?v=$V'" -e "?v=$V\"" | grep -q . && fail "?v= con valore diverso da $V" || true
 echo "stamped $BUILD_ID ($LABEL)"
