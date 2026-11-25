@@ -283,3 +283,5 @@ details.fcv-log > summary .count { margin-left: auto; }
 .fcv-pred-note[hidden] { display: none; }
 .fcv-open-safari { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
 .fcv-open-safari[hidden] { display: none; }
+.fcv-est-tbl .vary { display: block; }
+.fcv-est-tbl .v { white-space: nowrap; }

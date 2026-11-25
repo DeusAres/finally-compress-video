@@ -325,12 +325,17 @@ async function start(s) {
   }
 }
 
-async function run({ forceFresh = false } = {}) {
+// v0.35.4: il demuxer Mediabunny (Input + BlobSource: cache delle letture, tabelle dei campioni, decoder audio interni) è
+// sempre disposto a fine run, anche su errore/annullo/interruzione: prima restava vivo fino al GC (e con lui il File).
+async function run(opts) {
+  const input = new MB.Input({ source: new MB.BlobSource(file), formats: MB.ALL_FORMATS });
+  try { return await runWith(input, opts); } finally { try { input.dispose?.(); } catch {} }
+}
+async function runWith(input, { forceFresh = false } = {}) {
   const T0 = performance.now(); setProg('analisi', 0, 'lettura pacchetti');
   const bitrate = cfg.bitrateMbps * 1e6, gopSec = cfg.keyframeS, fastStart = false; // moov in coda: necessario per riscrivere il moov
   const sceneQ = !!cfg.sceneQ; // «Qualità garantita per scena» (v0.28): bitrate = limite superiore, target scelto per segmento dalle prove
   // 1. Demux (in cache per la ripresa in memoria dopo un errore)
-  const input = new MB.Input({ source: new MB.BlobSource(file), formats: MB.ALL_FORMATS });
   const vt = await input.getPrimaryVideoTrack(); if (!vt) throw new Error('nessuna traccia video');
   let A = analysis?.file === file ? analysis : null;
   if (A) log('analisi riusata dalla run precedente (ripresa in memoria)');

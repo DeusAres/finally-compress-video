@@ -21,9 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 const req = createRequire(import.meta.url);
 let pw; try { pw = req('playwright'); } catch { pw = req(join(execFileSync('npm', ['root', '-g']).toString().trim(), 'playwright')); }
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
-const N = +arg('--n', 4), SRC = resolve(ROOT, arg('--sample', 'samples/IMG_7440.mov'));
+// --root: cartella servita (es. un `git worktree` di una versione precedente, per le misure «prima»); il campione resta quello del repo
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..'), ROOT = resolve(arg('--root', REPO));
+const N = +arg('--n', 4), SRC = resolve(REPO, arg('--sample', 'samples/IMG_7440.mov'));
 const ONLY = arg('--only', 'nuovo,annulla,errore,impostazioni,ripresa').split(',');
 
 // ---- campione H.264 (Chromium) ----
@@ -89,7 +90,8 @@ const cdp = await ctx.newCDPSession(page);
 await page.goto(BASE); await page.waitForSelector('[data-ref="go"]');
 const app = '#app';
 const stage = () => page.$eval(app, (r) => r.dataset.stage);
-const waitStage = (list, ms = 120000) => page.waitForFunction((l) => l.includes(document.querySelector('#app').dataset.stage) && document.querySelector('#app').dataset.busy === 'false', list, { timeout: ms });
+const waitStage = (list, ms = 120000) => page.waitForFunction((l) => l.includes(document.querySelector('#app').dataset.stage) && document.querySelector('#app').dataset.busy === 'false', list, { timeout: ms })
+  .catch(async (e) => { console.log('TIMEOUT, ultime righe del log:\n' + (await page.evaluate(() => [...document.querySelectorAll('[data-ref="log"] div')].slice(-25).map((d) => d.textContent).join('\n')))); throw e; });
 const waitFile = () => page.waitForFunction(() => { const t = document.querySelector('[data-ref="fDur"]')?.textContent; return t && t !== '—'; }, null, { timeout: 30000 });
 const pick = async (path) => {
   const ref = (await page.$eval('[data-ref="fileBox"]', (b) => b.hidden)) ? 'input' : (await stage()) === 'done' ? 'input3' : 'input2';

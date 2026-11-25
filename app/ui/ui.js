@@ -3,7 +3,7 @@
 import { bus } from './bus.js?v=0.35.3';
 import { sprite, SPRITES } from './sprite.js?v=0.35.3';
 import { createLogStore } from './logstore.js?v=0.35.3';
-import { estimateOutBytes, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.3';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.35.3';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -389,9 +389,9 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const est = predictMB();
     const pct = src ? (1 - est / src) * 100 : null;
     const vary = st.settings.sceneQ; // qualità per scena: peso variabile (al massimo quello a bitrate fisso), tempo ≈ ×1.6
-    R.est.innerHTML = `${vary ? 'variabile, ≤' : '≈'} ${fmtMB(est)} <small>MB</small>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${vary ? 'almeno ' : ''}${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
+    R.est.innerHTML = `${vary ? '<small class="vary">variabile, al massimo</small>' : ''}<span class="v">${vary ? '≤' : '≈'} ${fmtMB(est)} <small>MB</small></span>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${vary ? 'almeno ' : ''}${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
     const tt = predictTime();
-    R.estT.innerHTML = `${vary ? 'variabile, ≈' : '≈'} ${fmtTime(tt.s)} <small>m:ss</small>`;
+    R.estT.innerHTML = `${vary ? '<small class="vary">variabile, circa</small>' : ''}<span class="v">≈ ${fmtTime(tt.s)} <small>m:ss</small></span>`;
     R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? ', 2 player' : ', 1 player'})${vary ? `, ×${nf1.format(SCENE_TIME_FACTOR)} per le prove per scena` : ''}${st.settings.downscale ? ' · estrazione dal 4K, uscita 1080p (stessa durata del 4K)' : ''}.`;
     R.estSrc.hidden = false;
     if (pct != null && pct < 10) {
