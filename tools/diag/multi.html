@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Più video insieme</title>
+<style>
+/* Layout: colonna unica da laboratorio, card impilate (stile di tools/diag/downscale10.html) */
+:root{--bg:#f6f7f9;--fg:#15191f;--mut:#5b6573;--card:#fff;--line:#dde2e8;--acc:#1d5fd1;--ok:#137a3a;--ko:#b3261e;--warn:#9a6700;--mono:ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif;margin:0 auto;padding:20px max(16px,env(safe-area-inset-right)) 40px max(16px,env(safe-area-inset-left));max-width:820px}
+h1{font-size:1.35rem;margin:0 0 4px;text-wrap:balance}h2{font-size:1rem;margin:0}
+p,li{color:var(--mut)}p{margin:0 0 12px}ol,ul{margin:0;padding-left:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;display:grid;gap:10px;min-width:0}
+button{font:inherit;background:var(--acc);color:var(--bg);border:0;border-radius:8px;padding:10px 14px;cursor:pointer;justify-self:start}
+button.sec{background:transparent;color:var(--acc);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:default}button:focus-visible{outline:3px solid var(--fg)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+label{display:flex;gap:6px;align-items:center;color:var(--fg)}
+select,input[type=file]{font:inherit;max-width:100%}
+pre{font:12px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:340px;margin:0;white-space:pre-wrap;word-break:break-word}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;font:12px var(--mono);min-width:100%}
+th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.ok{color:var(--ok)}.ko{color:var(--ko)}.warn{color:var(--warn)}
+#state{font:600 1rem var(--mono)}
+</style>
+</head>
+<body>
+<h1>Più video insieme <small style="font-size:.55em;opacity:.75">v1 · 25/11</small></h1>
+<p>Misura quante elaborazioni possono girare <b>contemporaneamente</b> su questo iPhone. Sale a scalini N = 1, 2, 3, 4, 6, 8… pipeline concorrenti (ognuna: 1–2 <code>&lt;video&gt;</code> con seek + rVFC → <code>VideoEncoder</code> HEVC a 8 Mbps sulla risoluzione nativa) e si ferma al primo errore o calo netto. Poi prova separatamente i soli encoder e i soli <code>&lt;video&gt;</code>. Ogni passo è scritto <b>prima</b> di eseguirlo: se iOS chiude la scheda per memoria, riaprendo la pagina vedi dove si è fermata.</p>
+
+<div class="card" id="crashCard" hidden><h2>Run precedente</h2><div id="crash"></div></div>
+
+<div class="card">
+  <h2>Impostazioni</h2>
+  <div class="row"><input type="file" id="file" accept="video/*" multiple></div>
+  <p style="margin:0" id="fileNote">Scegli uno o più video. Con un solo video, tutte le pipeline usano lo stesso file (ripetuto N volte).</p>
+  <div class="row">
+    <label>Frame per pipeline <select id="nf"><option value="240">240</option><option value="150">150</option><option value="300">300</option><option value="60">60 (prova rapida)</option></select></label>
+    <label>Player per pipeline <select id="np"><option value="2">2 (come l'app)</option><option value="1">1</option></select></label>
+    <label>N massimo <select id="nmax"><option value="8">8</option><option value="4">4</option><option value="6">6</option><option value="12">12</option><option value="16">16</option></select></label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="tPipe" checked> pipeline completa</label>
+    <label><input type="checkbox" id="tEnc" checked> solo encoder</label>
+    <label><input type="checkbox" id="tVid" checked> solo &lt;video&gt;</label>
+    <label><input type="checkbox" id="noStop"> continua anche se cala</label>
+  </div>
+  <div class="row">
+    <button id="go">Esegui</button>
+    <button id="resume" class="sec">Riprendi dallo scalino successivo</button>
+    <button id="stop" class="sec" disabled>Ferma dopo questo scalino</button>
+    <button id="clear" class="sec">Cancella log</button>
+  </div>
+  <div id="state">pronto</div>
+</div>
+
+<div class="card"><h2>Riepilogo scalini</h2><div class="tw" id="sum">Nessun dato.</div>
+<p style="margin:0">fps tot = frame di tutte le pipeline / tempo dello scalino (dalla prima estrazione all'ultima). fps/pipe = minimo–massimo fra le pipeline. bit = profondità dell'uscita letta dall'<code>hvcC</code> (deve restare 10). kbps = bitrate reale medio (target 8000).</p></div>
+
+<div class="card"><h2>Log persistente</h2><pre id="log">Vuoto.</pre></div>
+
+<div class="card"><h2>Risultati</h2><div class="row"><button id="copy">Copia risultati</button><span id="copied" class="ok"></span></div><pre id="oc">{}</pre></div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const PAGE = 'multi v1';
+const KEY = 'fcv-multi-log-v1', PKEY = 'fcv-multi-progress-v1', SKEY = 'fcv-multi-settings-v1';
+const LADDER = [1, 2, 3, 4, 6, 8, 12, 16];
+const TESTS = { pipe: 'pipeline completa', enc: 'solo encoder', vid: 'solo <video>' };
+const BITRATE = 8e6, MAX_FLIGHT = 4, DROP = 0.85, STALL_MS = 25000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+const errInfo = (e, where) => ({ where, name: e?.name || 'Error', msg: String(e?.message || e) });
+const r1 = (x) => Math.round(x * 10) / 10;
+
+/* ---------- log persistente: localStorage (sincrono) + IndexedDB (durability strict, atteso prima di ogni scalino) ---------- */
+let LOG = [], seq = 0, RUN = null, CHAIN = null;
+const live = { videos: new Set(), encoders: new Set(), frames: new Set() };
+function lsRead() { try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch { return []; } }
+function lsWrite() { try { localStorage.setItem(KEY, JSON.stringify(LOG)); return true; } catch { return false; } }
+let dbp = null;
+function db() {
+  if (dbp) return dbp;
+  dbp = new Promise((res) => {
+    try {
+      const r = indexedDB.open('fcv-multi', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('log', { keyPath: 's' });
+      r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null);
+    } catch { res(null); }
+  });
+  return dbp;
+}
+async function idbTx(mode, fn) {
+  const d = await db(); if (!d) return null;
+  return new Promise((res) => {
+    try {
+      const tx = d.transaction('log', mode, { durability: 'strict' }); const st = tx.objectStore('log'); let out = null;
+      const rq = fn(st); if (rq) rq.onsuccess = () => { out = rq.result; };
+      tx.oncomplete = () => res(out ?? true); tx.onerror = tx.onabort = () => res(null);
+    } catch { res(null); }
+  });
+}
+const idbPut = (e) => idbTx('readwrite', (st) => { st.put(e); });
+const idbAll = () => idbTx('readonly', (st) => st.getAll());
+const idbClear = () => idbTx('readwrite', (st) => { st.clear(); });
+async function persist(ev, o = {}, wait = false) {
+  const e = { s: ++seq, t: Date.now(), run: RUN, ev, ...o };
+  LOG.push(e); const okLs = lsWrite();
+  const p = idbPut(e);
+  if (wait) { const okDb = await p; if (!okLs && !okDb) setState('ATTENZIONE: log non salvato (storage pieno o bloccato)', 'ko'); }
+  render(); return e;
+}
+function progress(o) { try { localStorage.setItem(PKEY, JSON.stringify({ t: Date.now(), run: RUN, ...o })); } catch {} }
+function readProgress() { try { return JSON.parse(localStorage.getItem(PKEY) || 'null'); } catch { return null; } }
+
+/* ---------- analisi del log: crash = scalino iniziato e mai finito ---------- */
+function analyze() {
+  const crashes = []; let open = null, lastPhase = null;
+  for (const e of LOG) {
+    if (e.ev === 'step-start') { if (open) crashes.push({ step: open, phase: lastPhase }); open = e; lastPhase = null; }
+    else if (e.ev === 'phase' && open && e.run === open.run) lastPhase = e;
+    else if ((e.ev === 'step-end' || e.ev === 'step-abort') && open && e.run === open.run) { open = null; lastPhase = null; }
+    else if (e.ev === 'run-start' && open) { crashes.push({ step: open, phase: lastPhase }); open = null; lastPhase = null; }
+  }
+  if (open && open.run !== RUN) crashes.push({ step: open, phase: lastPhase, last: true });
+  return crashes;
+}
+function describeCrash(c) {
+  const s = c.step, p = c.phase;
+  let txt = `Interrotta durante «${TESTS[s.test] || s.test}» N=${s.N} (iniziato ${new Date(s.t).toLocaleTimeString('it-IT')})`;
+  if (p) txt += `, ultima fase: ${p.msg}`;
+  if (c.last) { const pr = readProgress(); if (pr && pr.run === s.run && pr.test === s.test && pr.N === s.N) txt += `, ultimo avanzamento: ${pr.frames} frame in ${r1(pr.ms / 1000)} s${pr.mem ? `, heap ${pr.mem} MB` : ''}`; }
+  return txt;
+}
+
+/* ---------- interfaccia ---------- */
+function setState(s, cls = '') { $('state').textContent = s; $('state').className = cls; }
+const stepEnds = () => LOG.filter((e) => e.ev === 'step-end');
+function render() {
+  const lines = LOG.slice(-400).map((e) => {
+    const tm = new Date(e.t).toLocaleTimeString('it-IT');
+    const tag = e.test ? ` ${e.test} N=${e.N}` : '';
+    let x = '';
+    if (e.ev === 'step-end') x = ` → ${e.res.totalFps} fps tot, errori ${e.res.errors.length}${e.res.bits.length ? ', bit ' + e.res.bits.join('/') : ''}`;
+    else if (e.msg) x = ' ' + e.msg;
+    else if (e.err) x = ` ${e.err.name}: ${e.err.msg}`;
+    else if (e.why) x = ' ' + e.why;
+    return `${tm} [${(e.run || '').slice(-4)}] ${e.ev}${tag}${x}`;
+  });
+  $('log').textContent = lines.length ? lines.join('\n') : 'Vuoto.';
+  const ends = stepEnds();
+  if (!ends.length) $('sum').textContent = 'Nessun dato.';
+  else {
+    const rows = ends.map((e) => {
+      const r = e.res, cls = r.errors.length ? 'ko' : '';
+      const errs = r.errors.map((x) => `${x.where}: ${x.name} ${x.msg}`).join('; ');
+      return `<tr class="${cls}"><td>${(e.run || '').slice(-4)}</td><td>${r.test}</td><td class="n">${r.N}</td><td class="n">${r.totalFps}</td><td class="n">${r.fpsMin}–${r.fpsMax}</td><td>${r.bits.join('/') || '–'}</td><td class="n">${r.kbps ?? '–'}</td><td class="n">${r.dup}/${r.noCb}</td><td class="n">${r.wallS}</td><td>${r.mem ?? '–'}</td><td>${escapeHtml(errs) || '–'}</td></tr>`;
+    }).join('');
+    $('sum').innerHTML = `<table><thead><tr><th>run</th><th>test</th><th>N</th><th>fps tot</th><th>fps/pipe</th><th>bit</th><th>kbps</th><th>dopp/noCb</th><th>s</th><th>heap MB</th><th>errori</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  const cr = analyze();
+  $('crashCard').hidden = !cr.length;
+  if (cr.length) $('crash').innerHTML = cr.slice(-5).map((c) => `<p class="ko" style="margin:0 0 6px">${escapeHtml(describeCrash(c))}</p>`).join('') + '<p style="margin:0">Probabile chiusura della scheda da parte di iOS (memoria) o crash del processo. «Riprendi» riparte dallo scalino successivo.</p>';
+  $('oc').textContent = JSON.stringify(results(), null, 1).slice(0, 20000);
+}
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function results() {
+  return {
+    page: PAGE, at: new Date().toISOString(), ua: navigator.userAgent, deviceMemory: navigator.deviceMemory ?? null,
+    cores: navigator.hardwareConcurrency ?? null, crashes: analyze().map((c) => ({ test: c.step.test, N: c.step.N, run: c.step.run, at: new Date(c.step.t).toISOString(), phase: c.phase?.msg || null, text: describeCrash(c) })),
+    steps: stepEnds().map((e) => ({ run: e.run, ...e.res })), log: LOG,
+  };
+}
+function readSettings() {
+  return {
+    frames: +$('nf').value, players: +$('np').value, maxN: +$('nmax').value, noStop: $('noStop').checked,
+    tests: [['pipe', 'tPipe'], ['enc', 'tEnc'], ['vid', 'tVid']].filter(([, id]) => $(id).checked).map(([k]) => k),
+  };
+}
+function applySettings(s) {
+  if (!s) return;
+  if (s.frames) $('nf').value = String(s.frames); if (s.players) $('np').value = String(s.players); if (s.maxN) $('nmax').value = String(s.maxN);
+  $('noStop').checked = !!s.noStop;
+  if (s.tests) { $('tPipe').checked = s.tests.includes('pipe'); $('tEnc').checked = s.tests.includes('enc'); $('tVid').checked = s.tests.includes('vid'); }
+}
+function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(readSettings())); } catch {} }
+for (const id of ['nf', 'np', 'nmax', 'noStop', 'tPipe', 'tEnc', 'tVid']) $(id).addEventListener('change', saveSettings);
+
+/* ---------- media ---------- */
+const waitEv = (el, ev, ms) => new Promise((res) => {
+  let t = 0; const f = () => { clearTimeout(t); res(ev); };
+  t = setTimeout(() => { el.removeEventListener(ev, f); res('timeout'); }, ms);
+  el.addEventListener(ev, f, { once: true });
+});
+async function openVideo(file) {
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = URL.createObjectURL(file); live.videos.add(v);
+  try {
+    if (v.readyState < 1 && (await waitEv(v, 'loadedmetadata', 10000)) === 'timeout') throw Object.assign(new Error('loadedmetadata timeout'), { name: 'TimeoutError' });
+    if (v.error) throw Object.assign(new Error('media error ' + v.error.code), { name: 'MediaError' });
+    try { await Promise.race([v.play(), sleep(3000)]); v.pause(); } catch { /* autoplay rifiutato: i seek funzionano comunque */ }
+  } catch (e) { releaseVideo(v); throw e; }
+  return v;
+}
+function releaseVideo(v) {
+  try { v.pause(); } catch {}
+  try { URL.revokeObjectURL(v.src); } catch {}
+  v.removeAttribute('src'); try { v.load(); } catch {}
+  live.videos.delete(v);
+}
+function closeFrame(vf) { try { vf.close(); } catch {} live.frames.delete(vf); }
+function closeEncoder(enc) { try { if (enc.state !== 'closed') enc.close(); } catch {} live.encoders.delete(enc); }
+function releaseAll() {
+  for (const vf of [...live.frames]) closeFrame(vf);
+  for (const e of [...live.encoders]) closeEncoder(e);
+  for (const v of [...live.videos]) releaseVideo(v);
+}
+
+/** Frame rate e durata: riproduzione muta breve, mediana degli intervalli di mediaTime (rVFC). */
+async function probe(file) {
+  const v = await openVideo(file);
+  try {
+    const info = { name: file.name, sizeMB: r1(file.size / 1048576), dur: v.duration, w: v.videoWidth, h: v.videoHeight, fps: 30, fpsSource: 'ipotesi' };
+    if (v.requestVideoFrameCallback) {
+      const mts = [];
+      v.currentTime = 0; await waitEv(v, 'seeked', 3000);
+      const done = new Promise((res) => {
+        const cb = (_, md) => { mts.push(md.mediaTime); if (mts.length < 14) v.requestVideoFrameCallback(cb); else res(); };
+        v.requestVideoFrameCallback(cb); setTimeout(res, 2000);
+      });
+      try { await v.play(); } catch {}
+      await done; v.pause();
+      const d = []; for (let i = 1; i < mts.length; i++) { const x = mts[i] - mts[i - 1]; if (x > 1e-4) d.push(x); }
+      d.sort((a, b) => a - b);
+      if (d.length >= 3) { const m = d[d.length >> 1]; info.fps = Math.min(240, Math.max(10, r1(1 / m))); info.fpsSource = 'rVFC'; }
+    }
+    return info;
+  } finally { releaseVideo(v); }
+}
+function frameTime(info, i) {
+  const n = Math.max(1, Math.floor(info.dur * info.fps) - 1), k = i % n;
+  return { t: (k + 0.5) / info.fps, ts: Math.round(i * 1e6 / info.fps), dur: Math.round(1e6 / info.fps) };
+}
+const newPs = () => ({ n: 0, dup: 0, noCb: 0, retried: 0, prev: null });
+/** Un frame: rVFC chiesto PRIMA del seek, 'seeked', mediaTime (doppioni/assenti), poi new VideoFrame(video) — come app/lib/frames.js. */
+async function grab(v, ft, ps) {
+  const pr = new Promise((res) => {
+    if (!v.requestVideoFrameCallback) return res(undefined);
+    let done = false; const fin = (x) => { if (!done) { done = true; res(x); } };
+    const to = setTimeout(() => setTimeout(() => fin(null), 60), 250);
+    v.requestVideoFrameCallback((_, md) => { clearTimeout(to); fin(md.mediaTime); });
+  });
+  v.currentTime = ft.t;
+  let ev = await waitEv(v, 'seeked', 4000);
+  if (ev === 'timeout') {
+    ps.retried++; v.currentTime = ft.t + 1e-6; ev = await waitEv(v, 'seeked', 4000);
+    if (ev === 'timeout') throw Object.assign(new Error(`seek timeout @${ft.t.toFixed(3)}s`), { name: 'TimeoutError' });
+  }
+  const mt = await pr; ps.n++;
+  if (mt === null) ps.noCb++;
+  else if (mt !== undefined) { if (ps.prev != null && Math.abs(mt - ps.prev) < 1e-4) ps.dup++; ps.prev = mt; }
+  const vf = new VideoFrame(v, { timestamp: ft.ts, duration: ft.dur }); live.frames.add(vf);
+  return vf;
+}
+/** Estrazione con P player (pari/dispari), consegna in ordine; al massimo MAX_FLIGHT frame vivi. consume(vf, i) non deve chiudere vf. */
+async function extract(videos, info, F, players, ctx, consume) {
+  const P = videos.length, buf = new Map(); let next = 0, fail = null, stop = false, waiters = [];
+  const notify = () => { const w = waiters; waiters = []; w.forEach((r) => r()); };
+  const wake = () => new Promise((r) => { waiters.push(r); setTimeout(r, 500); });
+  const worker = async (p) => {
+    try {
+      for (let i = p; i < F; i += P) {
+        while (!fail && !stop && !ctx.abort && i >= next + MAX_FLIGHT) await wake();
+        if (fail || stop || ctx.abort) return;
+        const vf = await grab(videos[p], frameTime(info, i), players[p]);
+        if (fail || stop || ctx.abort) { closeFrame(vf); return; }
+        buf.set(i, vf); notify();
+      }
+    } catch (e) { fail = fail || errInfo(e, `player ${p + 1}`); notify(); }
+  };
+  const ws = videos.map((_, p) => worker(p));
+  try {
+    while (next < F) {
+      if (ctx.abort) throw Object.assign(new Error(ctx.abort), { name: 'AbortError' });
+      if (fail) throw Object.assign(new Error(fail.msg), { name: fail.name, where: fail.where });
+      const vf = buf.get(next);
+      if (!vf) { await wake(); continue; }
+      buf.delete(next);
+      try { await consume(vf, next); } finally { closeFrame(vf); }
+      next++; notify();
+    }
+  } finally {
+    stop = true; notify(); await Promise.allSettled(ws);
+    for (const vf of buf.values()) closeFrame(vf); buf.clear();
+  }
+}
+
+/* ---------- encoder ---------- */
+let CODEC = null; // {name, hevc, fallback, str(w,h)}
+async function pickCodec() {
+  const hevcStr = (w, h) => (w * h <= 2228224 ? 'hvc1.2.4.L123.B0' : w * h <= 8912896 ? 'hvc1.2.4.L153.B0' : 'hvc1.2.4.L186.B0');
+  const cands = [
+    { name: 'HEVC', hevc: true, fallback: false, str: hevcStr },
+    { name: 'H.264 (RIPIEGO: questo browser non codifica HEVC, misura solo la logica)', hevc: false, fallback: true, str: () => 'avc1.640033' },
+    { name: 'VP8 (RIPIEGO: niente HEVC/H.264, misura solo la logica)', hevc: false, fallback: true, str: () => 'vp8' },
+  ];
+  if (typeof VideoEncoder === 'undefined') throw Object.assign(new Error('VideoEncoder assente'), { name: 'NotSupportedError' });
+  for (const c of cands) {
+    try { const r = await VideoEncoder.isConfigSupported({ codec: c.str(1920, 1080), width: 1920, height: 1080, bitrate: BITRATE, framerate: 60 }); if (r.supported) return c; } catch {}
+  }
+  throw Object.assign(new Error('nessun codec video supportato'), { name: 'NotSupportedError' });
+}
+const bytesOf = (d) => d instanceof Uint8Array ? d : d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
+function descInfo(cfg) {
+  const o = { codec: cfg.codec, descLen: cfg.description?.byteLength ?? 0 };
+  try {
+    if (cfg.description && /^(hvc1|hev1)/.test(cfg.codec)) {
+      const b = bytesOf(cfg.description);
+      Object.assign(o, { profileIdc: b[1] & 31, levelIdc: b[12], chroma: b[16] & 3, bitDepth: (b[17] & 7) + 8, bitDepthChroma: (b[18] & 7) + 8 });
+    } else if (cfg.description && /^avc1/.test(cfg.codec)) { const b = bytesOf(cfg.description); Object.assign(o, { profileIdc: b[1], levelIdc: b[3], bitDepth: 8 }); }
+    else o.bitDepth = 8;
+  } catch (e) { o.parseErr = String(e.message || e); }
+  return o;
+}
+function makeEncoder(w, h, fps, rec) {
+  const enc = new VideoEncoder({
+    output: (ch, meta) => { rec.bytes += ch.byteLength; rec.chunks++; if (meta?.decoderConfig && !rec.out) rec.out = descInfo(meta.decoderConfig); },
+    error: (e) => { rec.err = rec.err || errInfo(e, 'encoder'); },
+  });
+  live.encoders.add(enc);
+  try { enc.configure({ codec: CODEC.str(w, h), width: w, height: h, bitrate: BITRATE, framerate: fps, latencyMode: 'quality', bitrateMode: 'variable' }); }
+  catch (e) { closeEncoder(enc); throw Object.assign(e, { where: 'configure' }); }
+  return enc;
+}
+async function drain(enc, rec) {
+  while (enc.encodeQueueSize > MAX_FLIGHT && !rec.err && enc.state === 'configured') await new Promise((r) => { enc.addEventListener('dequeue', r, { once: true }); setTimeout(r, 200); });
+  if (rec.err) throw Object.assign(new Error(rec.err.msg), { name: rec.err.name, where: rec.err.where });
+}
+async function flush(enc, rec) {
+  let to = 0;
+  try { await Promise.race([enc.flush(), new Promise((_, rej) => { to = setTimeout(() => rej(Object.assign(new Error('flush oltre 20 s'), { name: 'TimeoutError' })), 20000); })]); }
+  catch (e) { if (!rec.err) rec.err = errInfo(e, 'flush'); }
+  finally { clearTimeout(to); }
+}
+
+/* ---------- sorgente per «solo encoder»: 6 frame nativi del primo video (10 bit) o sintetici da canvas ---------- */
+async function prepEncSource(S) {
+  const src = { frames: [], native: false, w: 1920, h: 1080, fps: 60 };
+  if (S.files.length) {
+    const info = S.infos[0], v = await openVideo(S.files[0]), ps = newPs();
+    try {
+      for (let k = 0; k < 6; k++) { const i = Math.floor((k + 0.5) * Math.max(1, info.dur * info.fps - 2) / 6); const vf = await grab(v, frameTime(info, i), ps); live.frames.delete(vf); src.frames.push(vf); }
+    } finally { releaseVideo(v); }
+    Object.assign(src, { native: true, w: src.frames[0].displayWidth, h: src.frames[0].displayHeight, fps: info.fps, format: src.frames[0].format ?? null });
+  } else {
+    const c = new OffscreenCanvas(1920, 1080), g = c.getContext('2d');
+    for (let k = 0; k < 6; k++) {
+      g.fillStyle = `hsl(${k * 60},60%,50%)`; g.fillRect(0, 0, 1920, 1080);
+      const img = g.getImageData(0, 0, 480, 270); for (let j = 0; j < img.data.length; j++) img.data[j] = Math.random() * 255; g.putImageData(img, k * 200, 300);
+      src.frames.push(new VideoFrame(c, { timestamp: 0 }));
+    }
+  }
+  return src;
+}
+
+/* ---------- uno scalino ---------- */
+function memMB() { const m = performance.memory; return m ? Math.round(m.usedJSHeapSize / 1048576) : null; }
+async function runPipe(test, i, S, ctx, step) {
+  const rec = { i, file: null, frames: 0, bytes: 0, chunks: 0, out: null, err: null, openMs: 0, t0: 0, t1: 0, players: [] };
+  step.recs.push(rec);
+  const videos = []; let enc = null, src = null;
+  try {
+    if (test === 'enc') {
+      src = S.encSrc; rec.file = src.native ? S.infos[0].name + ' (6 frame nativi)' : 'sintetico canvas 8 bit';
+      enc = makeEncoder(src.w, src.h, src.fps, rec);
+      rec.t0 = performance.now();
+      for (let k = 0; k < S.frames && !ctx.abort; k++) {
+        const vf = new VideoFrame(src.frames[k % src.frames.length], { timestamp: Math.round(k * 1e6 / src.fps), duration: Math.round(1e6 / src.fps) });
+        try { enc.encode(vf, { keyFrame: k === 0 }); } finally { vf.close(); }
+        rec.frames++; step.count++;
+        await drain(enc, rec);
+      }
+      await flush(enc, rec); rec.t1 = performance.now();
+      return;
+    }
+    const fi = i % S.files.length, info = S.infos[fi]; rec.file = info.name;
+    const to = performance.now();
+    for (let p = 0; p < S.players; p++) videos.push(await openVideo(S.files[fi]));
+    rec.openMs = Math.round(performance.now() - to);
+    rec.players = videos.map(() => newPs());
+    rec.t0 = performance.now();
+    await extract(videos, info, S.frames, rec.players, ctx, async (vf, idx) => {
+      if (test === 'pipe') {
+        if (!enc) { rec.w = vf.displayWidth; rec.h = vf.displayHeight; rec.inFormat = vf.format ?? null; enc = makeEncoder(vf.displayWidth, vf.displayHeight, info.fps, rec); }
+        enc.encode(vf, { keyFrame: idx === 0 });
+        await drain(enc, rec);
+      }
+      rec.frames++; step.count++;
+    });
+    if (enc) await flush(enc, rec);
+    rec.t1 = performance.now();
+    rec.srcFps = info.fps;
+  } catch (e) {
+    if (!rec.err) rec.err = errInfo(e, e.where || (test === 'enc' ? 'encoder' : 'pipeline'));
+    rec.t1 = rec.t1 || performance.now();
+  } finally {
+    if (enc) closeEncoder(enc);
+    for (const v of videos) releaseVideo(v);
+  }
+}
+async function runStep(test, N, S) {
+  const step = { recs: [], count: 0 }, ctx = { abort: null };
+  const tStart = performance.now(); let lastCount = -1, lastChange = tStart;
+  persist('phase', { test, N, msg: test === 'enc' ? `avvio ${N} encoder` : `apertura ${N}×${S.players} <video>${test === 'pipe' ? ` + ${N} encoder` : ''}` });
+  const timer = setInterval(() => {
+    const now = performance.now();
+    if (step.count !== lastCount) { lastCount = step.count; lastChange = now; }
+    else if (now - lastChange > STALL_MS && !ctx.abort) ctx.abort = `stallo: nessun frame da ${STALL_MS / 1000} s`;
+    const mem = memMB();
+    progress({ test, N, frames: step.count, ms: Math.round(now - tStart), mem });
+    setState(`${TESTS[test]} N=${N}: ${step.count}/${N * S.frames} frame, ${r1((now - tStart) / 1000)} s`);
+  }, 1000);
+  try { await Promise.all(Array.from({ length: N }, (_, i) => runPipe(test, i, S, ctx, step))); }
+  finally { clearInterval(timer); }
+  persist('phase', { test, N, msg: 'rilascio risorse' });
+  releaseAll();
+  const recs = step.recs.sort((a, b) => a.i - b.i);
+  const ok = recs.filter((r) => r.t1 > r.t0 && r.frames);
+  const t0 = Math.min(...ok.map((r) => r.t0)), t1 = Math.max(...ok.map((r) => r.t1));
+  const sumF = recs.reduce((a, r) => a + r.frames, 0);
+  const fpsOf = (r) => (r.t1 > r.t0 ? r1(r.frames / ((r.t1 - r.t0) / 1000)) : 0);
+  const errors = recs.filter((r) => r.err).map((r) => ({ pipe: r.i, ...r.err }));
+  if (ctx.abort && !errors.length) errors.push({ pipe: -1, where: 'scalino', name: 'TimeoutError', msg: ctx.abort });
+  const bits = [...new Set(recs.map((r) => r.out?.bitDepth).filter((x) => x != null))];
+  const kb = recs.filter((r) => r.bytes && r.frames).map((r) => (r.bytes * 8) / (r.frames / (r.srcFps || S.encSrc?.fps || 60)) / 1000);
+  const fpsList = recs.map(fpsOf);
+  const ps = recs.flatMap((r) => r.players);
+  return {
+    test, N, P: test === 'enc' ? 0 : S.players, F: S.frames, codec: CODEC?.name,
+    totalFps: ok.length ? r1(sumF / ((t1 - t0) / 1000)) : 0, fpsMin: Math.min(...fpsList), fpsMax: Math.max(...fpsList),
+    wallS: r1((performance.now() - tStart) / 1000), frames: sumF, bits, kbps: kb.length ? Math.round(kb.reduce((a, b) => a + b, 0) / kb.length) : null,
+    dup: ps.reduce((a, p) => a + p.dup, 0), noCb: ps.reduce((a, p) => a + p.noCb, 0), retried: ps.reduce((a, p) => a + p.retried, 0),
+    mem: memMB(), errors,
+    pipes: recs.map((r) => ({ i: r.i, file: r.file, frames: r.frames, fps: fpsOf(r), openMs: r.openMs, w: r.w, h: r.h, inFormat: r.inFormat, out: r.out, err: r.err })),
+  };
+}
+
+/* ---------- scala di scalini ---------- */
+let running = false, stopReq = false;
+async function runLadder(test, startN, S) {
+  let best = 0;
+  for (const e of LOG) if (e.ev === 'step-end' && e.chain === CHAIN && e.test === test) best = Math.max(best, e.res.totalFps);
+  for (const N of LADDER.filter((n) => n >= startN && n <= S.maxN)) {
+    if (stopReq) { await persist('stop', { test, N, why: "fermato dall'utente" }, true); return 'user'; }
+    await persist('step-start', { chain: CHAIN, test, N, msg: `sto per avviare ${TESTS[test]} N=${N}` }, true);
+    await sleep(300); // margine perché la scrittura arrivi su disco prima del carico
+    const res = await runStep(test, N, S);
+    await persist('step-end', { chain: CHAIN, test, N, res }, true);
+    if (res.errors.length) { await persist('stop', { test, N, why: 'errore: ' + res.errors.map((x) => `${x.where} ${x.name}: ${x.msg}`).join('; ') }, true); return 'err'; }
+    if (CODEC.hevc && test !== 'vid' && (test === 'pipe' || S.encSrc?.native) && res.bits.some((b) => b !== 10)) { await persist('stop', { test, N, why: `bit depth uscita ${res.bits.join('/')} (atteso 10)` }, true); return 'err'; }
+    if (!S.noStop && N > 1 && best > 0 && res.totalFps < DROP * best) { await persist('stop', { test, N, why: `calo netto: ${res.totalFps} fps tot contro ${best} (< ${DROP * 100} %)` }, true); return 'drop'; }
+    best = Math.max(best, res.totalFps);
+    await sleep(800); // tempo al GC / al GPU process per liberare le sessioni
+  }
+  return 'done';
+}
+function resumePoint() {
+  const st = [...LOG].reverse().find((e) => e.ev === 'step-start');
+  if (!st) return null;
+  const rs = LOG.find((e) => e.ev === 'run-start' && e.run === st.run);
+  return { chain: st.chain || rs?.chain || st.run, settings: rs?.settings, files: rs?.files, test: st.test, N: st.N };
+}
+async function run(resume) {
+  if (running) return;
+  let S = readSettings();
+  const files = [...$('file').files];
+  let plan = S.tests.map((t) => ({ test: t, startN: 1 }));
+  let rp = null;
+  if (resume) {
+    rp = resumePoint();
+    if (!rp) { setState('niente da riprendere: nessuno scalino nel log', 'warn'); return; }
+    if (rp.settings) { applySettings(rp.settings); S = readSettings(); }
+    const ti = S.tests.indexOf(rp.test);
+    const nextN = LADDER.find((n) => n > rp.N && n <= S.maxN);
+    plan = S.tests.slice(Math.max(0, ti)).map((t, k) => ({ test: t, startN: k === 0 && ti >= 0 ? nextN : 1 })).filter((p) => p.startN != null);
+    if (!plan.length) { setState('niente da riprendere: scala già completata', 'warn'); return; }
+  }
+  if (!S.tests.length) { setState('scegli almeno un test', 'warn'); return; }
+  if (!files.length && plan.some((p) => p.test !== 'enc')) { setState('scegli almeno un video', 'warn'); return; }
+  running = true; stopReq = false; RUN = newId(); CHAIN = rp ? rp.chain : RUN;
+  $('go').disabled = $('resume').disabled = $('clear').disabled = true; $('stop').disabled = false;
+  let wl = null; try { wl = await navigator.wakeLock?.request('screen'); } catch {}
+  const S2 = { ...S, files, infos: [], encSrc: null };
+  try {
+    await persist('run-start', { chain: CHAIN, resume: !!resume, from: rp ? `${rp.test} N=${rp.N}` : null, settings: S, plan, files: files.map((f) => ({ name: f.name, sizeMB: r1(f.size / 1048576) })), ua: navigator.userAgent }, true);
+    if (rp?.files && files.length && rp.files.map((f) => f.name).join() !== files.map((f) => f.name).join()) await persist('note', { msg: `attenzione: video diversi dalla run ripresa (${rp.files.map((f) => f.name).join(', ')})` });
+    CODEC = await pickCodec();
+    await persist('note', { msg: `codec: ${CODEC.name}` }, true);
+    setState('analisi dei video…');
+    for (const f of files) S2.infos.push(await probe(f));
+    if (S2.infos.length) await persist('note', { msg: 'video: ' + S2.infos.map((x) => `${x.name} ${x.w}×${x.h} ${x.fps} fps (${x.fpsSource}) ${r1(x.dur)} s`).join('; ') });
+    for (const p of plan) {
+      if (stopReq) break;
+      if (p.test === 'enc') { S2.encSrc = await prepEncSource(S2); await persist('note', { msg: `sorgente encoder: ${S2.encSrc.native ? 'frame nativi' : 'sintetica'} ${S2.encSrc.w}×${S2.encSrc.h} format=${S2.encSrc.format ?? 'n/d'}` }); }
+      try { const r = await runLadder(p.test, p.startN, S2); if (r === 'user') break; }
+      finally { if (S2.encSrc) { for (const vf of S2.encSrc.frames) { try { vf.close(); } catch {} } S2.encSrc = null; } }
+    }
+    setState(stopReq ? 'fermato' : 'finito: premi «Copia risultati»', 'ok');
+  } catch (e) {
+    await persist('run-error', { err: errInfo(e, 'run') }, true);
+    setState(`errore: ${e?.name || ''} ${e?.message || e}`, 'ko');
+  } finally {
+    releaseAll();
+    await persist('run-end', {}, true);
+    try { await wl?.release(); } catch {}
+    running = false; $('go').disabled = $('resume').disabled = $('clear').disabled = false; $('stop').disabled = true;
+  }
+}
+
+$('go').onclick = () => run(false);
+$('resume').onclick = () => run(true);
+$('stop').onclick = () => { stopReq = true; $('stop').disabled = true; setState('mi fermo alla fine di questo scalino…', 'warn'); };
+$('clear').onclick = async () => {
+  if (running) return;
+  LOG = []; seq = 0; try { localStorage.removeItem(KEY); localStorage.removeItem(PKEY); } catch {}
+  await idbClear(); render(); setState('log cancellato');
+};
+$('copy').onclick = async () => {
+  const s = JSON.stringify(results());
+  try { await navigator.clipboard.writeText(s); $('copied').textContent = 'Copiato'; }
+  catch {
+    const ta = document.createElement('textarea'); ta.value = s; document.body.append(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch {}
+    ta.remove(); $('copied').textContent = ok ? 'Copiato' : 'Copia non riuscita: seleziona il riquadro sotto';
+  }
+  setTimeout(() => { $('copied').textContent = ''; }, 3000);
+};
+$('file').onchange = () => {
+  const n = $('file').files.length, rp = resumePoint();
+  $('fileNote').textContent = n === 1 ? 'Un video: tutte le pipeline usano lo stesso file (ripetuto N volte).' : `${n} video: la pipeline i usa il video i mod ${n}.`;
+  if (rp?.files?.length) $('fileNote').textContent += ` Run da riprendere: ${rp.files.map((f) => f.name).join(', ')}.`;
+};
+
+/* ---------- avvio: ricarica la cronologia (unione localStorage + IndexedDB) ---------- */
+(async () => {
+  try { applySettings(JSON.parse(localStorage.getItem(SKEY) || 'null')); } catch {}
+  const a = lsRead(), b = (await idbAll()) || [];
+  const m = new Map(); for (const e of [...a, ...b]) if (e && e.s != null) m.set(e.s, e);
+  LOG = [...m.values()].sort((x, y) => x.s - y.s); seq = LOG.reduce((x, e) => Math.max(x, e.s), 0);
+  lsWrite();
+  render();
+  const cr = analyze();
+  if (cr.length && cr[cr.length - 1].last) { setState('la run precedente si è interrotta: vedi sopra', 'ko'); const rp = resumePoint(); if (rp?.files?.length) $('fileNote').textContent += ` Per riprendere riscegli: ${rp.files.map((f) => f.name).join(', ')}.`; }
+  window.__multi = { ready: true, get log() { return LOG; }, results, analyze };
+})();
+</script>
+</body>
+</html>
