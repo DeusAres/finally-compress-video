@@ -7,8 +7,8 @@
 // Time alignment: the video pipeline rebases timestamps by -frames[0].ts (usually 0) and drops packets with ts<0.
 // For apac NO sample is cut: the same shift is applied through the edit list (media_time += shift, duration -= shift),
 // so the presentation of apac matches the source exactly (priming kept as in the source elst).
-import { parseBoxes, childBoxes, findBox, boxBytes, trakHandler } from './dovi.js?v=0.35.4';
-import { makeBox, rebuild } from './mp4-post.js?v=0.35.4';
+import { parseBoxes, childBoxes, findBox, boxBytes, trakHandler } from './dovi.js?v=0.35.5';
+import { makeBox, rebuild } from './mp4-post.js?v=0.35.5';
 
 const u16 = (b, o) => (b[o] << 8) | b[o + 1];
 const u32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
