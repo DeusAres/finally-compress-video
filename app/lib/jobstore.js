@@ -6,7 +6,8 @@
 //   seg-NNNN.json   {k, n, bytes, rpu, packets:[{ts,dur,type,offset,size}]}  (ts/dur in seconds, output timeline)
 // A segment counts as done only when the manifest says so AND its index + binary size agree (verifiedDone).
 // Writes go through the SyncAccessHandle worker (opfs-worker.js): no packet is kept in RAM after its write is acked.
-import { opfsWorker } from './opfs.js?v=0.37.0';
+import { opfsWorker } from './opfs.js?v=0.37.1';
+import { ledger, STATE } from './storage.js?v=0.37.1';
 
 export const JOB_VERSION = 1;
 const DIR = ['jobs', 'current'];
@@ -69,8 +70,8 @@ export async function peekJob() {
 /** Delete the saved job (all segments). */
 export async function discardJob() {
   for (let i = 0; i < 6; i++) { // a just-terminated worker may still hold its handles for a moment
-    try { const root = await navigator.storage.getDirectory(); const j = await root.getDirectoryHandle('jobs'); await j.removeEntry('current', { recursive: true }); return; }
-    catch (e) { if (e?.name === 'NotFoundError') return; await new Promise((r) => setTimeout(r, 60)); }
+    try { const root = await navigator.storage.getDirectory(); const j = await root.getDirectoryHandle('jobs'); await j.removeEntry('current', { recursive: true }); ledger.drop('opfs', 'jobs'); return; }
+    catch (e) { if (e?.name === 'NotFoundError') { ledger.drop('opfs', 'jobs'); return; } await new Promise((r) => setTimeout(r, 60)); }
   }
 }
 
@@ -87,7 +88,9 @@ export async function openJob(manifest, { fresh = false, done = manifest.doneCou
   let dir;
   try { await writeJson('manifest.json', manifest); dir = await jobDir(true); }
   catch (e) { wk.terminate(); throw e; } // v0.35.4: worker (e handle OPFS) mai orfano se l'apertura fallisce (es. spazio esaurito)
-  let closed = false;
+  let closed = false, regBytes = 0;
+  const reg = (state) => ledger.set({ type: 'opfs', path: 'jobs', kind: 'segment', owner: 'job', state, size: regBytes }); // registro: segmenti dell'export (cresce a ogni segmento)
+  reg(STATE.INUSE);
   const job = {
     manifest,
     get doneCount() { return manifest.doneCount; },
@@ -114,6 +117,7 @@ export async function openJob(manifest, { fresh = false, done = manifest.doneCou
           await writeJson(`seg-${pad(k)}.json`, { k, n: packets.length, bytes: pos, rpu, packets });
           manifest.doneCount = k + 1; manifest.updated = Date.now();
           await writeJson('manifest.json', manifest);
+          regBytes += pos; reg(STATE.INUSE);
           return { n: packets.length, bytes: pos, rpu };
         },
         abort: () => call({ op: 'close', h }).catch(() => {}),
@@ -137,7 +141,7 @@ export async function openJob(manifest, { fresh = false, done = manifest.doneCou
     async removeSegment(k) { for (const n of [`seg-${pad(k)}.bin`, `seg-${pad(k)}.json`]) { try { await dir.removeEntry(n); } catch {} } },
     /** Invalidate the manifest (job no longer resumable, e.g. segments consumed during assembly). */
     async invalidate() { try { await dir.removeEntry('manifest.json'); } catch {} },
-    close() { if (!closed) { closed = true; wk.terminate(); } },
+    close() { if (!closed) { closed = true; wk.terminate(); reg(STATE.RESUMABLE); } },
     async remove() { job.close(); await discardJob(); },
   };
   return job;

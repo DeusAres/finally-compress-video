@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.37.0';
-import { sprite, SPRITES } from './sprite.js?v=0.37.0';
-import { createLogStore } from './logstore.js?v=0.37.0';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.37.0';
+import { bus } from './bus.js?v=0.37.1';
+import { sprite, SPRITES } from './sprite.js?v=0.37.1';
+import { createLogStore } from './logstore.js?v=0.37.1';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.37.1';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -275,13 +275,25 @@ function template(opts) {
   <textarea class="fcv-log-sel" data-ref="logSel" readonly hidden aria-label="Riassunto del log da copiare"></textarea>
   <div class="fcv-log-actions"><button class="px-btn" data-ref="copy">Copia log</button><button class="px-btn" data-ref="saveLog">Salva log completo (.txt)</button><span class="fcv-copy-msg" data-ref="copyMsg" aria-live="polite"></span></div>
 </details>
+
+<details class="px-panel fcv-log fcv-store" data-ref="stBox">
+  <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Spazio occupato</b><span class="px-chip count" data-ref="stCount">–</span></summary>
+  <p class="fcv-st-line" data-ref="stLine">Apri per calcolare lo spazio usato dall'app.</p>
+  <div class="fcv-st-actions"><button class="px-btn px-btn--primary" data-ref="stFree" type="button" disabled>Libera spazio</button><span class="fcv-copy-msg" data-ref="stMsg" aria-live="polite"></span></div>
+  <details class="fcv-st-det" data-ref="stDet">
+    <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Dettagli</b></summary>
+    <p class="fcv-st-est" data-ref="stEst"></p>
+    <div data-ref="stBody"></div>
+    <div class="fcv-st-actions"><button class="px-btn" data-ref="stAll" type="button" disabled>Svuota tutto</button></div>
+  </details>
+</details>
 <p class="fcv-foot">HEVC 10-bit · HDR · Dolby Vision · nessun upload</p>`;
 }
 
 /**
  * Monta la UI in `root`.
  * @param {HTMLElement} root
- * @param {{onFile?(f:File):void,onStart?(s:object):void,onCancel?():void,onSave?():void,onCopyLog?():void}} handlers
+ * @param {{onStorageOpen?():void,onStorageAct?(act:'free'|'all'|'del',id?:string):void,onFile?(f:File):void,onStart?(s:object):void,onCancel?():void,onSave?():void,onCopyLog?():void}} handlers
  * @param {{version?:string}} [opts]  estensione: etichetta versione nella testata
  */
 export function mountUI(root, handlers = {}, opts = {}) {
@@ -330,7 +342,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     st.busy = !!b; if (!b) st.pipOn = false; updatePip();
     root.dataset.busy = String(st.busy);
     root.querySelectorAll('.fcv-step-set input, [data-ref^="input"]').forEach((i) => { i.disabled = st.busy; });
-    syncGo();
+    syncGo(); syncStorage();
     if (st.busy) {
       R.resume.hidden = true;
       if (st.stage !== 'busy') startProgress();
@@ -859,6 +871,38 @@ export function mountUI(root, handlers = {}, opts = {}) {
   R.copy.addEventListener('click', copyLog);
   R.errCopy.addEventListener('click', () => { R.logBox.open = true; copyLog(); });
 
+  // ---------- spazio occupato (v0.37.1): la logica sta in app/lib/storage.js, qui solo la vista ----------
+  const STATE_TXT = { inuse: 'in uso', resumable: 'riprendibile', unsaved: 'da salvare', free: 'libero' };
+  function syncStorage() {
+    const m = st.storage, off = st.busy || !m;
+    R.stFree.disabled = off || !m.freeBytes; R.stAll.disabled = off;
+    R.stBody.querySelectorAll('button[data-sact]').forEach((b) => { b.disabled = st.busy || b.dataset.state === 'inuse'; });
+  }
+  function setStorage(m) {
+    st.storage = m || null; if (!m) return;
+    R.stLine.textContent = m.line; R.stCount.textContent = m.count; R.stEst.textContent = m.est || '';
+    R.stBody.textContent = '';
+    for (const g of m.groups) {
+      const h = document.createElement('h4'); h.className = 'fcv-st-h'; h.textContent = g.title; R.stBody.append(h);
+      for (const r of g.rows) {
+        const row = document.createElement('div'); row.className = 'fcv-st-row';
+        const t = document.createElement('span'); t.className = 'fcv-st-name'; t.textContent = r.label;
+        const sz = document.createElement('span'); sz.className = 'fcv-st-size'; sz.textContent = r.size;
+        const tag = document.createElement('span'); tag.className = 'px-chip fcv-st-tag'; tag.dataset.state = r.state; tag.textContent = STATE_TXT[r.state] || r.state;
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'px-btn'; b.textContent = 'Elimina'; b.dataset.sact = 'del'; b.dataset.id = r.id; b.dataset.state = r.state;
+        row.append(t, sz, tag, b); R.stBody.append(row);
+      }
+    }
+    if (!m.groups.length) R.stBody.textContent = 'Niente da mostrare.';
+    syncStorage();
+  }
+  const askStorage = () => handlers.onStorageOpen?.();
+  R.stBox.addEventListener('toggle', () => { if (R.stBox.open) askStorage(); });
+  R.stDet.addEventListener('toggle', () => { if (R.stDet.open) askStorage(); });
+  R.stFree.addEventListener('click', () => handlers.onStorageAct?.('free'));
+  R.stAll.addEventListener('click', () => handlers.onStorageAct?.('all'));
+  R.stBody.addEventListener('click', (e) => { const b = e.target.closest?.('button[data-sact]'); if (b && !b.disabled) handlers.onStorageAct?.('del', b.dataset.id); });
+
   // ---------- bus ----------
   const subs = {
     file: (d) => { st.file = { ...st.file, ...d }; showFile(st.file); updateEstimate(); if (st.stage === 'pick') setStage('ready'); },
@@ -881,6 +925,9 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   return {
     setBusy,
+    /** Spazio occupato: {line, count, est, freeBytes, groups:[{title, rows:[{id,label,size,state}]}]} (stringhe già formattate). */
+    setStorage,
+    setStorageMessage(t) { R.stMsg.textContent = t || ''; clearTimeout(st.stT); st.stT = setTimeout(() => { R.stMsg.textContent = ''; }, 4000); },
     /** PiP (v0.21): {active} → etichetta del pulsante «Continua / Chiudi Picture-in-Picture». */
     setPip(active) { st.pipOn = !!active; updatePip(); },
     setDefaults(s = {}) { Object.assign(DEFAULTS, s); writeSettings({ ...readSettings(), ...s }); },

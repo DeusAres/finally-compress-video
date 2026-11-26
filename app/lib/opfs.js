@@ -7,7 +7,7 @@ export async function cleanOpfs(keep = ['jobs']) {
   try {
     const root = await navigator.storage.getDirectory(); const names = [];
     for await (const [name] of root.entries()) if (!keep.includes(name)) names.push(name);
-    let n = 0; for (const name of names) { try { await root.removeEntry(name, { recursive: true }); n++; } catch { /* locked by another tab */ } }
+    let n = 0; for (const name of names) { try { await root.removeEntry(name, { recursive: true }); n++; ledger.drop('opfs', name); } catch { /* locked by another tab */ } }
     return n;
   } catch { return 0; }
 }
@@ -23,7 +23,7 @@ export const safeName = (s) => s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
 
 /** Worker holding SyncAccessHandles (opfs-worker.js). Returns {call(msg, transfer) -> Promise, terminate()}. */
 export function opfsWorker() {
-  const worker = new Worker(new URL('./opfs-worker.js?v=0.37.0', import.meta.url));
+  const worker = new Worker(new URL('./opfs-worker.js?v=0.37.1', import.meta.url));
   let seq = 0; const waiting = new Map(); let dead = null;
   worker.onmessage = (e) => { const w = waiting.get(e.data.id); if (!w) return; waiting.delete(e.data.id); if (e.data.ok) w.res(e.data); else { const er = new Error(e.data.message); er.name = e.data.name; w.rej(er); } };
   worker.onerror = (e) => { dead = new Error('worker OPFS: ' + (e.message || 'errore')); for (const w of waiting.values()) w.rej(dead); waiting.clear(); };
@@ -36,6 +36,7 @@ export async function openOpfsStore(rawName) {
   const wk = opfsWorker(), call = wk.call, worker = wk; let bytesWritten = 0;
   try { await call({ op: 'open', name }); } catch (e) { worker.terminate(); throw e; } // v0.35.4: niente worker orfano
   let closed = false;
+  ledger.set({ type: 'opfs', path: name, kind: 'result', owner: 'export', state: STATE.INUSE, size: 0 }); // registro: risultato in scrittura
   return {
     name,
     get bytesWritten() { return bytesWritten; },
@@ -45,9 +46,9 @@ export async function openOpfsStore(rawName) {
     truncate: (size) => call({ op: 'truncate', size }),
     flush: () => call({ op: 'flush' }),
     async size() { return (await call({ op: 'size' })).size; },
-    async close() { if (closed) return; closed = true; try { await call({ op: 'close' }); } finally { worker.terminate(); } },
+    async close() { if (closed) return; closed = true; let sz = bytesWritten; try { try { sz = (await call({ op: 'size' })).size; } catch {} await call({ op: 'close' }); } finally { worker.terminate(); ledger.set({ type: 'opfs', path: name, size: sz, state: STATE.UNSAVED }); } }, // registro: finito = da salvare
     /** Disk-backed File (store must be closed first). */
     async getFile() { const root = await navigator.storage.getDirectory(); return (await root.getFileHandle(name)).getFile(); },
-    async remove() { await this.close().catch(() => {}); try { const root = await navigator.storage.getDirectory(); await root.removeEntry(name); } catch {} },
+    async remove() { await this.close().catch(() => {}); try { const root = await navigator.storage.getDirectory(); await root.removeEntry(name); } catch {} ledger.drop('opfs', name); },
   };
 }
