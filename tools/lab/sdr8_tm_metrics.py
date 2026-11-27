@@ -14,7 +14,7 @@ import numpy as np
 
 LW, REF, GT, J = 1000.0, 203.0, 0.8, float(os.environ.get('J', '0.5'))
 XA, SAT3, CON3 = 0.05, 1.15, 0.25
-JA, BA, SA, GA = float(os.environ.get('JA', '0.3')), float(os.environ.get('BA', '0.5')), float(os.environ.get('SA', '0.95')), float(os.environ.get('GA', '1'))  # «apple»
+JA, BA, SA, GA = float(os.environ.get('JA', '0.2')), float(os.environ.get('BA', '1')), float(os.environ.get('SA', '0.95')), float(os.environ.get('GA', '0.8'))  # «apple»
 ENC = os.environ.get('ENC', '1886')  # codifica d'uscita delle varianti display-referred: 1886 = inversa EOTF BT.1886 (1/2.4), 709 = OETF BT.709
 K20 = np.array([0.2627, 0.678, 0.0593]); K709 = np.array([0.2126, 0.7152, 0.0722])
 M = np.array([[1.6605, -0.5876, -0.0728], [-0.1246, 1.1329, -0.0083], [-0.0182, -0.1006, 1.1187]])  # BT.2020 -> BT.709 lineare

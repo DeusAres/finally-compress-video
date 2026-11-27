@@ -30,7 +30,7 @@ th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-alig
 </style>
 </head>
 <body>
-<h1>Modalità SDR veloce a 8 bit <small style="font-size:.55em;opacity:.75">v2.1 · 27/11</small></h1>
+<h1>Modalità SDR veloce a 8 bit <small style="font-size:.55em;opacity:.75">v2.2 · 27/11</small></h1>
 <p>Percorso veloce: <code>VideoDecoder</code> → WebGPU (inversa HLG → Hable → BT.709, uscita NV12) → encoder HEVC 8 bit, con controllo del bitrate a circuito chiuso. Confronto: frame del decoder diretti all'encoder con etichetta HLG (<b>c_hlg8</b>). Scegli un video HDR dell'iPhone, premi <b>Esegui</b> e tieni la pagina in primo piano fino a «finito». Poi <b>Copia risultati</b> (incolla in chat) e <b>Scarica</b> (al massimo 4 file).</p>
 
 <div class="card">
@@ -39,16 +39,18 @@ th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-alig
   <div class="row">
     <label>Frame <select id="nf"><option>300</option><option>150</option><option>60</option><option>30</option></select></label>
     <label class="full" hidden>Bitrate <select id="br"><option value="8">8 Mbps</option><option value="5,8">5 e 8 Mbps</option><option value="4,8,12">4, 8 e 12 Mbps</option></select></label>
-    <label class="full" hidden>Tone map filtri/AV1 <select id="tm"><option value="hable">Hable</option><option value="eetf">BT.2390 EETF</option></select></label>
+    <label>Prova <select id="mode"><option value="cmp">Confronto tone map (2 file)</option><option value="fast">Percorso veloce (4 file)</option></select></label>
+    <label>Tone map <select id="tm"><option value="apple">Apple-like</option><option value="bt2446c">BT.2446 C</option><option value="bt2408">BT.2408 mobius</option><option value="hlgsdr">HLG come SDR</option><option value="hable">Hable</option><option value="eetf">BT.2390 EETF</option></select></label>
   </div>
-  <p style="margin:0">Passi: decodifica · controllo colori del decoder · <b>b_hable</b> veloce · <b>c_hlg8</b> diretto · seek a 2 player.<span class="full" hidden> Modalità <code>?full</code>: anche a_drawimage, b_eetf, b_hable_canvas, c_cs709, filtri denoise/JND, AV1, 4K → 1080p, seek a 1 player.</span></p>
+  <p style="margin:0"><b>Confronto tone map</b> (predefinito): stesso frame centrale con 4 varianti → <code>tm_compare.png</code> (2×2 con istogramma della luma) + MP4 della variante scelta. Link: <code>?tm=apple|bt2446c|bt2408|hlgsdr|hable|eetf</code>, <code>?enc=709</code>, <code>?mode=fast</code>.</p>
+  <p style="margin:0">Percorso veloce — passi: decodifica · controllo colori del decoder · <b>b_hable</b> veloce · <b>c_hlg8</b> diretto · seek a 2 player.<span class="full" hidden> Modalità <code>?full</code>: anche a_drawimage, b_eetf, b_hable_canvas, c_cs709, filtri denoise/JND, AV1, 4K → 1080p, seek a 1 player.</span></p>
   <div class="row"><button id="go" disabled>Esegui</button></div>
   <div id="state">scegli un video</div>
 </div>
 
 <div class="card"><h2>Riepilogo</h2><div class="tw" id="sum">Nessun dato.</div></div>
 <div class="card"><h2>File</h2><div id="files">Nessuno.</div><div class="row"><button id="dlall" disabled>Scarica</button></div>
-<p style="margin:0"><code>b_hable_8M.mp4</code> + <code>b_hable_mid.png</code> (SDR BT.709); <code>c_hlg8_8M.mp4</code> (HLG 8 bit: giudica il colore riproducendolo su iPhone) + <code>c_hlg8_mid.png</code> (stesso frame reso con Hable).</p></div>
+<p style="margin:0">Confronto: <code>tm_compare.png</code> + <code>b_&lt;tm&gt;_8M.mp4</code>. Percorso veloce: <code>b_hable_8M.mp4</code> + <code>b_hable_mid.png</code> (SDR BT.709); <code>c_hlg8_8M.mp4</code> (HLG 8 bit: giudica il colore riproducendolo su iPhone) + <code>c_hlg8_mid.png</code> (stesso frame reso con Hable).</p></div>
 <div class="card"><h2>Risultati</h2><div class="row"><button id="copy">Copia risultati</button><span id="copied" class="ok"></span></div><pre id="oc">{}</pre></div>
 <div class="card"><h2>Log</h2><pre id="log">In attesa.</pre></div>
 
@@ -64,7 +66,7 @@ const qn = (k, d) => { const m = Q.match(new RegExp(`[?&]${k}=(\\d+(?:\\.\\d+)?)
 // K = frame in volo nella conversione (anelli di buffer), DQ = decodifica avanti, EQ = coda massima dell'encoder, R0 = bitrate iniziale / target
 const K = qn('k', 4), DQ = qn('dq', 8), EQ = qn('eq', 4), R0 = qn('r0', 1.25), BRCTL = !/[?&]nobr\b/.test(Q);
 if (FULL) for (const e of document.querySelectorAll('.full')) e.hidden = false;
-const R = { page: 'tools/diag/sdr8.html v2.1', ua: navigator.userAgent, when: new Date().toISOString(), settings: {}, features: {}, source: {}, runs: {}, notes: [] };
+const R = { page: 'tools/diag/sdr8.html v2.2', ua: navigator.userAgent, when: new Date().toISOString(), settings: {}, features: {}, source: {}, runs: {}, notes: [] };
 const show = () => { const { runs, ...rest } = R; $('oc').textContent = JSON.stringify(rest).slice(0, -1) + ',"runs":{\n' + Object.entries(runs).map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(',\n') + '}}'; };
 const T0 = performance.now(), now = () => performance.now();
 const log = (s, cls) => { const L = $('log'); if (L.textContent === 'In attesa.') L.textContent = ''; L.textContent += `[${((now() - T0) / 1000).toFixed(1)}s] ${s}\n`; L.scrollTop = L.scrollHeight; if (cls === 'state') $('state').textContent = s; };
@@ -146,6 +148,10 @@ function startDecoder(cfgD, N, B, T) {
 const newT = () => ({ ooo: 0, extra: 0, missing: 0, decWait: 0, decLat: 0, decN: 0, shader: 0, gpu: 0, gpuN: 0, vf: 0, convWait: 0, encWait: 0, encLat: 0, encN: 0 });
 
 // ---------- WebGPU: inversa HLG → OOTF → BT.2020→709 → tone map → OETF BT.709 (+ pre-filtri) ----------
+// Parametri delle varianti di tone map (?tm=, ?j=, ?ja=, ?ba=, ?sa=, ?ga=, ?enc=709): fonti e misure in research/19 §Tone map
+const f4 = (x) => (+x).toFixed(4), MJ = f4(qn('j', 0.5)), JA = f4(qn('ja', 0.2)), BA = f4(qn('ba', 1)), SA = f4(qn('sa', 0.95)), GA = f4(qn('ga', 0.8)), E1886 = /[?&]enc=709\b/.test(Q) ? '0.0' : '1.0';
+const TMV = { bt2446c: '1 · BT.2446-1 metodo C (crosstalk 0.05)', apple: '2 · «Apple-like»: mobius j 0.2 su max-RGB, bianco rif. 80 %, sat ×0.95', bt2408: '3 · BT.2408: 203 nit = 100 %, mobius j 0.5 su max-RGB', hable: '4 · Hable (attuale, OETF BT.709)', hlgsdr: 'HLG letto come SDR (+sat/contrasto)', eetf: 'BT.2390 EETF verso 203 nit' };
+const TMQ = (Q.match(/[?&]tm=(\w+)/) || [])[1], CMP = !/[?&]mode=fast\b/.test(Q);
 const WGSL = `struct U{size:vec2f,tm:f32,filt:f32,lw:f32,tgt:f32,k:f32,sig:f32};
 @group(0)@binding(0) var t:texture_external;@group(0)@binding(1) var s:sampler;@group(0)@binding(2) var<uniform> u:U;
 @group(0)@binding(3) var hist:texture_2d<f32>;
@@ -163,15 +169,20 @@ fn hlgi(e:vec3f)->vec3f{let a=0.17883277;let b=0.28466892;let c=0.55991073;let x
 // Varianti HLG → SDR (?tm=, research/19 §Tone map; misure: tools/lab/sdr8_tm_metrics.py, stessa matematica):
 //  bt2446c: ITU-R BT.2446-1 metodo C (crosstalk α=0.05, curva lineare k1 fino a 69.8 nit poi logaritmica, cromaticità invariata,
 //           crosstalk inverso) + eccesso del canale massimo riscalato (non tagliato) + gamut morbido;
-//  mobius:  BT.2408 (bianco di riferimento 203 nit = 100 % SDR), curva mobius di ffmpeg/libplacebo/mpv (lineare fino a j=MJ,
+//  bt2408:  BT.2408 (bianco di riferimento 203 nit = 100 % SDR), curva mobius di ffmpeg/libplacebo/mpv (lineare fino a j=MJ,
 //           poi spalla fino al picco 1000 nit) sulla norma max(R,G,B) → rapporti RGB invariati, + gamut morbido;
+//  apple:   «Apple-like»: come bt2408 ma bianco di riferimento a GA·100 %, spalla più lunga (j=JA), norma mix(luma, max-RGB, BA),
+//           saturazione ×SA (leggermente ridotta): mid-tone fedeli, roll-off morbido, ombre non schiacciate;
+//  Uscita delle varianti display-referred (bt2446c, bt2408, apple, hlgsdr): inversa EOTF BT.1886 (1/2.4), come prevedono
+//  BT.2408/BT.2446 per un display SDR γ 2.4; ?enc=709 usa invece l'OETF BT.709 (come hable, che la tiene sempre).
 //  hlgsdr:  HLG letto come SDR (BT.2100: compatibilità con display BT.1886 γ 2.4), 2020→709 lineare, saturazione ×SAT3,
 //           curva a S sulla luma (smoothstep al CON3), gamut morbido;
 //  hable:   attuale (Hable su max-RGB, nominale 100 nit, normalizzato al picco). eetf: BT.2390 EETF max-RGB verso 203 nit.
-const K20=vec3f(0.2627,0.678,0.0593);const K7=vec3f(0.2126,0.7152,0.0722);const GT=0.8;const XA=0.05;const MJ=${MJ};const SAT3=1.15;const CON3=0.25;
+const K20=vec3f(0.2627,0.678,0.0593);const K7=vec3f(0.2126,0.7152,0.0722);const GT=0.8;const XA=0.05;const MJ=${MJ};const SAT3=1.15;const CON3=0.25;const JA=${JA};const BA=${BA};const SA=${SA};const GA=${GA};const E1886=${E1886};
 fn m709(d:vec3f)->vec3f{return vec3f(dot(vec3f(1.6605,-0.5876,-0.0728),d),dot(vec3f(-0.1246,1.1329,-0.0083),d),dot(vec3f(-0.0182,-0.1006,1.1187),d));}
 fn mx3(v:vec3f)->f32{return max(v.r,max(v.g,v.b));}
 fn oetf(x:vec3f)->vec3f{let v=clamp(x,vec3f(0),vec3f(1));return select(1.099*pow(v,vec3f(0.45))-0.099,4.5*v,v<vec3f(0.018));}
+fn enc(x:vec3f)->vec3f{if(E1886>0.5){return pow(clamp(x,vec3f(0),vec3f(1)),vec3f(1.0/2.4));}return oetf(x);}
 fn gam(l:vec3f)->vec3f{let y=clamp(dot(l,K7),0.0,1.0);let c=l-vec3f(y);
  let lim=select(select(vec3f(1e9),(1.0-y)/max(c,vec3f(1e-9)),c>vec3f(0)),y/max(-c,vec3f(1e-9)),c<vec3f(0));
  let s=1.0/max(min(lim.x,min(lim.y,lim.z)),1e-9);var f=1.0;if(s>GT){f=(GT+(s-GT)/(1.0+(s-GT)/(1.0-GT)))/s;}
@@ -181,16 +192,19 @@ fn c2446(d:vec3f)->vec3f{let c=(1.0-3.0*XA)*d+vec3f(XA*(d.r+d.g+d.b));let y=max(
  var ys=k1*y;if(y>=yi){ys=k2*log(max(y/yi-k3,1e-6))+k4;}
  let x=c*(ys/y);let l=m709((x-vec3f(XA*(x.r+x.g+x.b)))/(1.0-3.0*XA))/100.0;return gam(l/max(mx3(l),1.0));}
 fn mob(x:f32,j:f32,pk:f32)->f32{if(x<=j){return x;}let a=-j*j*(pk-1.0)/(j*j-2.0*j+pk);let b=(j*j-2.0*j*pk+pk)/max(1e-6,pk-1.0);return (b*b+2.0*b*j+j*j)/(b-a)*(x+a)/(x+b);}
+fn apple(d:vec3f)->vec3f{let l=m709(d);let y=max(dot(d,K20),1e-6);let n=max(mix(y,max(mx3(l),y),BA),1e-6);
+ let t=l*(mob(GA*n/u.tgt,JA,GA*u.lw/u.tgt)/n);let ty=dot(t,K7);return enc(gam(vec3f(ty)+(t-vec3f(ty))*SA));}
 fn i709(v:f32)->f32{if(v<0.081){return v/4.5;}return pow((v+0.099)/1.099,1.0/0.45);}
 fn hlgsdr(e:vec3f)->vec3f{let l=m709(pow(clamp(e,vec3f(0),vec3f(1)),vec3f(2.4)));let y=clamp(dot(l,K7),1e-6,1.0);let ls=vec3f(y)+(l-vec3f(y))*SAT3;
- let ye=oetf(vec3f(y)).x;let y2=i709(ye+(ye*ye*(3.0-2.0*ye)-ye)*CON3);return oetf(gam(ls*(y2/y)));}
+ let ye=oetf(vec3f(y)).x;let y2=i709(ye+(ye*ye*(3.0-2.0*ye)-ye)*CON3);return enc(gam(ls*(y2/y)));}
 fn sdr(c:vec3f)->vec3f{
  if(u.tm<0.5){return c;}
- if(u.tm>4.5){return hlgsdr(c);}
+ if(u.tm>4.5&&u.tm<5.5){return hlgsdr(c);}
  let sc=hlgi(c);let ys=dot(sc,K20);
  let d=u.lw*pow(max(ys,1e-6),0.2)*sc;
- if(u.tm>3.5){let l=m709(d);let n=max(max(mx3(l),dot(d,K20)),1e-6);return oetf(gam(l*(mob(n/u.tgt,MJ,u.lw/u.tgt)/n)));}
- if(u.tm>2.5){return oetf(c2446(d));}
+ if(u.tm>5.5){return apple(d);}
+ if(u.tm>3.5){let l=m709(d);let n=max(max(mx3(l),dot(d,K20)),1e-6);return enc(gam(l*(mob(n/u.tgt,MJ,u.lw/u.tgt)/n)));}
+ if(u.tm>2.5){return enc(c2446(d));}
  let l=max(m709(d),vec3f(0));
  let sg=max(mx3(l),1e-6);
  var o:f32;if(u.tm<1.5){o=eetf(sg)/u.tgt;}else{o=hb(sg/100.0)/hb(u.lw/100.0);}
@@ -258,7 +272,7 @@ async function probeGpu(f) {
     R.features.webgpu = 'ok'; R.features.waitSubmitted = WAIT; R.features.readback = READBACK || COPY !== 'frame';
   } catch (e) { R.features.webgpu = errStr(e); }
 }
-const TM = { none: 0, eetf: 1, hable: 2, bt2446c: 3, mobius: 4, hlgsdr: 5 }, FILT = { none: 0, dn: 1, jnd: 2 };
+const TM = { none: 0, eetf: 1, hable: 2, bt2446c: 3, bt2408: 4, hlgsdr: 5, apple: 6 }, FILT = { none: 0, dn: 1, jnd: 2 };
 /** Convertitore WebGPU: frame (HLG) → canvas rgba8unorm w×h (SDR BT.709) → VideoFrame. Scala se w×h ≠ sorgente (campionamento bilineare, 2:1 = media 2×2). */
 function convGpu(tm, filt) {
   let g, cv, ctx, ub, hist = null, w, h, rb = null;
@@ -555,6 +569,57 @@ async function mux(chunks, meta, kind, w, h, cs, r) {
   return new Blob([out.target.buffer], { type: 'video/mp4' });
 }
 
+// ---------- confronto dei tone map: stesso frame centrale, 4 varianti, PNG 2×2 con istogramma della luma ----------
+const CMPK = ['bt2446c', 'apple', 'bt2408', 'hable'];
+/** Statistiche del segnale NV12 (codici 8 bit BT.709 limitati): luma media/σ, |CbCr| medio, % Y ≥ 233 (alte luci tagliate), % Y ≤ 24, istogramma 64 classi. */
+async function nv12Stats(vf) {
+  const buf = new Uint8Array(vf.allocationSize()), lay = await vf.copyTo(buf), w = vf.codedWidth, h = vf.codedHeight, hist = new Array(64).fill(0);
+  let s = 0, s2 = 0, hi = 0, lo = 0, c = 0;
+  for (let j = 0; j < h; j++) for (let i = 0, o = lay[0].offset + j * lay[0].stride; i < w; i++) { const y = buf[o + i]; s += y; s2 += y * y; if (y >= 233) hi++; if (y <= 24) lo++; hist[y >> 2]++; }
+  for (let j = 0; j < h / 2; j++) for (let i = 0, o = lay[1].offset + j * lay[1].stride; i < w / 2; i++) c += Math.hypot(buf[o + 2 * i] - 128, buf[o + 2 * i + 1] - 128);
+  const n = w * h, m = s / n;
+  return { Ymean: r2(m), Ystd: r2(Math.sqrt(s2 / n - m * m)), sat: r2(c / (n / 4)), clipHi: r2(hi / n * 100), dark: r2(lo / n * 100), hist };
+}
+async function cmpRun() {
+  const r = { name: 'frame centrale con le 4 varianti (NV12 dello shader) → tm_compare.png', order: CMPK, variants: {} }, B = bell(), keep = S.n;
+  let mid = null, src = null; const outs = [];
+  try {
+    S.n = S.mid + 1; src = startDecoder(S.dcfg, S.n, B, newT());
+    for (let f; (f = await src.next());) { mid?.close(); mid = f; }
+    if (!mid) throw new Error('nessun frame decodificato');
+    for (const k of CMPK) {
+      const c = convNv12(k), T = newT(); await c.prepare(mid.displayWidth, mid.displayHeight);
+      try { outs.push(await c.submit(mid.clone(), S.mid, T)); } finally { c.close(); }
+      r.variants[k] = { label: TMV[k], ...(await nv12Stats(outs[outs.length - 1])) };
+    }
+    r.png = 'tm_compare.png'; addFile(r.png, await gridPng(outs, CMPK.map((k) => r.variants[k])));
+    for (const k of CMPK) delete r.variants[k].hist;
+  } catch (e) { r.err = errStr(e); }
+  finally { S.n = keep; for (const v of outs) v.close(); mid?.close(); src?.close(); }
+  return r;
+}
+/** Griglia 2×2: per riquadro titolo + misure, frame ruotato come la sorgente (lato lungo ≤ 1080), istogramma della luma (rosso: ≥ 233, blu: ≤ 24). */
+async function gridPng(vfs, info) {
+  const w0 = vfs[0].displayWidth, h0 = vfs[0].displayHeight, rot = ((S.rot % 360) + 360) % 360, sw = rot === 90 || rot === 270;
+  const sc = Math.min(1, 1080 / Math.max(w0, h0)), tw = Math.round((sw ? h0 : w0) * sc), th = Math.round((sw ? w0 : h0) * sc), TH = 50, HH = 110, PAD = 8;
+  const cw = tw + 2 * PAD, ch = TH + th + HH + 2 * PAD, cv = new OffscreenCanvas(2 * cw, 2 * ch), ctx = cv.getContext('2d', { colorSpace: 'srgb' });
+  ctx.fillStyle = '#16181c'; ctx.fillRect(0, 0, cv.width, cv.height);
+  vfs.forEach((vf, i) => {
+    const x = (i % 2) * cw + PAD, y = Math.floor(i / 2) * ch + PAD, m = info[i];
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 20px system-ui,sans-serif'; ctx.fillText(m.label, x, y + 20, tw);
+    ctx.fillStyle = '#c8ccd2'; ctx.font = '15px ui-monospace,Menlo,monospace';
+    ctx.fillText(`Y ${m.Ymean} σ ${m.Ystd} · sat ${m.sat} · Y≥233 ${m.clipHi}% · Y≤24 ${m.dark}%`, x, y + 42, tw);
+    ctx.save(); ctx.translate(x + tw / 2, y + TH + th / 2); ctx.rotate(rot * Math.PI / 180);
+    const dw = w0 * sc, dh = h0 * sc; ctx.drawImage(vf, -dw / 2, -dh / 2, dw, dh); ctx.restore();
+    const hy = y + TH + th + 8, hh = HH - 26, mx = Math.max(...m.hist), bw = tw / 64;
+    ctx.fillStyle = '#23262c'; ctx.fillRect(x, hy, tw, hh);
+    m.hist.forEach((c, b) => { const bh = Math.round(hh * Math.sqrt(c / mx)); ctx.fillStyle = b * 4 >= 232 ? '#ff5a4f' : b * 4 + 3 <= 24 ? '#5aa0ff' : '#d8dbe0'; ctx.fillRect(x + b * bw, hy + hh - bh, Math.max(1, bw - 1), bh); });
+    ctx.fillStyle = '#8b929c'; ctx.font = '13px ui-monospace,Menlo,monospace';
+    ctx.fillText('luma 16', x, hy + hh + 15); ctx.fillText('235', x + tw - 28, hy + hh + 15); ctx.fillText('istogramma (√ conteggi)', x + tw / 2 - 80, hy + hh + 15);
+  });
+  return cv.convertToBlob({ type: 'image/png' });
+}
+
 // ---------- riepilogo ----------
 function renderSummary() {
   const rows = Object.entries(R.runs).map(([id, r]) => {
@@ -576,8 +641,8 @@ $('file').onchange = () => { S.file = $('file').files[0] || null; $('go').disabl
 $('go').onclick = async () => {
   $('go').disabled = true; R.runs = {}; R.notes = []; R.source = {}; R.fatal = undefined;
   for (const f of S.files) URL.revokeObjectURL(f.url); S.files = []; $('files').textContent = 'Nessuno.'; $('dlall').disabled = true;
-  const rates = FULL ? $('br').value.split(',').map(Number) : [8], tm = FULL ? $('tm').value : 'hable';
-  R.settings = { frames: +$('nf').value, mbps: rates, full: FULL, k: K, dq: DQ, eq: EQ, r0: R0, brctl: BRCTL };
+  const rates = FULL ? $('br').value.split(',').map(Number) : [8], tm = $('tm').value, cmp = $('mode').value === 'cmp';
+  R.settings = { frames: +$('nf').value, mbps: rates, full: FULL, k: K, dq: DQ, eq: EQ, r0: R0, brctl: BRCTL, mode: cmp ? 'cmp' : 'fast', tm, tmp: { j: +MJ, ja: +JA, ba: +BA, sa: +SA, ga: +GA, enc: E1886 === '1.0' ? 'bt1886' : 'bt709' } };
   try {
     log('demux (Mediabunny)…', 'state');
     await loadSource(+$('nf').value);
@@ -587,12 +652,18 @@ $('go').onclick = async () => {
     S.kind8 = await pickKind8(); R.features.codec8 = S.kind8; R.features.dequeueEvent = 'ondequeue' in VideoEncoder.prototype;
     show();
     const base = { kind: S.kind8, w: S.W, h: S.H };
-    const hable = (mbps) => ({ ...base, id: 'b_hable', name: 'VideoDecoder → WebGPU compute (inversa HLG → Hable → BT.709) → NV12 → HEVC 8 bit', mbps, conv: convNv12('hable'), png: true });
+    const hable = (mbps) => ({ ...base, id: `b_${tm}`, name: `VideoDecoder → WebGPU compute (inversa HLG → ${tm} → BT.709) → NV12 → HEVC 8 bit`, mbps, conv: convNv12(tm), png: !cmp });
+    if (cmp) { // confronto: un PNG 2×2 delle 4 varianti sullo stesso frame + un MP4 della variante scelta (al massimo 2 file)
+      await step('tm_cmp', cmpRun);
+      await step(`b_${tm}@8`, () => pipeRun(hable(8)));
+      log('finito: guarda tm_compare.png, premi «Copia risultati» e scarica i file', 'state');
+      return;
+    }
     const hlg8 = (mbps) => ({ ...base, id: 'c_hlg8', name: 'VideoDecoder → encoder diretto, VUI/colr BT.2020 HLG', mbps, conv: convDirect(), vui: CSHLG, keepMid: true, pngVia: () => convNv12('hable') });
     await step('dec_only', decodeRun);
     await step('dec_cs', csCheck);
     for (const mbps of rates) {
-      await step(`b_hable@${mbps}`, () => pipeRun(hable(mbps)));
+      await step(`b_${tm}@${mbps}`, () => pipeRun(hable(mbps)));
       await step(`c_hlg8@${mbps}`, () => pipeRun(hlg8(mbps)));
     }
     await step('seek_2p', () => seekRun(2));
@@ -600,10 +671,10 @@ $('go').onclick = async () => {
       await step('seek_1p', () => seekRun(1));
       for (const mbps of rates) {
         const run = (id, o) => step(`${id}@${mbps}`, () => pipeRun({ ...base, id, mbps, png: true, ...o }));
-        await run('b_eetf', { name: 'WebGPU compute EETF → NV12', conv: convNv12('eetf') });
         await run('b_hable_canvas', { name: 'v1: WebGPU → canvas rgba8 → VideoFrame(canvas)', conv: syncConv(convGpu('hable', FILT.none)) });
         await run('a_drawimage', { name: 'drawImage su canvas 2D sRGB', conv: syncConv(conv2d(), 'canvas 2D') });
         await run('c_cs709', { name: 'colorSpace BT.709 forzato, frame diretto', conv: convDirect(), decCfg: { ...S.dcfg, colorSpace: CS709 } });
+        if (tm !== 'eetf') await run('b_eetf', { name: 'WebGPU compute EETF → NV12', conv: convNv12('eetf') });
         await run(`f_dn_${tm}`, { name: `denoise temporale su ${tm}`, conv: syncConv(convGpu(tm, FILT.dn)) });
         await run(`f_jnd_${tm}`, { name: `filtro JND su ${tm}`, conv: syncConv(convGpu(tm, FILT.jnd)) });
         await run(`av1_${tm}`, { name: `AV1 8 bit (${tm})`, kind: 'av1', conv: syncConv(convGpu(tm, FILT.none)), png: false });
@@ -612,8 +683,11 @@ $('go').onclick = async () => {
     }
     log('finito: premi «Copia risultati», incolla in chat e scarica i file', 'state');
   } catch (e) { R.fatal = errStr(e); log('ERRORE: ' + R.fatal, 'state'); }
-  show(); renderSummary(); $('go').disabled = false;
+  finally { show(); renderSummary(); $('go').disabled = false; }
 };
+$('mode').value = CMP ? 'cmp' : 'fast';
+$('tm').value = TMQ && TMV[TMQ] ? TMQ : CMP ? 'apple' : 'hable';
+$('mode').onchange = () => { if (!TMQ) $('tm').value = $('mode').value === 'cmp' ? 'apple' : 'hable'; };
 $('dlall').onclick = async () => { for (const a of $('files').querySelectorAll('a')) { a.click(); await sleep(800); } };
 $('copy').onclick = () => {
   const s = JSON.stringify(R);

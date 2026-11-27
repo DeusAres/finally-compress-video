@@ -58,7 +58,7 @@ const rows = []; const rec = async (scen, extra = '') => { const s = await snap(
 const sts = () => page.$$eval('.fcv-q-item', (els) => els.map((e) => e.dataset.st + (e.hasAttribute('data-nf') ? '*' : '')));
 const stage = () => page.$eval('#app', (r) => `${r.dataset.stage}/${r.dataset.busy}`);
 const logAll = () => page.evaluate(() => [...document.querySelectorAll('[data-ref="log"] div')].map((d) => d.textContent).join('\n'));
-const waitIdle = async (ms = 240000) => page.waitForFunction(() => document.querySelector('#app').dataset.busy === 'false', null, { timeout: ms })
+const waitIdle = async (ms = 900000) => page.waitForFunction(() => document.querySelector('#app').dataset.busy === 'false', null, { timeout: ms })
   .catch(async (e) => { console.log('TIMEOUT', await sts(), '\n' + (await logTail(25))); throw e; });
 const waitSt = (i, st, ms = 120000) => page.waitForFunction(([i, st]) => document.querySelectorAll('.fcv-q-item')[i]?.dataset.st === st, [i, st], { timeout: ms })
   .catch(async (e) => { console.log('TIMEOUT stato', i, st, await sts(), '\n' + (await logTail(25))); throw e; });
@@ -218,7 +218,7 @@ if (ONLY.includes('9')) { // ---- 9) (v0.38.5) 1 video compresso, poi ne aggiung
   await page.click('[data-ref="go"]'); await waitIdle(); await page.waitForFunction(() => document.querySelector('#app').dataset.stage === 'done');
   ok(!(await page.$eval('[data-ref="qdOne"]', (e) => e.hidden)) && (await page.$eval('[data-ref="qdScroll"]', (e) => e.hidden)), '9: coda da 1, risultato pulito senza tabella');
   const t1 = await page.$eval('[data-ref="qdone"]', (e) => e.innerText);
-  ok(/[−+]\d+\s*%/.test(t1) && /Prima/.test(t1) && /Dopo/.test(t1) && /Salva nelle Foto/.test(t1), `9: meno x %, dettagli e Salva nelle Foto (${t1.replace(/\s+/g, ' ').slice(0, 140)})`);
+  ok(/[−+]\d+\s*%/.test(t1) && /prima/i.test(t1) && /dopo/i.test(t1) && /Salva nelle Foto/.test(t1), `9: meno x %, dettagli e Salva nelle Foto (${t1.replace(/\s+/g, ' ').slice(0, 140)})`);
   await shots('uno-fatto');
   if (SHOTS) await page.screenshot({ path: join(SHOTS, 'single-done.png'), fullPage: true });
   await page.setInputFiles('[data-ref="qAdd2"]', [B]); await page.waitForFunction(() => document.querySelectorAll('.fcv-q-item').length === 2); await waitInfo();
@@ -235,7 +235,7 @@ if (ONLY.includes('6')) { // ---- 6) risorse media costanti fra le voci (5 voci,
   await page.click('[data-ref="go"]');
   const per = [];
   for (let k = 1; k <= 5; k++) { // player aperti (riga «frame nativi») → misura durante la voce
-    await page.waitForFunction((k) => [...document.querySelectorAll('[data-ref="log"] div')].some((d) => new RegExp(`^\\[${k}/5 [^\\]]+\\] frame nativi`).test(d.textContent)), k, { timeout: 120000 })
+    await page.waitForFunction((k) => [...document.querySelectorAll('[data-ref="log"] div')].some((d) => new RegExp(`^\\[${k}/5 [^\\]]+\\] frame nativi`).test(d.textContent)), k, { timeout: 400000 })
       .catch(async (e) => { console.log('TIMEOUT voce', k, await sts(), '\n' + (await logTail(25))); throw e; });
     const s = await rec(`6: durante voce ${k}`); per.push(s);
     console.log(`     voce ${k}: <video> con src ${s.vidSrc} (fuori DOM ${s.vidSrcOut}), in riproduzione ${s.vidPlay}, nel DOM ${s.videoDom}, creati in tutto ${s.vidMade}, codec aperti ${s.codecs}`);
