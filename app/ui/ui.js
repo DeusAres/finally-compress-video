@@ -259,9 +259,9 @@ function template(opts) {
     <div class="fcv-dbody"><table class="fcv-tbl fcv-pred-tbl"><thead><tr><th></th><th scope="col">Previsto</th><th scope="col">Reale</th><th scope="col">Scarto</th></tr></thead><tbody>
       <tr><th scope="row">Peso <small>MB</small></th><td data-ref="pW1"></td><td data-ref="pW2"></td><td data-ref="pW3"></td></tr>
       <tr><th scope="row">Tempo <small>m:ss</small></th><td data-ref="pT1"></td><td data-ref="pT2"></td><td data-ref="pT3"></td></tr>
-    </tbody></table></div>
+    </tbody></table>
+    <p class="fcv-pred-note" data-ref="predNote" hidden></p></div>
   </details>
-  <p class="fcv-pred-note" data-ref="predNote" hidden></p>
   <button class="px-btn px-btn--ok px-btn--xl px-btn--block" data-ref="save">${s('scrittura', { scale: 3 })}Salva nelle Foto</button>
   <p class="fcv-save-msg" data-ref="saveMsg" aria-live="polite"></p>
   <p class="fcv-outname" data-ref="outName"></p>
@@ -798,7 +798,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.eta.textContent = fmtTime(eta);
     if (p === 'video') { if (!st.vt0 && d.done > 0) st.vt0 = elapsed; st.vt1 = elapsed; st.vFrames = d.total; } else if (st.vt0 && !st.vtEnd) st.vtEnd = elapsed;
     st.lastElapsed = elapsed;
-    if (st.predT > 0) { R.tline.hidden = false; R.tline.textContent = `Previsto ${fmtTime(st.predT)} · trascorso ${fmtTime(elapsed)} · residuo ${fmtTime(eta)}`; }
+    if (st.predT > 0) { R.tline.hidden = false; R.tline.textContent = `Previsto ${fmtTime(st.predT)} · residuo ${fmtTime(eta)}`; }
     if (Number.isFinite(d.fps)) R.fps.innerHTML = `${nf0.format(d.fps)}<small>fps</small>`;
     if (p === 'video' && d.total) R.frames.innerHTML = `${nf0.format(d.done)}<small>/${nf0.format(d.total)}</small>`;
   }

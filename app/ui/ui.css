@@ -180,8 +180,7 @@
 .fcv-go svg { width: 12px; height: 21px; }
 .fcv-resume { display: grid; gap: var(--sp-2); margin-top: var(--sp-2); }
 .fcv-summary { display: flex; flex-wrap: wrap; gap: 0 var(--sp-1); align-items: center; }
-.fcv-summary .px-chip { min-height: 26px; max-width: 100%; }
-.fcv-summary .px-chip:nth-child(2), .fcv-summary .px-chip:first-child:not([data-qchip]) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; line-height: 1.5; }
+.fcv-summary .px-chip { display: inline-block; min-height: 0; max-width: 100%; padding: 1px var(--sp-2); font-size: var(--fs-sm); line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Tabelle */
 .fcv-tbl { width: calc(100% - var(--px-border) * 2); margin: var(--px-border); border-collapse: collapse; background: var(--surface-2); box-shadow: var(--px-ring); table-layout: fixed; font-variant-numeric: tabular-nums; }
@@ -213,7 +212,7 @@
 .fcv-chain li[data-s="now"] { background: var(--accent); color: var(--accent-text); }
 .fcv-chain li[data-s="done"] { color: var(--ok-strong); }
 .fcv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-1) var(--sp-2); }
-.fcv-stat { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-1); padding: var(--sp-1) var(--sp-2); background: var(--surface-2); min-width: 0; }
+.fcv-stat { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--sp-1); padding: var(--sp-1) var(--sp-2); background: var(--surface-2); min-width: 0; }
 .fcv-stat .px-label { font-size: var(--fs-xs); }
 .fcv-stat .v { font: 400 var(--fs-mono) /1 var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fcv-stat .v small { font: 400 var(--fs-sm)/1 var(--font-mono); color: var(--muted); margin-left: 2px; }
@@ -400,6 +399,7 @@ dialog.fcv-about::backdrop { background: rgba(14, 15, 24, .72); }
   .fcv-chain li span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .fcv-chain li { min-height: 32px; }
   .fcv-stat .v { font-size: 20px; }
+  .fcv-stat .px-label { letter-spacing: 0; }
   .fcv-pct { font-size: var(--fs-2xl); }
   .fcv-pct small { font-size: var(--fs-lg); }
   .fcv-big { font-size: var(--fs-3xl); }
