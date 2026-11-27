@@ -1,7 +1,7 @@
 // Run: node --test app/lib/queue.test.mjs — logica pura della coda (app/lib/queue.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { newQueue, addItems, removeItem, retryItem, nextItem, matchFiles, restoreQueue, uniqueOutName, readyToSave, keepNames,
+import { newQueue, addItems, removeItem, retryItem, nextItem, matchFiles, restoreQueue, uniqueOutName, readyToSave, keepNames, fmtPct,
   itemLabel, queueStats, summaryLines, serialize, ST, sameKey, pending } from './queue.js';
 
 const F = (name, size, lastModified = 1000) => ({ name, size, lastModified });
@@ -91,4 +91,19 @@ test('risultati da salvare, nomi OPFS da tenere, statistiche, etichette e riassu
   assert.match(L[2], /IMG_1\.MOV .*100\.0 → 40\.0 .*−60 .*0:30 .*peso 41\.0\/40\.0 MB · tempo 0:28\/0:30/);
   assert.match(L[3], /Errore: Errore: boom/);
   assert.ok(L.slice(1).every((l) => l.split('|').length === 6));
+});
+
+test('v0.37.4 fmtPct: segno esplicito, virgola e spazio (mai «−-69.3%»); voce «tenuto l\'originale» senza file da salvare', () => {
+  assert.equal(fmtPct(60), '−60,0 %');
+  assert.equal(fmtPct(-69.3), '+69,3 %');
+  assert.equal(fmtPct(0.01), '±0,0 %');
+  assert.equal(fmtPct(-69.3, 0), '+69 %');
+  assert.equal(fmtPct(NaN), '—');
+  const q = newQueue(); addItems(q, [a, b]);
+  q.items[0].status = ST.DONE; q.items[0].result = { kept: 'light', inMB: 76, outMB: 76, pct: 0, timeS: 2 };
+  q.items[1].status = ST.DONE; q.items[1].result = { opfsName: 'o2.mov', inMB: 100, outMB: 169.3, pct: -69.3, timeS: 30 };
+  assert.deepEqual(readyToSave(q).map((it) => it.id), [2]);
+  assert.equal(queueStats(q).toSave, 1);
+  const L = summaryLines(q);
+  assert.match(L[2], /\| +orig\. \|/); assert.match(L[3], /\| +\+69 \|/);
 });
