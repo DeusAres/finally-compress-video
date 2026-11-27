@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Prototipi selettore risoluzione</title>
+<link rel="stylesheet" href="../../vendor/fonts/fonts.css">
+<link rel="stylesheet" href="../../app/ui/theme.css">
+<style>
+  body { margin: 0; padding: var(--sp-4); max-width: 480px; margin-inline: auto; font: 400 var(--fs-md)/1.25 var(--font-body); }
+  h1 { font: 400 var(--fs-xl)/1 var(--font-pixel); margin: 0 0 var(--sp-3); }
+  .bar { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-4); }
+  .bar button, .chip, .step button { font: 400 var(--fs-md)/1 var(--font-pixel); min-height: 36px; padding: 0 var(--sp-3); color: var(--text); background: var(--surface); border: 0; box-shadow: var(--px-ring); margin: var(--px-border); cursor: pointer; }
+  .bar button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+  .var { margin-bottom: var(--sp-6); }
+  .var h2 { font: 400 var(--fs-px)/1 var(--font-pixel); margin: 0 0 var(--sp-2); }
+  .ctl { height: 44px; display: flex; align-items: center; gap: var(--sp-2); position: relative; }
+  .pc { margin: var(--sp-2) 0 0; font-size: var(--fs-sm); line-height: 1.2; color: var(--muted); }
+  .pc b { color: var(--text); }
+  .chip { display: inline-flex; align-items: center; gap: var(--sp-2); height: 40px; }
+  .pop { position: absolute; left: 0; top: 46px; z-index: 5; display: flex; flex-wrap: wrap; gap: var(--sp-1); padding: var(--sp-2); background: var(--surface); box-shadow: var(--px-ring); max-width: 100%; }
+  .pop[hidden] { display: none; }
+  .pop button { min-height: 36px; padding: 0 var(--sp-2); font: 400 var(--fs-md)/1 var(--font-pixel); background: var(--surface-2); color: var(--text); border: 0; cursor: pointer; }
+  .pop button[aria-current="true"] { background: var(--accent); color: var(--accent-text); }
+  .step { display: flex; align-items: center; }
+  .step .v { min-width: 96px; text-align: center; font: 400 var(--fs-lg)/1 var(--font-pixel); }
+  .step button { min-width: 44px; padding: 0; }
+  .step button:disabled { opacity: .4; cursor: default; }
+  .sl { position: relative; flex: 1; height: 44px; margin: 0 var(--sp-2); }
+  .sl input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 2; }
+  .sl .rail { position: absolute; left: 0; right: 0; top: 14px; height: 8px; background: var(--surface-2); box-shadow: var(--px-ring); }
+  .sl .tick { position: absolute; top: 10px; width: 4px; height: 16px; margin-left: -2px; background: var(--line); }
+  .sl .tick.on { background: var(--accent); }
+  .sl .knob { position: absolute; top: 6px; width: 16px; height: 24px; margin-left: -8px; background: var(--highlight); box-shadow: var(--px-ring); }
+  .sl .lbl { position: absolute; top: 32px; font: 400 14px/1 var(--font-pixel); transform: translateX(-50%); color: var(--muted); white-space: nowrap; }
+  .sl .lbl.on { color: var(--text); }
+  .val { font: 400 var(--fs-lg)/1 var(--font-pixel); min-width: 64px; text-align: right; }
+  select { font: 400 var(--fs-md)/1 var(--font-pixel); height: 40px; padding: 0 var(--sp-6) 0 var(--sp-3); color: var(--text); background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M0 0h12L6 8z' fill='%23566c86'/%3E%3C/svg%3E") no-repeat right 10px center; border: 0; box-shadow: var(--px-ring); margin: var(--px-border); border-radius: 0; appearance: none; -webkit-appearance: none; min-width: 160px; }
+  .dots { display: flex; gap: var(--sp-1); flex: 1; margin: var(--px-border); }
+  .dots button { flex: 1 1 0; min-width: 0; height: 36px; padding: 0; font: 400 var(--fs-sm)/1 var(--font-pixel); color: var(--text); background: var(--surface); border: 0; box-shadow: var(--px-ring); cursor: pointer; }
+  .dots button[aria-current="true"] { background: var(--accent); color: var(--accent-text); flex-grow: 2.2; }
+</style>
+</head>
+<body>
+<h1>Selettore risoluzione</h1>
+<div class="bar" role="group" aria-label="Sorgente">
+  <button data-src="2160" aria-pressed="true">Sorgente 4K</button><button data-src="1080" aria-pressed="false">Sorgente 1080p</button><button data-theme>Tema</button>
+</div>
+<div id="vars"></div>
+<script>
+const ALL = [2160, 1440, 1080, 720, 540, 480];
+const lbl = (v) => v === 'orig' ? 'Originale' : v === 2160 ? '4K' : v + 'p';
+const st = { src: 2160, val: 'orig' };
+const opts = () => ['orig', ...ALL.filter((v) => v < st.src)];
+const VARS = [
+  { id: 'a', t: 'a) Chip con popover', pc: '<b>Pro:</b> occupa un solo chip, le opzioni compaiono solo quando servono. <b>Contro:</b> due tocchi per cambiare; il popover copre il contenuto sotto.', render: (el) => {
+      el.innerHTML = `<button class="chip" aria-haspopup="true" aria-expanded="false">${lbl(st.val)} ▾</button><div class="pop" hidden></div>`;
+      const b = el.querySelector('.chip'), p = el.querySelector('.pop');
+      p.innerHTML = opts().map((v) => `<button data-v="${v}"${v === st.val ? ' aria-current="true"' : ''}>${lbl(v)}</button>`).join('');
+      b.onclick = () => { p.hidden = !p.hidden; b.setAttribute('aria-expanded', !p.hidden); };
+      p.onclick = (e) => { const v = e.target.dataset.v; if (v) { st.val = v === 'orig' ? v : +v; draw(); } };
+  } },
+  { id: 'b', t: 'b) Stepper ◀ ▶', pc: '<b>Pro:</b> un tocco per passo, larghezza fissa, nessun popup. <b>Contro:</b> con molte opzioni salti lontani richiedono più tocchi.', render: (el) => {
+      const o = opts(), i = o.indexOf(st.val);
+      el.innerHTML = `<div class="step"><button aria-label="Più bassa"${i >= o.length - 1 ? ' disabled' : ''}>◀</button><span class="v">${lbl(st.val)}</span><button aria-label="Più alta"${i <= 0 ? ' disabled' : ''}>▶</button></div>`;
+      const [m, p] = el.querySelectorAll('button');
+      m.onclick = () => { st.val = o[i + 1]; draw(); }; p.onclick = () => { st.val = o[i - 1]; draw(); };
+  } },
+  { id: 'c', t: 'c) Slider pixel-art a tacche', pc: '<b>Pro:</b> si vede l\'intera scala e il trascinamento è veloce. <b>Contro:</b> bersagli piccoli, etichette fitte su schermi stretti.', render: (el) => {
+      const o = opts().slice().reverse(), n = o.length, i = o.indexOf(st.val), pos = (k) => n > 1 ? k * 100 / (n - 1) : 0;
+      el.innerHTML = `<div class="sl"><div class="rail"></div>${o.map((v, k) => `<span class="tick${k <= i ? ' on' : ''}" style="left:${pos(k)}%"></span><span class="lbl${k === i ? ' on' : ''}" style="left:${pos(k)}%">${v === 'orig' ? 'Orig' : v === 2160 ? '4K' : v}</span>`).join('')}<span class="knob" style="left:${pos(i)}%"></span><input type="range" min="0" max="${n - 1}" step="1" value="${i}" aria-label="Risoluzione"></div><span class="val">${lbl(st.val)}</span>`;
+      el.querySelector('input').oninput = (e) => { st.val = o[+e.target.value]; draw(); };
+  } },
+  { id: 'd', t: 'd) Select nativo stilizzato', pc: '<b>Pro:</b> su iOS apre la ruota nativa, accessibile e affidabile. <b>Contro:</b> poco pixel-art, il menu è del sistema.', render: (el) => {
+      el.innerHTML = `<select aria-label="Risoluzione">${opts().map((v) => `<option value="${v}"${v === st.val ? ' selected' : ''}>${lbl(v)}</option>`).join('')}</select>`;
+      el.querySelector('select').onchange = (e) => { const v = e.target.value; st.val = v === 'orig' ? v : +v; draw(); };
+  } },
+  { id: 'e', t: 'e) Barra compatta a tasti proporzionali', pc: '<b>Pro:</b> tutte le opzioni su una riga, un tocco, la scelta attiva si allarga. <b>Contro:</b> con 7 voci i tasti sono stretti (etichette abbreviate).', render: (el) => {
+      el.innerHTML = `<div class="dots" role="radiogroup" aria-label="Risoluzione">${opts().map((v) => `<button role="radio" data-v="${v}"${v === st.val ? ' aria-current="true" aria-checked="true"' : ' aria-checked="false"'}>${v === 'orig' ? 'Orig' : v === 2160 ? '4K' : v === st.val ? v + 'p' : v}</button>`).join('')}</div>`;
+      el.querySelector('.dots').onclick = (e) => { const v = e.target.dataset.v; if (v) { st.val = v === 'orig' ? v : +v; draw(); } };
+  } },
+];
+const host = document.getElementById('vars');
+host.innerHTML = VARS.map((v) => `<section class="var"><h2>${v.t}</h2><div class="ctl" id="c-${v.id}"></div><p class="pc">${v.pc}</p></section>`).join('');
+function draw() { if (!opts().includes(st.val)) st.val = 'orig'; for (const v of VARS) v.render(document.getElementById('c-' + v.id)); }
+document.querySelectorAll('[data-src]').forEach((b) => b.onclick = () => { st.src = +b.dataset.src; document.querySelectorAll('[data-src]').forEach((x) => x.setAttribute('aria-pressed', x === b)); draw(); });
+document.querySelector('[data-theme]').onclick = () => { const d = document.documentElement; d.dataset.theme = d.dataset.theme === 'dark' ? 'light' : 'dark'; };
+const q = new URLSearchParams(location.search); if (q.get('theme')) document.documentElement.dataset.theme = q.get('theme');
+draw();
+</script>
+</body>
+</html>

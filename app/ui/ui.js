@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.38.0';
-import { sprite, SPRITES } from './sprite.js?v=0.38.0';
-import { createLogStore } from './logstore.js?v=0.38.0';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.0';
+import { bus } from './bus.js?v=0.38.1';
+import { sprite, SPRITES } from './sprite.js?v=0.38.1';
+import { createLogStore } from './logstore.js?v=0.38.1';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.1';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -23,9 +23,9 @@ const KF_INFO = {
 const RES_LIST = [2160, 1440, 1080, 720, 540, 480]; // formati standard (lato corto); solo quelli sotto la sorgente, mai ingrandimenti
 const resLbl = (v) => (v === 'orig' ? 'Originale' : v === 2160 ? '4K' : `${v}p`);
 const MODE_INFO = {
-  hdr: '<b>HDR</b> 10 bit, Dolby Vision',
-  hdr8: '<b>HDR</b> 8 bit, ~2,5× più veloce',
-  sdr: '<b>SDR</b> Compatibile ovunque, più veloce, niente HDR.',
+  hdr: '<b>HDR 10 bit</b> · Dolby Vision · più lento',
+  hdr8: '<b>HDR 8 bit</b> · niente Dolby Vision · ~2,5× più veloce',
+  sdr: '<b>SDR 8 bit</b> · compatibile ovunque · più veloce',
 };
 const AUDIO = [
   { v: 'copy', b: 'Originale', t: 'Copia l\'audio com\'è: nessuna perdita, istantaneo. Consigliato.' },
@@ -141,13 +141,22 @@ function template(opts) {
     <div class="fcv-rowh"><p class="fcv-hint" data-ref="brHint" aria-live="polite"></p><div class="fcv-hearts" data-ref="hearts"></div></div>
   </fieldset>
   <div class="fcv-mode">
-    <label class="fcv-switch" title="HDR o SDR">
-      <input type="checkbox" name="fcv-mode" role="switch" value="hdr" checked aria-label="Modo HDR (spento: SDR)">
-      <span class="trk" aria-hidden="true"><span class="lb l">HDR</span><span class="lb r">SDR</span>
-        <span class="knob"><i class="sun">${s('sun', { scale: 2 })}</i><i class="moon">${s('moon', { scale: 2 })}</i><b class="t-hdr">HDR</b><b class="t-sdr">SDR</b></span></span>
-    </label>
-    <div class="fcv-mode-r"><p class="fcv-mode-d" data-ref="modeDesc" aria-live="polite"></p>
-      <label class="fcv-fast" data-ref="fastBox"><input type="checkbox" name="fcv-fast" value="1"><span>Veloce: 8 bit, no Dolby Vision</span></label></div>
+    <div class="fcv-sws">
+      <label class="fcv-switch" title="HDR o SDR">
+        <input type="checkbox" name="fcv-mode" role="switch" value="hdr" checked aria-label="Modo HDR (spento: SDR)">
+        <span class="trk" aria-hidden="true"><span class="lb l">HDR</span><span class="lb r">SDR</span>
+          <span class="knob"><i class="sun">${s('sun', { scale: 2 })}</i><i class="moon">${s('moon', { scale: 2 })}</i><b class="t-hdr">HDR</b><b class="t-sdr">SDR</b></span></span>
+      </label>
+      <div class="fcv-sw-bits">
+        <label class="fcv-switch fcv-bits" title="10 bit o 8 bit">
+          <input type="checkbox" name="fcv-bits" role="switch" value="10" checked aria-label="10 bit (spento: 8 bit)">
+          <span class="trk" aria-hidden="true"><span class="lb l">10 BIT</span><span class="lb r">8 BIT</span>
+            <span class="knob"><b class="t-hdr">10 BIT</b><b class="t-sdr">8 BIT</b></span></span>
+        </label>
+      </div>
+    </div>
+    <p class="fcv-mode-d" data-ref="modeDesc" aria-live="polite"></p>
+    <p class="fcv-bitnote" data-ref="bitNote" hidden>SDR solo 8 bit</p>
   </div>
   <fieldset class="fcv-field fcv-res" data-ref="resBox" hidden>
     <legend class="px-sr">Risoluzione</legend>
@@ -500,7 +509,13 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.resGrid.innerHTML = opts.map((v) => `<label><input type="radio" name="fcv-res" value="${v}"${v === cur ? ' checked' : ''}><span>${resLbl(v)}</span></label>`).join('');
     st.wantRes = cur; st.resOpts = opts.length;
   }
-  const syncResBox = () => { R.resBox.hidden = st.settings.mode === 'hdr' || (st.resOpts || 0) < 2; R.fastBox.hidden = st.settings.mode === 'sdr'; };
+  const syncResBox = () => { R.resBox.hidden = st.settings.mode === 'hdr' || (st.resOpts || 0) < 2; R.bitNote.hidden = st.settings.mode !== 'sdr'; };
+  // 10 bit / 8 bit: in SDR il 10 bit non esiste (conversione GPU a 8 bit) → interruttore bloccato su 8 bit; tornando in HDR si ripristina la scelta precedente
+  const syncBits = () => {
+    const m = root.querySelector('input[name="fcv-mode"]'), b = root.querySelector('input[name="fcv-bits"]'); if (!m || !b) return;
+    if (m.checked) { if (b.disabled) { b.disabled = false; b.checked = st.bits10 !== false; } else st.bits10 = b.checked; }
+    else { if (!b.disabled) { st.bits10 = b.checked; b.disabled = true; } b.checked = false; }
+  };
   function syncDs() {
     buildRes();
     R.apacBox.hidden = !(st.file?.apac || st.file?.meta); // «Mantieni audio spaziale e metadati iPhone»: solo se la sorgente ha apac o tracce mebx
@@ -508,13 +523,13 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    const sdr = root.querySelector('input[name="fcv-mode"]')?.checked === false, mode = sdr ? 'sdr' : root.querySelector('input[name="fcv-fast"]')?.checked ? 'hdr8' : 'hdr', res = mode !== 'hdr' ? resSel() : 'orig'; // settings.mode = 'hdr' | 'hdr8' | 'sdr'; settings.res = 'orig' | 2160 | 1440 | 1080 | 720 | 540 | 480; downscale = alias di res 1080
+    const sdr = root.querySelector('input[name="fcv-mode"]')?.checked === false, mode = sdr ? 'sdr' : root.querySelector('input[name="fcv-bits"]')?.checked === false ? 'hdr8' : 'hdr', res = mode !== 'hdr' ? resSel() : 'orig'; // settings.mode = 'hdr' | 'hdr8' | 'sdr'; settings.res = 'orig' | 2160 | 1440 | 1080 | 720 | 540 | 480; downscale = alias di res 1080
     return { mode, bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq') && mode === 'hdr', // in SDR / HDR veloce la qualità per scena è disattivata
       res, downscale: res === 1080, apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
-    if (s.mode) { const c = root.querySelector('input[name="fcv-mode"]'); if (c) c.checked = s.mode !== 'sdr'; const f = root.querySelector('input[name="fcv-fast"]'); if (f) f.checked = s.mode === 'hdr8'; }
+    if (s.mode) { const c = root.querySelector('input[name="fcv-mode"]'); if (c) c.checked = s.mode !== 'sdr'; const f = root.querySelector('input[name="fcv-bits"]'); if (f) { if (s.mode === 'sdr') { st.bits10 = f.disabled ? st.bits10 : f.checked; f.disabled = true; f.checked = false; } else { f.disabled = false; f.checked = st.bits10 = s.mode !== 'hdr8'; } } }
     set('fcv-br', s.bitrateMbps); set('fcv-kf', s.keyframeS); set('fcv-audio', s.audioMode);
     if (s.bgAudio != null) { const c = root.querySelector('input[name="fcv-bgaudio"]'); if (c) c.checked = !!s.bgAudio; }
     if (s.par2 != null) { const c = root.querySelector('input[name="fcv-par2"]'); if (c) c.checked = !!s.par2; }
@@ -526,6 +541,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     syncSettings();
   }
   function syncSettings() {
+    syncBits();
     st.settings = readSettings();
     const { bitrateMbps: br, keyframeS: kf, audioMode: am } = st.settings;
     const info = BR_INFO[br] || BR_INFO[8];

@@ -26,7 +26,7 @@ for (const sc of SCEN) {
   await page.waitForFunction(() => { const t = document.querySelector('[data-ref="fDur"]')?.textContent; return t && t !== '—'; }, null, { timeout: 30000 });
   await page.evaluate(({ mode, res }) => {
     const set = (sel, v) => { const e = document.querySelector(sel); if (!e) return false; e.checked = v; e.dispatchEvent(new Event('change', { bubbles: true })); return true; };
-    set('input[name="fcv-mode"]', mode !== 'sdr'); if (mode === 'hdr8') set('input[name="fcv-fast"]', true);
+    set('input[name="fcv-mode"]', mode !== 'sdr'); if (mode === 'hdr8') set('input[name="fcv-bits"]', false);
     if (res !== 'orig' && !set(`input[name="fcv-res"][value="${res}"]`, true)) { const g = document.querySelector('[data-ref="resGrid"]'); g.insertAdjacentHTML('beforeend', `<label><input type="radio" name="fcv-res" value="${res}" checked></label>`); }
   }, sc);
   await page.waitForTimeout(300); await page.click('[data-ref="go"]');

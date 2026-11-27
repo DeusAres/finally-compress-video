@@ -99,8 +99,9 @@
 .fcv-rowh .fcv-hint { flex: 1; }
 .fcv[data-picked="0"] .fcv-est { display: none; }
 
-/* Interruttore HDR / SDR (sole / luna) */
-.fcv-mode { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-3); align-items: center; }
+/* Due interruttori affiancati: HDR/SDR (sole/luna) e 10 BIT/8 BIT */
+.fcv-mode { display: grid; gap: var(--sp-2); }
+.fcv-sws { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
 .fcv-switch { position: relative; display: block; width: 128px; height: 40px; margin: var(--px-border); cursor: pointer; }
 .fcv-switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .fcv-switch .trk { position: absolute; inset: 0; background: var(--px-steel); box-shadow: var(--px-ring), inset 0 var(--px-unit) 0 0 rgba(0, 0, 0, .35); }
@@ -117,16 +118,10 @@
 .fcv-switch input:not(:checked) ~ .trk .moon svg rect { fill: var(--px-ink); }
 .fcv-switch input:focus-visible ~ .trk { outline: var(--px-unit) dashed var(--highlight); outline-offset: 3px; }
 .fcv-switch input:disabled ~ .trk { opacity: .55; }
+.fcv-bits .lb, .fcv-bits .knob b { font-size: 16px; white-space: nowrap; }
 .fcv-mode-d { font-size: var(--fs-sm); line-height: 1.2; color: var(--muted); }
 .fcv-mode-d b { color: var(--text); font-family: var(--font-pixel); font-size: var(--fs-md); margin-right: var(--sp-1); }
-
-/* «Veloce» (HDR a 8 bit): casella compatta accanto all'interruttore */
-.fcv-mode-r { display: grid; gap: 2px; min-width: 0; }
-.fcv-fast { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; font: 700 var(--fs-sm)/1.1 var(--font-body); min-height: 28px; }
-.fcv-fast input { appearance: none; -webkit-appearance: none; flex: none; width: 18px; height: 18px; margin: 2px; background: var(--surface); box-shadow: 0 0 0 3px var(--line); cursor: pointer; }
-.fcv-fast input:checked { background: var(--accent); box-shadow: 0 0 0 3px var(--line), inset 0 0 0 3px var(--surface); }
-.fcv-fast input:focus-visible { outline: 3px dashed var(--highlight); outline-offset: 4px; }
-.fcv-fast span { min-width: 0; font-size: var(--fs-xs); }
+.fcv-bitnote { font-size: var(--fs-xs); line-height: 1.2; color: var(--muted); }
 
 /* Risoluzione (SDR e HDR veloce) */
 .fcv-res legend { margin-bottom: 2px; }
@@ -389,6 +384,8 @@ dialog.fcv-about::backdrop { background: rgba(14, 15, 24, .72); }
   .fcv-switch input:not(:checked) ~ .trk .knob { transform: translateX(48px); }
   .fcv-switch .knob svg { width: 18px; height: 18px; }
   .fcv-switch .knob b, .fcv-switch .lb { font-size: 20px; }
+  .fcv-bits .lb, .fcv-bits .knob b { font-size: 14px; }
+  .fcv-sws { gap: var(--sp-2); }
   .fcv-tile .tv { font-size: 26px; }
   .fcv-freed .sep { display: none; }
   .fcv-freed .nw { display: block; }
