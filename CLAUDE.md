@@ -24,6 +24,9 @@ Mai Opus per ciò che Sonnet/Haiku fanno bene. Mai più agenti per lo stesso tem
 
 Niente esplorazione libera del repo, niente installazioni non richieste, niente rifacimento di misure già nel prompt.
 
+## Versione stabile
+- **Ultima stabile: v0.37.3**, commit `c58c12e` (tag locale `stable-v0.37.3`; il push dei tag è bloccato dal proxy: fa fede l'hash). Rollback: su un branch `git checkout c58c12e -- .`, poi `tools/stamp-version.sh` con un numero di versione NUOVO (mai riusarne uno: cache/service worker), commit e push su `main`. Aggiornare la versione stabile solo su decisione dell'utente.
+
 ## Fatti di progetto (non riscoprire)
 - App: `index.html` (radice, GitHub Pages da `main`), `app/lib/*` pipeline, `app/ui/*` interfaccia, `sw.js` offline, `tools/` laboratorio/diag/script. Rilascio: `tools/stamp-version.sh` timbra `?v=` (JS e CSS), `BUILD_ID`, `version.txt`, precache.
 - Safari iOS 27: frame 10-bit solo da `<video>` seek + rVFC richiesto prima del seek; `VideoDecoder` dà 8 bit; encoder HEVC VideoToolbox realtime (rate control legato al tempo reale → controllo bitrate a circuito chiuso); downscale a 10 bit impossibile (research/14); PiP su `<video>` separato tiene viva la pagina (solo scheda Safari).
