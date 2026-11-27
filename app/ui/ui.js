@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.37.3';
-import { sprite, SPRITES } from './sprite.js?v=0.37.3';
-import { createLogStore } from './logstore.js?v=0.37.3';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.37.3';
+import { bus } from './bus.js?v=0.37.4';
+import { sprite, SPRITES } from './sprite.js?v=0.37.4';
+import { createLogStore } from './logstore.js?v=0.37.4';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.37.4';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -530,6 +530,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (nf) stTxt = `<b class="fcv-q-badge" data-k="warn">Da riselezionare</b>${it.status === 'attesa' && (it.interrupted || it.resume) ? ' riprende dai segmenti già pronti' : ''}`;
     else if (it.status === 'attesa') stTxt = `<b class="fcv-q-badge">In attesa</b>${it.resume ? ` riprende dal segmento ${it.resume.done + 1}/${it.resume.total}` : it.interrupted ? ' interrotto: riprende dai segmenti già pronti' : ''}${it.lost ? ' risultato perso: da ricomprimere' : ''}`;
     else if (it.status === 'corso') stTxt = `<b class="fcv-q-badge" data-k="run">In corso</b> <span class="fcv-q-pct px-digits">${Math.max(0, st.lastPct)} %</span>`;
+    else if (it.status === 'fatto' && r?.kept) stTxt = `<b class="fcv-q-badge" data-k="off">${r.kept === 'light' ? 'Già leggero' : 'Non conviene'}</b> <span class="fcv-q-res">${esc(r.kept === 'light' ? 'tenuto l\'originale' : 'non conviene ricomprimere: tenuto l\'originale')} · ${fmtMB(r.inMB)} MB</span>`;
     else if (it.status === 'fatto' && r) stTxt = `<b class="fcv-q-badge" data-k="ok">Fatto</b> <span class="fcv-q-res">${r.pct >= 0 ? '−' : '+'}${nf0.format(Math.abs(r.pct))} % · ${fmtMB(r.outMB)} MB · ${fmtTime(r.timeS)}</span>${it.saved ? ' <span class="fcv-q-saved">✓ salvato</span>' : ''}`;
     else if (it.status === 'errore') stTxt = `<b class="fcv-q-badge" data-k="bad">Errore</b> <span class="fcv-q-err">${esc(it.error || '')}</span>`;
     else if (it.status === 'annullata') stTxt = '<b class="fcv-q-badge" data-k="off">Annullata</b>';
@@ -591,6 +592,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.qdSub.textContent = S.length ? `${S.length} video · ${fmtMB(inMB)} → ${fmtMB(outMB)} MB${err ? ` · ${err} con errore` : ''}` : `${err} video con errore`;
     R.qdBody.innerHTML = items.map((it) => {
       const r = it.result, nm = `<th scope="row"><span class="fcv-qd-name">${esc(it.name)}</span>`;
+      if (it.status === 'fatto' && r?.kept) return `<tr>${nm}<small>da ${fmtMB(r.inMB)} MB</small></th><td colspan="2" class="fcv-qd-st">${r.kept === 'light' ? 'già leggero' : 'non conviene'}: tenuto l'originale</td><td>${fmtTime(r.timeS)}</td></tr>`;
       if (it.status === 'fatto' && r) return `<tr>${nm}<small>da ${fmtMB(r.inMB)} MB</small></th><td>${fmtMB(r.outMB)}${r.predMB ? `<small>≈${fmtMB(r.predMB)}</small>` : ''}</td><td class="${r.pct >= 0 ? 'ok' : 'bad'}">${r.pct >= 0 ? '−' : '+'}${nf0.format(Math.abs(r.pct))}</td><td>${fmtTime(r.timeS)}${r.predS ? `<small>≈${fmtTime(r.predS)}</small>` : ''}</td></tr>`;
       return `<tr>${nm}</th><td colspan="3" class="fcv-qd-st">${esc({ errore: 'errore', annullata: 'annullata', attesa: 'non fatta', corso: 'interrotta' }[it.status] || it.status)}</td></tr>`;
     }).join('');
@@ -733,6 +735,17 @@ export function mountUI(root, handlers = {}, opts = {}) {
   function showResult(r) {
     if (pendingProg) { const x = pendingProg; pendingProg = null; applyProgress(x); } // ultimo avanzamento ancora in coda
     st.result = r;
+    R.save.hidden = !!r.kept;
+    if (r.kept) { // v0.37.4: nessun file prodotto (sorgente già leggera o risultato non più leggero): si tiene l'originale
+      R.doneTitle.textContent = r.kept === 'light' ? 'Già leggero' : 'Non conviene';
+      R.big.textContent = '—'; R.big.classList.remove('neg');
+      R.bigSub.textContent = 'tenuto l\'originale';
+      R.inMB.textContent = R.outMB.textContent = `${fmtMB(r.inMB)} MB`; R.afterBar.style.setProperty('--p', '1');
+      R.freed.textContent = r.kept === 'light' ? `Il video è già leggero${r.srcMbps ? ` (${nf1.format(r.srcMbps)} Mbps)` : ''}: ricomprimerlo farebbe risparmiare poco e peggiorerebbe la qualità. Nessun file nuovo: tieni l'originale.`
+        : 'Il file ricompresso non pesava meno dell\'originale: non te lo propongo. Tieni l\'originale (o prova un bitrate più basso).';
+      R.pred.hidden = R.predNote.hidden = R.sceneBr.hidden = true; R.outName.textContent = ''; R.saveMsg.textContent = '';
+      setStage('done'); R.done.scrollIntoView?.({ block: 'start' }); return;
+    }
     const saved = Number.isFinite(r.savedPct) ? r.savedPct : (1 - r.outMB / r.inMB) * 100;
     R.big.textContent = `${saved >= 0 ? '−' : '+'}${nf0.format(Math.abs(saved))}%`;
     R.big.classList.toggle('neg', saved < 0);

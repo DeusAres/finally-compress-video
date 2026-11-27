@@ -33,10 +33,21 @@ let n = 0;
 {
   const i = await load(join(ROOT, 'samples', 'IMG_7440.mov'));
   const j = judgeOrigin(i, 'IMG_7440.mov');
-  assert.equal(j.verdict, 'esportato');
-  assert.equal(j.reasons.length, 2);
+  // Audio prima del video + displayname NON bastano (anche gli originali recenti li hanno): nessun avviso.
+  assert.ok(i.tracks[0].handler === 'soun' && 'com.apple.quicktime.displayname' in i.keys);
+  assert.notEqual(j.verdict, 'esportato');
+  assert.equal(j.reasons.length, 0);
   assert.equal(i.keys['com.apple.quicktime.displayname'], 'IMG_7440');
   assert.ok(i.tracks.find((t) => t.entry === 'mebx' && t.keys.includes('video-orientation'))); n++;
+}
+// 2b) prove forti sintetiche: H.264 senza mebx in IMG_xxxx → esportato; HEVC 8 bit senza mebx → esportato; con nome non IMG_ no
+{
+  const base = await load(join(ROOT, 'samples', 'IMG_2147.mov'));
+  const mk = (codec, bitDepth, mebx) => ({ ...base, tracks: base.tracks.filter((t) => mebx || t.entry !== 'mebx').map((t) => t.handler === 'vide' ? { ...t, codec, bitDepth } : t) });
+  assert.equal(judgeOrigin(mk('H.264', 8, false), 'IMG_0001.MOV').verdict, 'esportato');
+  assert.equal(judgeOrigin(mk('HEVC', 8, false), 'IMG_0001.MOV').verdict, 'esportato');
+  assert.notEqual(judgeOrigin(mk('H.264', 8, false), 'clip.mov').verdict, 'esportato');
+  assert.equal(judgeOrigin(mk('HEVC', 10, true), 'IMG_0001.MOV').verdict, 'originale'); n++;
 }
 // 3) non iPhone → sconosciuto; ftyp
 {
@@ -50,7 +61,7 @@ const orig = join(UP, '7182b98d-IMG_2813.mov'), comp = join(UP, '0e19b6a1-IMG_28
 if (existsSync(orig) && existsSync(comp)) {
   const a = await load(orig), b = await load(comp);
   assert.equal(judgeOrigin(a, 'IMG_2813.MOV').verdict, 'originale');
-  assert.equal(judgeOrigin(b, 'IMG_2813.MOV').verdict, 'esportato');
+  assert.notEqual(judgeOrigin(a, 'IMG_2813.MOV').verdict, 'esportato'); assert.notEqual(judgeOrigin(b, 'IMG_2813.MOV').verdict, 'esportato'); // copia 10 bit non rilevabile con prove forti
   const va = a.tracks.find((t) => t.handler === 'vide'), vb = b.tracks.find((t) => t.handler === 'vide');
   assert.deepEqual([va.w, vb.w, vb.bitDepth, !!vb.dv], [3840, 1920, 10, true]);
   assert.ok(a.tracks.some((t) => t.entry === 'apac') && !b.tracks.some((t) => t.entry === 'apac')); n++;

@@ -3,7 +3,7 @@
 // from saved records, fallback on trial errors, per-segment closed-loop controller, summary/log lines.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planSceneSegments, centerWindow, runSceneSearch, sceneSummary, sceneLine, lumaU8FromRGBA, warmPrior, timingLine, createTrialDeps, toRecord, lumaTestLine } from './scenesearch.js';
+import { planSceneSegments, centerWindow, runSceneSearch, sceneSummary, sceneLine, lumaU8FromRGBA, warmPrior, timingLine, createTrialDeps, toRecord, lumaTestLine, segmentCap, segmentCaps, worthRecompress, sourceBitrate } from './scenesearch.js';
 import { searchBitrate } from './ratecontrol.js';
 import { planSegments } from './jobstore.js';
 import { nextBitrate, createSegmentRate } from './brctl.js';
@@ -341,4 +341,62 @@ test('createTrialDeps (v0.36.3): frame non verificati (skipFrame) codificati ma 
   assert.equal(out[0].dbs.length, 28, 'in diretta: 30 punti − 2 esclusi');
   assert.equal((await d.measure(w, out[1].encoded)).length, 28, 'misura dopo: stessi esclusi');
   assert.equal(d.timing().frames, 60, 'tutti i frame codificati');
+});
+
+// ---------- v0.37.4: tetto dalla sorgente, sorgente leggera, prove saltate ----------
+test('v0.37.4 tetto per segmento = min(limite, 0.85 × sorgente del segmento), anche a bitrate fisso', () => {
+  assert.equal(segmentCap(4.6e6, 8e6), 0.85 * 4.6e6);
+  assert.equal(segmentCap(20e6, 8e6), 8e6);
+  assert.equal(segmentCap(0, 8e6), 8e6, 'senza dimensioni: il limite');
+  // segmenti a sorgente diversa: 4 Mbps e 30 Mbps
+  const f = Array.from({ length: 12 * 30 }, (_, i) => ({ ts: i / 30, dur: 1 / 30, size: (i < 6 * 30 ? 4e6 : 30e6) / 8 / 30 }));
+  const ss = planSegments(f.length, 30, 4 * 30), caps = segmentCaps(f, ss, 8e6);
+  assert.ok(Math.abs(caps[0] - 3.4e6) < 1e3, `${caps[0]}`); assert.equal(caps[caps.length - 1], 8e6);
+  const plan = planSceneSegments(f, ss, 8e6);
+  plan.forEach((p, k) => { assert.ok(Math.abs(p.cap - caps[k]) < 1, `cap ${k}`); assert.ok(p.prior <= p.cap); });
+});
+
+test('v0.37.4 sorgente leggera (IMG_1779: 4.6 Mbps, limite 8) → non si ricomprime; 9 Mbps vs 8 → sì', () => {
+  const f = Array.from({ length: 30 * 10 }, (_, i) => ({ dur: 1 / 30, size: 4.6e6 / 8 / 30 }));
+  assert.ok(Math.abs(sourceBitrate(f) - 4.6e6) < 1e3);
+  assert.equal(worthRecompress(sourceBitrate(f), 8e6).keep, true);
+  assert.equal(worthRecompress(8.7e6, 8e6).keep, true, '≤ 1.1×');
+  assert.equal(worthRecompress(9e6, 8e6).keep, false);
+  assert.equal(worthRecompress(0, 8e6).keep, false, 'dimensioni ignote: si ricomprime');
+});
+
+test('v0.37.4 runSceneSearch: target mai oltre il tetto della sorgente (record cs, riga di log)', async () => {
+  const f = frames.map((x) => ({ ...x, size: x.size * 0.3 })); // ~5.5 Mbps
+  const plan = planSceneSegments(f, segStarts, 12e6), lines = [];
+  const recs = await runSceneSearch({ plan, deps: stubDeps(), ceiling: 12e6, log: (t) => lines.push(t) });
+  recs.forEach((r, k) => assert.ok(r.b <= plan[k].cap + 1, `seg ${k}: ${r.b} > ${plan[k].cap}`));
+  assert.equal(recs[1].why, 'clamped-max'); assert.equal(recs[1].cs, 1);
+  assert.ok(lines.some((l) => /0\.85 × bitrate della sorgente/.test(l)));
+});
+
+const hardDeps = (calls) => ({ ...stubDeps({ calls }), async measure(w, enc) { const q = 88 + CAL.sd + 10 * Math.log2(enc.b / 20e6); return Array.from({ length: 30 }, () => dbFor(q)); } });
+test('v0.37.4 prove saltate: 2 segmenti di fila al limite con VMAF molto basso, sorgente simile → il resto senza prove', async () => {
+  const plan = planSceneSegments(frames, segStarts, 8e6), lines = [], calls = [];
+  const recs = await runSceneSearch({ plan, deps: hardDeps(calls), ceiling: 8e6, log: (t) => lines.push(t) });
+  assert.deepEqual(recs.slice(0, 2).map((r) => r.why), ['clamped-max', 'clamped-max']);
+  assert.ok(recs.slice(2).every((r) => r.why === 'skipped' && r.b === 8e6 && r.ms === 0));
+  assert.equal(new Set(calls.map((c) => c[0])).size, 2, 'prove solo sui primi 2 segmenti');
+  assert.ok(lines.some((l) => /^prove saltate da qui/.test(l)));
+  assert.ok(lines.some((l) => /prove saltate: i segmenti prima/.test(l)));
+  const sum = sceneSummary(plan, recs); assert.equal(sum.skipped, plan.length - 2);
+});
+
+test('v0.37.4 prove NON saltate quando il bitrate sorgente cambia molto fra i segmenti', async () => {
+  const f = frames.map((x, i) => ({ ...x, size: x.size * (Math.floor(i / (4 * fps)) % 2 ? 2 : 1) })); // 18 ↔ 36 Mbps alternati
+  const plan = planSceneSegments(f, segStarts, 8e6), calls = [];
+  const recs = await runSceneSearch({ plan, deps: hardDeps(calls), ceiling: 8e6 });
+  assert.ok(recs.every((r) => r.why !== 'skipped'));
+  assert.equal(new Set(calls.map((c) => c[0])).size, plan.length);
+});
+
+test('v0.37.4 prove NON saltate quando il VMAF al limite è vicino alla soglia', async () => {
+  const plan = planSceneSegments(frames, segStarts, 8e6), calls = [];
+  const deps = { ...stubDeps({ calls }), async measure(w, enc) { const q = 88 + CAL.sd + 10 * Math.log2(enc.b / 9e6); return Array.from({ length: 30 }, () => dbFor(q)); } };
+  const recs = await runSceneSearch({ plan, deps, ceiling: 8e6 });
+  assert.ok(recs.every((r) => r.why !== 'skipped'));
 });
