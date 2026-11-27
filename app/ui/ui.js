@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.37.4';
-import { sprite, SPRITES } from './sprite.js?v=0.37.4';
-import { createLogStore } from './logstore.js?v=0.37.4';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.37.4';
+import { bus } from './bus.js?v=0.38.0';
+import { sprite, SPRITES } from './sprite.js?v=0.38.0';
+import { createLogStore } from './logstore.js?v=0.38.0';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.0';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -509,7 +509,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
     const sdr = root.querySelector('input[name="fcv-mode"]')?.checked === false, mode = sdr ? 'sdr' : root.querySelector('input[name="fcv-fast"]')?.checked ? 'hdr8' : 'hdr', res = mode !== 'hdr' ? resSel() : 'orig'; // settings.mode = 'hdr' | 'hdr8' | 'sdr'; settings.res = 'orig' | 2160 | 1440 | 1080 | 720 | 540 | 480; downscale = alias di res 1080
-    return { mode, bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq'), res, downscale: res === 1080, apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
+    return { mode, bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq') && mode === 'hdr', // in SDR / HDR veloce la qualità per scena è disattivata
+      res, downscale: res === 1080, apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
@@ -538,7 +539,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.advSum.textContent = `${st.settings.mode === 'sdr' ? 'SDR · ' : st.settings.mode === 'hdr8' ? 'HDR 8 bit · ' : ''}${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ` · ${st.settings.par3 ? 3 : 2} player` : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.res !== 'orig' ? ` · ${st.settings.res}p` : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
     updateEstimate();
   }
-  const pixRatio = (s, f) => { const r = resApplies(s.res, f), sh = shortSide(f); return r === 'orig' || !sh ? 1 : (r * r) / (sh * sh); }; // pixel scelti / pixel sorgente (stesso rapporto d'aspetto)
+  const pixRatio = (s, f) => { const r = resApplies(s.res, f), sh = shortSide(f); if (r === 'orig' || !sh) return 1; const k = r / sh, w = (f.width || 0) * k, h = (f.height || 0) * k; return w && h ? Math.min(1, Math.pow((w * h) / (1920 * 1080), 0.75)) : 1; }; // v0.38: stessa regola dell'encoder (downscale.js resBitrateFactor): bitrate valido per il 1080p, scalato sotto
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, pixelRatio: pixRatio(st.settings, st.file), audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js
   const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: parN(st.settings), width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: resApplies(st.settings.res, f) !== 'orig', mode: st.settings.mode, res: resApplies(st.settings.res, f) }) : null; };
   function updateEstimate() {

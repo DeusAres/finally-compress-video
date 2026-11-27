@@ -1,6 +1,6 @@
 // «Riduci a 1080p» (v0.31, default OFF): logica PURA (Node: app/lib/downscale.test.mjs). Nessun ripiego: se l'encoder non scala
 // mantenendo i 10 bit il job si ferma (DownscaleError). Il passaggio via canvas/WebGPU darebbe 8 bit = niente HDR: vietato (research/02 §10 run 4).
-import { parseSps } from './hevc-vui.js?v=0.37.4';
+import { parseSps } from './hevc-vui.js?v=0.38.0';
 
 export const DS_SHORT = 1080;
 export const DS_MESSAGE = 'Safari non riesce a ridurre la risoluzione mantenendo l\'HDR a 10 bit: riprova senza «Riduci a 1080p».';
@@ -70,3 +70,6 @@ export function verifyDownscale(desc, want) {
   if (bd >= 10 ? (r.bitDepth < bd || r.bitDepthChroma < bd || hvccDepth < bd) : (r.bitDepth !== bd || r.bitDepthChroma !== bd || hvccDepth !== bd)) why.push(`bit depth ${r.bitDepth}/${r.bitDepthChroma} (hvcC ${hvccDepth}) invece di ${bd}`);
   return { ok: !why.length, why: why.join('; '), ...r };
 }
+
+/** v0.38: il bitrate scelto vale per il 1080p; sotto il 1080p si scala con (pixel/pixel 1080p)^0.75 (mai sopra 1). Stessa regola in encoder e stima. */
+export const resBitrateFactor = (outW, outH) => Math.min(1, Math.pow((outW * outH) / (1920 * 1080), 0.75));
