@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.37.1';
-import { sprite, SPRITES } from './sprite.js?v=0.37.1';
-import { createLogStore } from './logstore.js?v=0.37.1';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.37.1';
+import { bus } from './bus.js?v=0.37.2';
+import { sprite, SPRITES } from './sprite.js?v=0.37.2';
+import { createLogStore } from './logstore.js?v=0.37.2';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.37.2';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -279,6 +279,7 @@ function template(opts) {
 <details class="px-panel fcv-log fcv-store" data-ref="stBox">
   <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Spazio occupato</b><span class="px-chip count" data-ref="stCount">–</span></summary>
   <p class="fcv-st-line" data-ref="stLine">Apri per calcolare lo spazio usato dall'app.</p>
+  <p class="fcv-st-est">Non incluse qui: le copie temporanee che Safari fa dei video scelti o trascinati (e dei file condivisi) restano fuori dal sito, in «Documenti e dati» di Safari, e la pagina non le vede né le cancella. Safari le elimina quando chiudi questa scheda (dal codice di WebKit, non verificato su iPhone); se restano (Safari chiuso a forza o riavviato), Impostazioni › Generali › Spazio iPhone › Safari mostra «Documenti e dati». Dopo una coda grande chiudi la scheda e riaprila.</p>
   <div class="fcv-st-actions"><button class="px-btn px-btn--primary" data-ref="stFree" type="button" disabled>Libera spazio</button><span class="fcv-copy-msg" data-ref="stMsg" aria-live="polite"></span></div>
   <details class="fcv-st-det" data-ref="stDet">
     <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Dettagli</b></summary>
