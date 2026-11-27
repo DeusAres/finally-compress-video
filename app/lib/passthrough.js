@@ -10,9 +10,9 @@
 // its new ID), extra trak children (udta, meta, ...) verbatim. Pure ES2020, no deps; Safari and Node.
 //
 // Output layout: [ftyp][mdat Mediabunny][mdat passthrough][moov + copied traks]
-import { parseBoxes, childBoxes, boxBytes, trakHandler } from './dovi.js?v=0.38.2';
-import { makeBox, rebuild } from './mp4-post.js?v=0.38.2';
-import { trakSampleEntry, kid, tkhdInfo, TK, mvhdInfo, mdhdInfo, readElst, makeElst, shiftEdits, sampleLayout, copyApacData } from './apac.js?v=0.38.2';
+import { parseBoxes, childBoxes, boxBytes, trakHandler } from './dovi.js?v=0.38.3';
+import { makeBox, rebuild } from './mp4-post.js?v=0.38.3';
+import { trakSampleEntry, kid, tkhdInfo, TK, mvhdInfo, mdhdInfo, readElst, makeElst, shiftEdits, sampleLayout, copyApacData } from './apac.js?v=0.38.3';
 
 const u32 = (b, o) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0;
 const put32 = (b, o, v) => { b[o] = (v >>> 24) & 255; b[o + 1] = (v >>> 16) & 255; b[o + 2] = (v >>> 8) & 255; b[o + 3] = v & 255; };

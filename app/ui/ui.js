@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.38.2';
-import { sprite, SPRITES } from './sprite.js?v=0.38.2';
-import { createLogStore } from './logstore.js?v=0.38.2';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.2';
+import { bus } from './bus.js?v=0.38.3';
+import { sprite, SPRITES } from './sprite.js?v=0.38.3';
+import { createLogStore } from './logstore.js?v=0.38.3';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.3';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -156,7 +156,6 @@ function template(opts) {
       </div>
     </div>
     <p class="fcv-mode-d" data-ref="modeDesc" aria-live="polite"></p>
-    <p class="fcv-bitnote" data-ref="bitNote" hidden>SDR solo 8 bit</p>
   </div>
   <fieldset class="fcv-field fcv-res" data-ref="resBox" hidden>
     <legend class="px-sr">Risoluzione</legend>
@@ -505,7 +504,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
   const resSel = () => { const v = root.querySelector('input[name="fcv-res"]:checked')?.value; return v && v !== 'orig' ? +v : 'orig'; };
   const resApplies = (res, f) => (res !== 'orig' && res > 0 && res < shortSide(f) ? res : 'orig'); // risoluzione effettiva su un file
   function buildRes(want = st.wantRes ?? resSel()) {
-    const sh = srcShort(), opts = ['orig', ...RES_LIST.filter((v) => v < sh)], cur = opts.includes(want) ? want : 'orig', key = opts.join();
+    const sh = srcShort(), opts = ['orig', ...RES_LIST.filter((v) => !sh || v < sh)], // senza sorgente: tutte le tacche
+      near = (w) => (w === 'orig' ? 'orig' : RES_LIST.filter((v) => opts.includes(v)).sort((a, b) => Math.abs(a - w) - Math.abs(b - w))[0] ?? 'orig'), cur = opts.includes(want) ? want : near(want), key = opts.join();
     st.wantRes = cur; st.resOpts = opts.length;
     if (st.resKey !== key || !R.resGrid.querySelector('.fcv-resrail')) { // struttura solo se cambiano le opzioni (mai durante il trascinamento)
       st.resKey = key; const n = opts.length, pos = (k) => (n > 1 ? (k * 100) / (n - 1) : 0);
@@ -532,7 +532,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.resGrid.querySelector('.fcv-reslbl').textContent = resLbl(v);
     R.resGrid.querySelectorAll('input[name="fcv-res"]').forEach((r) => { r.checked = r.value === String(v); });
   }
-  const syncResBox = () => { R.resBox.hidden = st.settings.mode === 'hdr' || (st.resOpts || 0) < 2; R.bitNote.hidden = st.settings.mode !== 'sdr'; };
+  const syncResBox = () => { R.resBox.hidden = st.settings.mode === 'hdr' || (st.resOpts || 0) < 2; };
   // 10 bit / 8 bit: in SDR il 10 bit non esiste (conversione GPU a 8 bit) → interruttore bloccato su 8 bit; tornando in HDR si ripristina la scelta precedente
   const syncBits = () => {
     const m = root.querySelector('input[name="fcv-mode"]'), b = root.querySelector('input[name="fcv-bits"]'); if (!m || !b) return;

@@ -101,7 +101,7 @@
 
 /* Due interruttori affiancati: HDR/SDR (sole/luna) e 10 BIT/8 BIT */
 .fcv-mode { display: grid; gap: var(--sp-2); }
-.fcv-sws { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; }
+.fcv-sws { display: flex; flex-wrap: wrap; gap: var(--sp-3); align-items: center; justify-content: space-evenly; }
 .fcv-switch { position: relative; display: block; width: 128px; height: 40px; margin: var(--px-border); cursor: pointer; }
 .fcv-switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .fcv-switch .trk { position: absolute; inset: 0; background: var(--px-steel); box-shadow: var(--px-ring), inset 0 var(--px-unit) 0 0 rgba(0, 0, 0, .35); }
@@ -121,7 +121,6 @@
 .fcv-bits .lb, .fcv-bits .knob b { font-size: 16px; white-space: nowrap; }
 .fcv-mode-d { font-size: var(--fs-sm); line-height: 1.2; color: var(--muted); }
 .fcv-mode-d b { color: var(--text); font-family: var(--font-pixel); font-size: var(--fs-md); margin-right: var(--sp-1); }
-.fcv-bitnote { font-size: var(--fs-xs); line-height: 1.2; color: var(--muted); }
 
 /* Risoluzione (SDR e HDR veloce) */
 .fcv-res legend { margin-bottom: 2px; }
