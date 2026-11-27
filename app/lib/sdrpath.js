@@ -1,10 +1,10 @@
-// Modalità SDR (v0.38): VideoDecoder → WebGPU compute (inversa HLG → OOTF → BT.2020→709 → Hable → OETF BT.709, uscita NV12,
+// Modalità SDR (v0.38; v0.39: 3D LUT «Apple» al posto di Hable): VideoDecoder → WebGPU compute (3D LUT 33³ che imita Apple; ripiego: inversa HLG → OOTF → BT.2020→709 → Hable → OETF BT.709, uscita NV12,
 // scalatura opzionale 4K → 1080p nello stesso shader) → VideoFrame NV12 8 bit → encoder HEVC 8 bit.
 // Percorso validato su iPhone con tools/diag/sdr8.html v2.1 (IMG_2177 1080p60 HLG): decoder 655 fps, NV12 8 bit con dati HLG grezzi;
 // frame del decoder FUORI ORDINE (135/271) → riordino per pts sorgente prima dell'encoder (causa degli scatti); compute + mapAsync con
 // 4 frame in volo: 250 fps, gpu 1.8 ms, collo di bottiglia l'encoder. A 8 bit la scalatura su GPU è lecita (in HDR no: research/14).
 // Interfaccia come parallelFrames (frames.js): async iterable di VideoFrame per un intervallo di frame [{ts, dur}] in µs, in ordine.
-import { interruptError } from './frames.js?v=0.38.5';
+import { interruptError } from './frames.js?v=0.38.6';
 
 export const SDR = { inFlight: 4, decodeAhead: 8, r0: 1.25, minWin: 30, hlgPeakNits: 1000, tolUs: 500 };
 export const CS709 = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
@@ -58,10 +58,13 @@ const WGSL = `struct U{src:vec2f,dst:vec2f,tm:f32,lw:f32,taps:f32,stride:f32,mat
 @group(0)@binding(3) var sp:sampler;
 fn ld(p:vec2i)->vec3f{return textureLoad(t,p).rgb;}
 fn sm(uv:vec2f)->vec3f{return textureSampleBaseClampToEdge(t,sp,uv).rgb;}
+@group(0)@binding(4) var lt:texture_3d<f32>;
+fn lutf(c:vec3f)->vec3f{return textureSampleLevel(lt,sp,clamp(c,vec3f(0),vec3f(1))*(32.0/33.0)+vec3f(0.5/33.0),0.0).rgb;}
 fn hb(x:f32)->f32{return ((x*(0.15*x+0.05)+0.004)/(x*(0.15*x+0.5)+0.06))-0.02/0.3;}
 fn hlgi(e:vec3f)->vec3f{let a=0.17883277;let b=0.28466892;let c=0.55991073;let x=clamp(e,vec3f(0),vec3f(1));return select((exp((x-c)/a)+b)/12.0,x*x/3.0,x<=vec3f(0.5));}
 fn sdr(c:vec3f)->vec3f{
  if(u.tm<0.5){return c;}
+ if(u.tm>2.5){return lutf(c);}
  let sc=hlgi(c);let ys=dot(sc,vec3f(0.2627,0.678,0.0593));
  let d=u.lw*pow(max(ys,1e-6),0.2)*sc;
  let l=max(vec3f(dot(vec3f(1.6605,-0.5876,-0.0728),d),dot(vec3f(-0.1246,1.1329,-0.0083),d),dot(vec3f(-0.0182,-0.1006,1.1187),d)),vec3f(0));
@@ -90,6 +93,23 @@ fn kr()->f32{if(u.mat>0.5){return 1.4746;}return 1.5748;}
 const WGSL_COPY = WGSL.replace('var t:texture_external;', 'var t:texture_2d<f32>;').replace('textureLoad(t,p)', 'textureLoad(t,p,0)').replace('textureSampleBaseClampToEdge(t,sp,uv)', 'textureSampleLevel(t,sp,uv,0.0)');
 export const _wgsl = { WGSL, WGSL_COPY };
 
+// ---------- 3D LUT «Apple» (tools/diag/sdr8.html v2.3): 33³ × RGB uint16 LE (r veloce) HLG R'G'B' → SDR R'G'B' BT.709 ----------
+export const LUT = { n: 33, url: new URL('../../vendor/lut/apple_hlg_sdr33.bin', import.meta.url).href };
+const f2h = (v) => { v = Math.min(1, Math.max(0, v)); if (v < 6.103515625e-5) return Math.round(v / 5.960464477539063e-8); let e = Math.floor(Math.log2(v)), m = Math.round((v / 2 ** e - 1) * 1024); if (m === 1024) { e++; m = 0; } return ((e + 15) << 10) | m; };
+/** ArrayBuffer della LUT → dati rgba16float (alfa 1) per la texture 3D; lancia se la dimensione non è 33³×3 uint16. */
+export function lutToHalf(buf, n = LUT.n) {
+  const q = new Uint16Array(buf.byteLength % 2 ? 0 : buf);
+  if (q.length !== n ** 3 * 3) throw new Error(`dimensione ${buf.byteLength} B (attesi ${n ** 3 * 6})`);
+  const d = new Uint16Array(n ** 3 * 4);
+  for (let i = 0; i < n ** 3; i++) { for (let c = 0; c < 3; c++) d[4 * i + c] = f2h(q[3 * i + c] / 65535); d[4 * i + 3] = 0x3c00; }
+  return d;
+}
+/** Carica la LUT (una volta per processo); null se manca o è errata (il chiamante ripiega su Hable). */
+let lutP = null;
+export function loadLutData(fetchFn = globalThis.fetch, url = LUT.url) {
+  return lutP ||= (async () => { try { const r = await fetchFn(url); if (!r.ok) throw new Error(`HTTP ${r.status}`); return lutToHalf(await r.arrayBuffer()); } catch (e) { lutP = null; return { error: errStr(e) }; } })();
+}
+
 // ---------- WebGPU ----------
 let G = null, EXT = true, COPY = 'frame';
 const errStr = (e) => `${e?.name || 'Error'}: ${e?.message || e}`;
@@ -101,6 +121,13 @@ async function gpu() {
   const dev = await ad.requestDevice(), pipes = {};
   const g = { dev, smp: dev.createSampler({ minFilter: 'linear', magFilter: 'linear' }), pipe: (copy) => pipes[+copy] || (pipes[+copy] = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: copy ? WGSL_COPY : WGSL }), entryPoint: 'cs' } })) };
   dev.lost.then(() => { g.lost = true; });
+  g.luts = {}; // texture 3D per modalità: 'lut' (33³) o 'dummy' (1³, Hable)
+  g.lutTex = async (use) => g.luts[use] ||= (async () => {
+    const d = use ? await loadLutData() : null, ok = d instanceof Uint16Array, n = ok ? LUT.n : 1;
+    const t = dev.createTexture({ size: [n, n, n], dimension: '3d', format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    dev.queue.writeTexture({ texture: t }, ok ? d : new Uint16Array([0, 0, 0, 0x3c00]), { bytesPerRow: n * 8, rowsPerImage: n }, [n, n, n]);
+    return { t, ok, err: ok || !use ? null : d.error };
+  })();
   G = g; return g;
 }
 /** Risorsa di ingresso per il frame: texture esterna (Safari: dati HLG grezzi) o, in ripiego, texture rgba copiata. tmp: da distruggere. */
@@ -125,16 +152,19 @@ function srcEntry(g, f, tmp, note) {
  * Convertitore frame del decoder → VideoFrame NV12 BT.709 (dw×dh). Compute → buffer di storage → copia in uno di `depth` buffer
  * MAP_READ → mapAsync (asincrono, `depth` frame in volo) → new VideoFrame(NV12). Evita VideoFrame(canvas WebGPU) (sdr8 v1: 102 fps).
  */
-// hlg: tone mapping Hable → BT.709 (modalità 'sdr'); keep2020 (modalità 'hdr8'): nessuna conversione, i valori HLG sono solo scalati e
+// hlg: LUT Apple (ripiego Hable) → BT.709 (modalità 'sdr'); keep2020 (modalità 'hdr8'): nessuna conversione, i valori HLG sono solo scalati e
 // riscritti in Y'CbCr con la matrice BT.2020 (la stessa con cui la texture esterna li ha letti), uscita colorSpace HLG.
 export const CSHLG = { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false };
 export const VUIHLG = { primaries: 9, transfer: 18, matrix: 9, fullRange: false };
-export async function createNv12Converter({ sw, sh, dw, dh, hlg, keep2020 = false, depth = SDR.inFlight, note = () => {} }) {
+export async function createNv12Converter({ sw, sh, dw, dh, hlg, keep2020 = false, depth = SDR.inFlight, note = () => {}, log = () => {}, lut = true }) {
   if (dw % 2 || dh % 2) throw new Error(`SDR: uscita ${dw}×${dh} con lato dispari`);
   if (dw > sw || dh > sh) throw new Error(`SDR: ${sw}×${sh} → ${dw}×${dh} ingrandirebbe`);
-  const g = await gpu(), S = nv12Stride(dw), size = S * dh * 3 / 2, taps = scaleTaps(sw, sh, dw, dh);
+  const g = await gpu(), tone = hlg && !keep2020;
+  const lt = await g.lutTex(tone && lut); // sempre una texture 3D (binding 4): 1³ se non serve
+  if (tone) { if (lt.ok) log(`SDR: conversione Apple (LUT ${LUT.n}³)`); else log(`SDR: LUT non disponibile, uso Hable${lt.err ? ` (${lt.err})` : ''}`, 'warn'); }
+  const S = nv12Stride(dw), size = S * dh * 3 / 2, taps = scaleTaps(sw, sh, dw, dh);
   const ub = g.dev.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  g.dev.queue.writeBuffer(ub, 0, new Float32Array([sw, sh, dw, dh, hlg && !keep2020 ? 2 : 0, SDR.hlgPeakNits, taps, S, keep2020 ? 1 : 0, 0, 0, 0]));
+  g.dev.queue.writeBuffer(ub, 0, new Float32Array([sw, sh, dw, dh, tone ? (lt.ok ? 3 : 2) : 0, SDR.hlgPeakNits, taps, S, keep2020 ? 1 : 0, 0, 0, 0]));
   const outCs = keep2020 ? CSHLG : CS709;
   const sb = g.dev.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }); // unico: la coda GPU è seriale
   const slots = Array.from({ length: depth }, () => ({ mb: g.dev.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), busy: Promise.resolve() }));
@@ -147,7 +177,7 @@ export async function createNv12Converter({ sw, sh, dw, dh, hlg, keep2020 = fals
       const tmp = []; let p;
       try {
         const src = srcEntry(g, f, tmp, note), pipe = g.pipe(src.copy);
-        const bg = g.dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: src.res }, { binding: 1, resource: { buffer: ub } }, { binding: 2, resource: { buffer: sb } }, { binding: 3, resource: g.smp }] });
+        const bg = g.dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: src.res }, { binding: 1, resource: { buffer: ub } }, { binding: 2, resource: { buffer: sb } }, { binding: 3, resource: g.smp }, { binding: 4, resource: lt.t.createView({ dimension: '3d' }) }] });
         const ce = g.dev.createCommandEncoder(), pass = ce.beginComputePass();
         pass.setPipeline(pipe); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(Math.ceil(S / 32), Math.ceil(dh / 16)); pass.end();
         ce.copyBufferToBuffer(sb, 0, s.mb, 0, size); g.dev.queue.submit([ce.finish()]);
@@ -266,7 +296,7 @@ export async function openSdrSource({ MB, track, log = () => {}, tonemap = true 
   }
   let width = 0, height = 0, gpuPath = 'nessuno (frame diretti)', format = '';
   await firstFrame((f) => { width = f.displayWidth; height = f.displayHeight; format = f.format; });
-  log(`decoder ${config.codec} → frame ${format} ${width}×${height}, colore ${transfer || '?'} → ${tonemap ? (hlg ? 'Hable (inversa HLG → BT.709)' : 'nessun tone mapping') : 'HLG invariato (nessuna conversione)'}`);
+  log(`decoder ${config.codec} → frame ${format} ${width}×${height}, colore ${transfer || '?'} → ${tonemap ? (hlg ? 'LUT Apple (HLG → BT.709)' : 'nessun tone mapping') : 'HLG invariato (nessuna conversione)'}`);
   /** Prova il percorso GPU sul primo frame (un import fallito può invalidare il device: se ne crea uno nuovo). */
   async function probeGpu() {
     await firstFrame(async (f) => {
@@ -284,7 +314,7 @@ export async function openSdrSource({ MB, track, log = () => {}, tonemap = true 
       const T = stats || {}; T.gpu ??= 0; T.gpuN ??= 0;
       const dw = out.width || width, dh = out.height || height, direct = !tonemap && dw === width && dh === height;
       if (!direct && gpuPath.startsWith('nessuno')) await probeGpu();
-      const conv = direct ? createDirectConverter() : await createNv12Converter({ sw: width, sh: height, dw, dh, hlg, keep2020: !tonemap, note });
+      const conv = direct ? createDirectConverter() : await createNv12Converter({ sw: width, sh: height, dw, dh, hlg, keep2020: !tonemap, note, log });
       let dec;
       try {
         dec = decodeOrdered({ chunks: chunksFrom(list[0].ts / 1e6 + 1e-6), config, wantUs: list.map((f) => f.ts), signal, stats: T });

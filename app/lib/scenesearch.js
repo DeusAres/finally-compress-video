@@ -31,8 +31,8 @@
 // Memoria: la cache della luma sorgente è Uint8 a ½ risoluzione e solo frame pari (1080×1920 → 0.5 MB × 30 =
 // 15 MB per finestra), liberata a fine segmento; chunk di prova ≈ 1–3 MB; encoder/decoder di prova sempre chiusi
 // (finally) PRIMA dell'encode finale, che non coesiste mai con loro (research/12 §7.9, research/03).
-import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.38.5';
-import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.38.5';
+import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.38.6';
+import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.38.6';
 
 export const SCENE = Object.freeze({
   targetVmaf: RC.targetVmaf,   // 88 (BIBBIA §12)

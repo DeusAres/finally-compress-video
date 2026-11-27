@@ -1,7 +1,7 @@
 // Test Node della modalità SDR (v0.38): riordino per pts, timestamp, pipeline decoder → convertitore, risoluzioni, manifest con mode/res.
 // Uso: node app/lib/sdrpath.test.mjs
 import assert from 'node:assert/strict';
-const { createDirectConverter, nearestIndex, createReorder, frameTiming, sdrWindow, scaleTaps, nv12Stride, sdrCodec, decodeOrdered, convertOrdered, _wgsl } = await import('./sdrpath.js');
+const { createDirectConverter, nearestIndex, createReorder, frameTiming, sdrWindow, scaleTaps, nv12Stride, sdrCodec, decodeOrdered, convertOrdered, _wgsl, lutToHalf, loadLutData, LUT } = await import('./sdrpath.js');
 const { resDims, sdrRes, verifyDownscale, sdrDsError, SDR_DS_MESSAGE } = await import('./downscale.js');
 const { sameVideoSettings, videoMode, videoRes } = await import('./jobstore.js');
 const { estimateTimeS, speedKey } = await import('../ui/estimate.js');
@@ -121,5 +121,20 @@ const conv = { depth: 4, submit: (f, fr) => new Promise((r) => setTimeout(() => 
   const t = estimateTimeS({ durS: 10, fps: 60, mode: 'hdr8', width: 1920, height: 1080 }); assert.equal(t.fps, 257); assert.equal(t.guess, false);
   assert.equal(speedKey({ mode: 'hdr8', width: 3840, height: 2160, downscale: true }), 'fcv.fps.hdr8.uhd.ds');
   console.log('ok 9 hdr8');
+}
+{
+  // 3D LUT Apple: dimensione, conversione half, ripiego su Hable se manca
+  const { readFileSync } = await import('node:fs');
+  const bin = readFileSync(new URL('../../vendor/lut/apple_hlg_sdr33.bin', import.meta.url));
+  assert.equal(bin.byteLength, 33 ** 3 * 3 * 2);
+  const half = lutToHalf(bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength));
+  assert.equal(half.length, 33 ** 3 * 4); assert.equal(half[3], 0x3c00);
+  assert.throws(() => lutToHalf(new ArrayBuffer(1000)), /dimensione/);
+  assert.ok(_wgsl.WGSL.includes('texture_3d') && _wgsl.WGSL.includes('u.tm>2.5') && _wgsl.WGSL.includes('fn hb('));
+  const miss = await loadLutData(async () => { throw new Error('rete'); }, 'x'); assert.ok(!(miss instanceof Uint16Array) && /rete/.test(miss.error));
+  const bad = await loadLutData(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(100) }), 'x'); assert.ok(/dimensione/.test(bad.error));
+  const good = await loadLutData(async () => ({ ok: true, arrayBuffer: async () => bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength) }), 'x'); assert.ok(good instanceof Uint16Array);
+  assert.equal(LUT.n, 33);
+  console.log('ok 10 LUT Apple + ripiego Hable');
 }
 console.log('sdrpath: tutti ok');

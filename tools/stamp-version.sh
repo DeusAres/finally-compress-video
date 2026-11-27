@@ -47,7 +47,8 @@ icons = sorted('icons/' + f for f in os.listdir('icons') if f.endswith('.png'))
 # v0.30: dipendenze in locale come in finally-cool-film (offline su iOS): bundle Mediabunny e font Google copiati in vendor/
 vend = re.findall(r"from '\./(vendor/[^'?]+)'", html)
 fonts = sorted('vendor/fonts/' + f for f in os.listdir('vendor/fonts')) if os.path.isdir('vendor/fonts') else []
-local = ['./', 'index.html', 'manifest.webmanifest'] + order + vend + css + icons + fonts
+luts = sorted('vendor/lut/' + f for f in os.listdir('vendor/lut') if f.endswith('.bin')) if os.path.isdir('vendor/lut') else []  # 3D LUT SDR (v0.39)
+local = ['./', 'index.html', 'manifest.webmanifest'] + order + vend + css + icons + fonts + luts
 missing = [p for p in local if p not in ('./',) and not os.path.exists(p.split('?')[0])]
 if missing: sys.exit('stamp-version: file di precache mancanti: %s' % missing)
 cdn = sorted(set(re.findall(r"from '(https://cdn\.jsdelivr\.net/[^']+)'", html)))
