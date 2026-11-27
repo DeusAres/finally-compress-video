@@ -125,14 +125,17 @@
 
 /* Risoluzione (SDR e HDR veloce) */
 .fcv-res legend { margin-bottom: 2px; }
-.fcv-resgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(46px, 1fr)); gap: var(--sp-1); margin: var(--px-border); }
-.fcv-resgrid label:first-child { grid-column: span 2; }
-.fcv-resgrid label { position: relative; display: block; min-width: 0; }
-.fcv-resgrid input { position: absolute; inset: 0; opacity: 0; margin: 0; width: 100%; height: 100%; cursor: pointer; }
-.fcv-resgrid span { display: grid; place-items: center; min-height: 32px; padding: 0 2px; background: var(--surface-2); box-shadow: var(--px-ring); font: 700 var(--fs-sm)/1 var(--font-body); text-align: center; white-space: nowrap; }
-.fcv-resgrid input:checked + span { background: var(--accent); color: var(--accent-text); }
-.fcv-resgrid input:focus-visible + span { outline: var(--px-unit) dashed var(--highlight); outline-offset: 1px; }
-.fcv-resgrid input:disabled + span { opacity: .55; }
+.fcv-resgrid { display: flex; align-items: center; gap: var(--sp-3); margin: var(--px-border); min-height: 48px; }
+.fcv-reslbl { flex: none; box-sizing: border-box; width: 5.6em; font: 700 var(--fs-md)/1 var(--font-body); font-variant-numeric: tabular-nums; white-space: nowrap; text-align: left; }
+.fcv-resrail { --p: 0%; position: relative; flex: 1 1 0; min-width: 0; height: 44px; margin: 0 10px; touch-action: none; cursor: pointer; user-select: none; -webkit-user-select: none; outline: none; }
+.fcv-resbar { position: absolute; left: 0; right: 0; top: 10px; height: 8px; background: var(--surface-2); box-shadow: var(--px-ring); }
+.fcv-restick { position: absolute; top: 6px; width: 4px; height: 16px; margin-left: -2px; background: var(--line); }
+.fcv-restick.on { background: var(--accent); }
+.fcv-resknob { position: absolute; top: 2px; left: var(--p); width: 16px; height: 24px; margin-left: -8px; background: var(--highlight); box-shadow: var(--px-ring); }
+.fcv-resrail[data-drag] .fcv-resknob { left: var(--f); }
+.fcv-restxt { position: absolute; top: 30px; transform: translateX(-50%); font: 700 var(--fs-sm)/1 var(--font-body); color: var(--muted); white-space: nowrap; }
+.fcv-restxt.on { color: var(--text); }
+.fcv-resrail:focus-visible .fcv-resknob { outline: var(--px-unit) dashed var(--text); outline-offset: 2px; }
 
 /* nasconde il suggerimento «Libreria foto» a file scelto */
 .fcv-step-file:has(.fcv-file:not([hidden])) .fcv-pick-note { display: none; }

@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.38.1';
-import { sprite, SPRITES } from './sprite.js?v=0.38.1';
-import { createLogStore } from './logstore.js?v=0.38.1';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.1';
+import { bus } from './bus.js?v=0.38.2';
+import { sprite, SPRITES } from './sprite.js?v=0.38.2';
+import { createLogStore } from './logstore.js?v=0.38.2';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.2';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -505,9 +505,32 @@ export function mountUI(root, handlers = {}, opts = {}) {
   const resSel = () => { const v = root.querySelector('input[name="fcv-res"]:checked')?.value; return v && v !== 'orig' ? +v : 'orig'; };
   const resApplies = (res, f) => (res !== 'orig' && res > 0 && res < shortSide(f) ? res : 'orig'); // risoluzione effettiva su un file
   function buildRes(want = st.wantRes ?? resSel()) {
-    const sh = srcShort(), opts = ['orig', ...RES_LIST.filter((v) => v < sh)], cur = opts.includes(want) ? want : 'orig';
-    R.resGrid.innerHTML = opts.map((v) => `<label><input type="radio" name="fcv-res" value="${v}"${v === cur ? ' checked' : ''}><span>${resLbl(v)}</span></label>`).join('');
+    const sh = srcShort(), opts = ['orig', ...RES_LIST.filter((v) => v < sh)], cur = opts.includes(want) ? want : 'orig', key = opts.join();
     st.wantRes = cur; st.resOpts = opts.length;
+    if (st.resKey !== key || !R.resGrid.querySelector('.fcv-resrail')) { // struttura solo se cambiano le opzioni (mai durante il trascinamento)
+      st.resKey = key; const n = opts.length, pos = (k) => (n > 1 ? (k * 100) / (n - 1) : 0);
+      R.resGrid.innerHTML = `<span class="fcv-reslbl px-digits" data-ref="resLbl" aria-hidden="true"></span><div class="fcv-resrail" role="slider" tabindex="0" aria-label="Risoluzione" aria-valuemin="0" aria-valuemax="${n - 1}"><div class="fcv-resbar"></div>${opts.map((v, k) => `<span class="fcv-restick" data-k="${k}" style="left:${pos(k)}%"></span><span class="fcv-restxt" data-k="${k}" style="left:${pos(k)}%">${v === 'orig' ? 'Orig' : v === 2160 ? '4K' : v}</span>`).join('')}<span class="fcv-resknob"></span></div><span class="px-sr">${opts.map((v) => `<input type="radio" name="fcv-res" value="${v}" tabindex="-1">`).join('')}</span>`;
+      const rail = R.resGrid.querySelector('.fcv-resrail'); st.resList = opts;
+      const idxAt = (x) => { const r = rail.getBoundingClientRect(); return n > 1 ? Math.max(0, Math.min(n - 1, Math.round(((x - r.left) / (r.width || 1)) * (n - 1)))) : 0; };
+      const pick = (k) => { if (st.resList[k] === st.wantRes) return; st.wantRes = st.resList[k]; showRes(); rail.dispatchEvent(new Event('change', { bubbles: true })); };
+      let drag = false;
+      const move = (e) => { if (!drag) return; const r = rail.getBoundingClientRect(); // il cursore segue il dito in modo continuo, scatta alla tacca più vicina al rilascio
+        const f = Math.max(0, Math.min(1, (e.clientX - r.left) / (r.width || 1))); rail.style.setProperty('--f', f * 100 + '%'); rail.dataset.drag = '1'; pick(idxAt(e.clientX)); };
+      rail.addEventListener('pointerdown', (e) => { if (e.button) return; drag = true; try { rail.setPointerCapture(e.pointerId); } catch {} rail.focus({ preventScroll: true }); move(e); e.preventDefault(); });
+      rail.addEventListener('pointermove', move);
+      const end = (e) => { if (!drag) return; move(e); drag = false; delete rail.dataset.drag; rail.style.removeProperty('--f'); showRes(); try { rail.releasePointerCapture(e.pointerId); } catch {} };
+      rail.addEventListener('pointerup', end); rail.addEventListener('pointercancel', end);
+      rail.addEventListener('keydown', (e) => { const i = st.resList.indexOf(st.wantRes), d = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : e.key === 'Home' ? -9 : e.key === 'End' ? 9 : 0; if (!d) return; e.preventDefault(); pick(Math.max(0, Math.min(st.resList.length - 1, i + d))); });
+    }
+    showRes();
+  }
+  function showRes() {
+    const rail = R.resGrid.querySelector('.fcv-resrail'); if (!rail) return;
+    const list = st.resList, i = Math.max(0, list.indexOf(st.wantRes)), n = list.length, v = list[i], pos = n > 1 ? (i * 100) / (n - 1) : 0;
+    rail.style.setProperty('--p', pos + '%'); rail.setAttribute('aria-valuenow', i); rail.setAttribute('aria-valuetext', resLbl(v));
+    rail.querySelectorAll('.fcv-restick').forEach((t, k) => t.classList.toggle('on', k <= i)); rail.querySelectorAll('.fcv-restxt').forEach((t, k) => t.classList.toggle('on', k === i));
+    R.resGrid.querySelector('.fcv-reslbl').textContent = resLbl(v);
+    R.resGrid.querySelectorAll('input[name="fcv-res"]').forEach((r) => { r.checked = r.value === String(v); });
   }
   const syncResBox = () => { R.resBox.hidden = st.settings.mode === 'hdr' || (st.resOpts || 0) < 2; R.bitNote.hidden = st.settings.mode !== 'sdr'; };
   // 10 bit / 8 bit: in SDR il 10 bit non esiste (conversione GPU a 8 bit) → interruttore bloccato su 8 bit; tornando in HDR si ripristina la scelta precedente
