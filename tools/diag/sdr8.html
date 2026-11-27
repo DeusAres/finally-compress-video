@@ -30,7 +30,7 @@ th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-alig
 </style>
 </head>
 <body>
-<h1>Modalità SDR veloce a 8 bit <small style="font-size:.55em;opacity:.75">v2 · 27/11</small></h1>
+<h1>Modalità SDR veloce a 8 bit <small style="font-size:.55em;opacity:.75">v2.1 · 27/11</small></h1>
 <p>Percorso veloce: <code>VideoDecoder</code> → WebGPU (inversa HLG → Hable → BT.709, uscita NV12) → encoder HEVC 8 bit, con controllo del bitrate a circuito chiuso. Confronto: frame del decoder diretti all'encoder con etichetta HLG (<b>c_hlg8</b>). Scegli un video HDR dell'iPhone, premi <b>Esegui</b> e tieni la pagina in primo piano fino a «finito». Poi <b>Copia risultati</b> (incolla in chat) e <b>Scarica</b> (al massimo 4 file).</p>
 
 <div class="card">
@@ -64,7 +64,7 @@ const qn = (k, d) => { const m = Q.match(new RegExp(`[?&]${k}=(\\d+(?:\\.\\d+)?)
 // K = frame in volo nella conversione (anelli di buffer), DQ = decodifica avanti, EQ = coda massima dell'encoder, R0 = bitrate iniziale / target
 const K = qn('k', 4), DQ = qn('dq', 8), EQ = qn('eq', 4), R0 = qn('r0', 1.25), BRCTL = !/[?&]nobr\b/.test(Q);
 if (FULL) for (const e of document.querySelectorAll('.full')) e.hidden = false;
-const R = { page: 'tools/diag/sdr8.html v2', ua: navigator.userAgent, when: new Date().toISOString(), settings: {}, features: {}, source: {}, runs: {}, notes: [] };
+const R = { page: 'tools/diag/sdr8.html v2.1', ua: navigator.userAgent, when: new Date().toISOString(), settings: {}, features: {}, source: {}, runs: {}, notes: [] };
 const show = () => { const { runs, ...rest } = R; $('oc').textContent = JSON.stringify(rest).slice(0, -1) + ',"runs":{\n' + Object.entries(runs).map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(',\n') + '}}'; };
 const T0 = performance.now(), now = () => performance.now();
 const log = (s, cls) => { const L = $('log'); if (L.textContent === 'In attesa.') L.textContent = ''; L.textContent += `[${((now() - T0) / 1000).toFixed(1)}s] ${s}\n`; L.scrollTop = L.scrollHeight; if (cls === 'state') $('state').textContent = s; };
@@ -94,33 +94,56 @@ async function loadSource(nWanted) {
   S.chunks = chunks;
   const ts = chunks.map((c) => c.timestamp).sort((a, b) => a - b);
   S.frameDur = ts.length > 1 ? (ts[ts.length - 1] - ts[0]) / (ts.length - 1) : 33333; S.fps = 1e6 / S.frameDur;
-  S.n = Math.min(nWanted, chunks.length); S.mid = Math.floor(S.n / 2); S.pts = ts.slice(0, S.n);
-  R.source = { name: S.file.name, MB: +(S.file.size / 1048576).toFixed(1), codec: S.dcfg.codec, coded: `${S.dcfg.codedWidth}x${S.dcfg.codedHeight}`, cs: csJ(S.dcfg.colorSpace), rot: S.rot, fps: +S.fps.toFixed(3), frames: S.n };
+  S.n = Math.min(nWanted, chunks.length); S.mid = Math.floor(S.n / 2); S.pts = ts.slice(0, S.n); S.allPts = ts;
+  const d = ts.slice(1, S.n + 1).map((t, i) => t - ts[i]); R.source.srcDeltaUs = d.length ? [Math.min(...d), Math.max(...d)] : null; // VFR: min ≠ max
+  R.source = { ...R.source, name: S.file.name, MB: +(S.file.size / 1048576).toFixed(1), codec: S.dcfg.codec, coded: `${S.dcfg.codedWidth}x${S.dcfg.codedHeight}`, cs: csJ(S.dcfg.colorSpace), rot: S.rot, fps: +S.fps.toFixed(3), frames: S.n };
 }
-const tsOf = (i) => Math.round(i * S.frameDur);
+// v2.1: timestamp di uscita = pts SORGENTE del frame (relativi al primo), come l'app: niente CFR inventato (VFR rispettato).
+const tsOf = (i) => S.pts[i] - S.pts[0];
+const durOf = (i) => Math.max(1, (S.allPts[i + 1] ?? S.pts[i] + S.frameDur) - S.allPts[i]);
+/** Indice del frame dal timestamp di un chunk (l'encoder di Safari arrotonda a 90 kHz): il più vicino in tsOf. */
+function idxOf(ts) { let lo = 0, hi = S.n - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (tsOf(m) < ts) lo = m + 1; else hi = m; } return lo > 0 && ts - tsOf(lo - 1) < tsOf(lo) - ts ? lo - 1 : lo; }
+/** Controllo dei timestamp in uscita (µs): numero, unici, monotoni, delta min/max. */
+function tsCheck(list) {
+  const d = list.slice(1).map((t, i) => t - list[i]), u = new Set(list).size;
+  return { n: list.length, unique: u, monotonic: d.every((x) => x > 0), dMin: d.length ? Math.min(...d) : null, dMax: d.length ? Math.max(...d) : null };
+}
 /** Decoder sequenziale senza attese a tempo: alimenta fino a DQ chunk avanti, consegna i primi N frame in ordine di presentazione. */
 function startDecoder(cfgD, N, B, T) {
-  const q = [], sent = new Map(); let err = null, flushed = false, got = 0;
+  // v2.1: i frame sono consegnati nell'ordine dei pts SORGENTE (S.pts), non nell'ordine di uscita del decoder (se Safari li desse in
+  // ordine di decodifica, assegnare i timestamp per posizione rimescolerebbe i frame → scatti). T.ooo = uscite fuori ordine.
+  const want = new Set(S.pts.slice(0, N)), held = new Map(), sent = new Map(); let err = null, flushed = false, got = 0, k = 0, prev = -Infinity;
   const dec = new VideoDecoder({
-    output: (f) => { if (got < N) { const t = sent.get(f.timestamp); if (t != null) { T.decLat += now() - t; T.decN++; } q.push(f); got++; } else f.close(); B.ring(); },
+    output: (f) => {
+      if (f.timestamp < prev) T.ooo++; prev = f.timestamp;
+      if (want.has(f.timestamp) && !held.has(f.timestamp)) { const t = sent.get(f.timestamp); if (t != null) { T.decLat += now() - t; T.decN++; } held.set(f.timestamp, f); got++; } else { if (!want.has(f.timestamp)) T.extra++; f.close(); }
+      B.ring();
+    },
     error: (e) => { err = err || e; B.ring(); },
   });
   dec.ondequeue = () => B.ring();
   dec.configure(cfgD);
   (async () => {
     for (const c of S.chunks) {
-      while (!err && got < N && dec.state === 'configured' && (dec.decodeQueueSize >= DQ || q.length >= DQ)) await B.wait();
+      while (!err && got < N && dec.state === 'configured' && (dec.decodeQueueSize >= DQ || (held.size >= DQ && held.has(S.pts[k])))) await B.wait();
       if (err || got >= N || dec.state !== 'configured') break;
       sent.set(c.timestamp, now()); dec.decode(c);
     }
     if (!err && dec.state === 'configured') await dec.flush();
   })().catch((e) => { if (dec.state !== 'closed') err = err || e; }).finally(() => { flushed = true; B.ring(); });
   return {
-    async next() { const t0 = now(); for (;;) { if (q.length) { T.decWait += now() - t0; return q.shift(); } if (err) throw err; if (flushed) return null; await B.wait(20); } },
-    close() { for (const f of q) { try { f.close(); } catch {} } q.length = 0; try { if (dec.state !== 'closed') dec.close(); } catch {} },
+    async next() {
+      const t0 = now();
+      for (;;) {
+        if (k >= N) return null;
+        const f = held.get(S.pts[k]); if (f) { held.delete(S.pts[k]); k++; T.decWait += now() - t0; return f; }
+        if (err) throw err; if (flushed) { T.missing = N - k; return null; } await B.wait(20);
+      }
+    },
+    close() { for (const f of held.values()) { try { f.close(); } catch {} } held.clear(); try { if (dec.state !== 'closed') dec.close(); } catch {} },
   };
 }
-const newT = () => ({ decWait: 0, decLat: 0, decN: 0, shader: 0, gpu: 0, gpuN: 0, vf: 0, convWait: 0, encWait: 0, encLat: 0, encN: 0 });
+const newT = () => ({ ooo: 0, extra: 0, missing: 0, decWait: 0, decLat: 0, decN: 0, shader: 0, gpu: 0, gpuN: 0, vf: 0, convWait: 0, encWait: 0, encLat: 0, encN: 0 });
 
 // ---------- WebGPU: inversa HLG → OOTF → BT.2020→709 → tone map → OETF BT.709 (+ pre-filtri) ----------
 const WGSL = `struct U{size:vec2f,tm:f32,filt:f32,lw:f32,tgt:f32,k:f32,sig:f32};
@@ -241,11 +264,11 @@ function convGpu(tm, filt) {
       dev.queue.submit([ce.finish()]);
       if (rb) {
         await rb.buf.mapAsync(GPUMapMode.READ); for (const t of tmp) t.destroy();
-        try { return new VideoFrame(new Uint8Array(rb.buf.getMappedRange()), { format: 'RGBA', codedWidth: w, codedHeight: h, layout: [{ offset: 0, stride: rb.bpr }], timestamp: tsOf(i), duration: Math.round(S.frameDur), colorSpace: { primaries: 'bt709', transfer: 'bt709', matrix: 'rgb', fullRange: true } }); }
+        try { return new VideoFrame(new Uint8Array(rb.buf.getMappedRange()), { format: 'RGBA', codedWidth: w, codedHeight: h, layout: [{ offset: 0, stride: rb.bpr }], timestamp: tsOf(i), duration: durOf(i), colorSpace: { primaries: 'bt709', transfer: 'bt709', matrix: 'rgb', fullRange: true } }); }
         finally { rb.buf.unmap(); }
       }
       if (WAIT) await dev.queue.onSubmittedWorkDone(); for (const t of tmp) t.destroy();
-      return new VideoFrame(cv, { timestamp: tsOf(i), duration: Math.round(S.frameDur) });
+      return new VideoFrame(cv, { timestamp: tsOf(i), duration: durOf(i) });
     },
     close() { try { ub?.destroy(); rb?.tex.destroy(); rb?.buf.destroy(); for (const t of hist || []) t.destroy(); } catch {} },
   };
@@ -255,7 +278,7 @@ function conv2d() {
   let cv, ctx;
   return {
     prepare(w, h) { cv = new OffscreenCanvas(w, h); ctx = cv.getContext('2d', { colorSpace: 'srgb' }); if (!ctx) throw new Error('getContext 2d null'); return { contextAttributes: ctx.getContextAttributes ? ctx.getContextAttributes() : null }; },
-    make(f, i) { ctx.drawImage(f, 0, 0, cv.width, cv.height); return new VideoFrame(cv, { timestamp: tsOf(i), duration: Math.round(S.frameDur) }); },
+    make(f, i) { ctx.drawImage(f, 0, 0, cv.width, cv.height); return new VideoFrame(cv, { timestamp: tsOf(i), duration: durOf(i) }); },
   };
 }
 
@@ -301,7 +324,7 @@ function convNv12(tm) {
         T.shader += now() - t0; const tg = now();
         p = s.mb.mapAsync(GPUMapMode.READ).then(() => {
           T.gpu += now() - tg; T.gpuN++; const tv = now();
-          try { return new VideoFrame(new Uint8Array(s.mb.getMappedRange()), { format: 'NV12', codedWidth: W, codedHeight: H, layout: [{ offset: 0, stride: W }, { offset: W * H, stride: W }], timestamp: tsOf(i), duration: Math.round(S.frameDur), colorSpace: CS709 }); }
+          try { return new VideoFrame(new Uint8Array(s.mb.getMappedRange()), { format: 'NV12', codedWidth: W, codedHeight: H, layout: [{ offset: 0, stride: W }, { offset: W * H, stride: W }], timestamp: tsOf(i), duration: durOf(i), colorSpace: CS709 }); }
           finally { s.mb.unmap(); T.vf += now() - tv; }
         });
       } catch (e) { p = Promise.reject(e); }
@@ -317,7 +340,7 @@ function convNv12(tm) {
 const syncConv = (c, label) => ({ depth: 1, prepare: async (w, h) => { const x = await c.prepare?.(w, h); return label || (typeof x === 'string' ? x : x?.output) || null; }, close: () => c.close?.(),
   async submit(f, i, T) { const t0 = now(); try { return await c.make(f, i); } finally { T.shader += now() - t0; f.close(); } } });
 /** Diretto: frame del decoder all'encoder (solo nuovo timestamp). */
-const convDirect = () => ({ depth: K, submit: (f, i) => { try { return Promise.resolve(new VideoFrame(f, { timestamp: tsOf(i), duration: Math.round(S.frameDur) })); } finally { f.close(); } } });
+const convDirect = () => ({ depth: K, submit: (f, i) => { try { return Promise.resolve(new VideoFrame(f, { timestamp: tsOf(i), duration: durOf(i) })); } finally { f.close(); } } });
 
 // ---------- controllo del bitrate a circuito chiuso (stessa idea di app/lib/brctl.js) ----------
 // Finestre di 30 frame (o ½ s); a ogni finestra completa: target corretto per l'errore cumulato, poi nextBitrate (brctl) → configure.
@@ -328,7 +351,7 @@ function rateCtl(target, N) {
   return {
     win, hist, get pending() { const p = pending; pending = null; return p; }, start: () => Math.round(conf),
     chunk(c) {
-      const w = Math.min(nW - 1, Math.max(0, Math.floor(Math.round(c.timestamp / S.frameDur) / win))); bytes[w] += c.byteLength;
+      const w = Math.min(nW - 1, Math.max(0, Math.floor(idxOf(c.timestamp) / win))); bytes[w] += c.byteLength;
       if (++cnt[w] !== size(w)) return;
       B += bytes[w]; F += cnt[w]; const real = bytes[w] * 8 / secs(cnt[w]), rem = secs(N - F);
       hist.push([r2(real / target), r2(conf / target)]);
@@ -395,7 +418,8 @@ async function pipeRun(o) {
     await prod; if (fail) throw fail;
     await withTimeout(enc.flush(), 120000, 'flush encoder'); if (fail) throw fail;
     ms = now() - t0; r.frames = done; r.fps = +(done / ms * 1000).toFixed(1);
-    r.ms = msPF(T, done);
+    r.ms = msPF(T, done); r.dec = { ooo: T.ooo, extra: T.extra, missing: T.missing };
+    r.encTs = { ...tsCheck(chunks.map((c) => c.timestamp)), dur0: chunks.filter((c) => !c.duration).length };
     const wf = (x) => x / ms; // quota del tempo totale in attesa
     r.limit = wf(T.encWait) > 0.4 ? 'encoder' : wf(T.decWait) > 0.4 ? 'decoder' : wf(T.convWait) > 0.4 ? 'conversione GPU' : 'thread principale';
   } catch (e) { r.err = errStr(fail || e); }
@@ -493,11 +517,14 @@ async function mux(chunks, meta, kind, w, h, cs, r) {
     catch (e) { r.vuiErr = errStr(e); }
   } else r.vui = kind === 'hevc' ? 'hvcC assente' : 'non HEVC: solo colr';
   const dc = { ...(meta || {}), description: desc, codec: meta?.codec || encCfg(kind, w, h, 1).codec, codedWidth: meta?.codedWidth || w, codedHeight: meta?.codedHeight || h, colorSpace: cs };
+  // v2.1: Safari dà chunk.duration = 0 e timestamp arrotondati a 90 kHz → pts e durata ricostruiti dall'indice del frame (pts sorgente)
+  const outTs = [];
   for (let i = 0; i < chunks.length; i++) {
-    let pk = MB.EncodedPacket.fromEncodedChunk(chunks[i]);
-    if (kind === 'hevc') { const s = stripParameterSets(pk.data); if (s !== pk.data) pk = new MB.EncodedPacket(s, pk.type, pk.timestamp, pk.duration); }
-    await src.add(pk, i === 0 ? { decoderConfig: dc } : undefined);
+    const c = chunks[i], j = idxOf(c.timestamp), data = new Uint8Array(c.byteLength); c.copyTo(data);
+    const s = kind === 'hevc' ? stripParameterSets(data) : data; outTs.push(tsOf(j));
+    await src.add(new MB.EncodedPacket(s, c.type, tsOf(j) / 1e6, durOf(j) / 1e6), i === 0 ? { decoderConfig: dc } : undefined);
   }
+  r.muxTs = tsCheck(outTs);
   src.close(); await out.finalize();
   return new Blob([out.target.buffer], { type: 'video/mp4' });
 }
