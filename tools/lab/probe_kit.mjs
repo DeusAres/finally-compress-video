@@ -17,11 +17,11 @@ const req = createRequire(import.meta.url);
 export function playwright() { try { return req('playwright'); } catch { return req(join(execFileSync('npm', ['root', '-g']).toString().trim(), 'playwright')); } }
 export const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 
-/** n copie H.264 320 px del campione, con nome e peso diversi (metadato title diverso). */
+/** (v0.38.5: 20 Mbps, altrimenti «già leggero» tiene l'originale e non produce file) n copie H.264 320 px del campione, con nome e peso diversi (metadato title diverso). */
 export function makeSamples(src, n = 2, prefix = 'clip') {
   const tmp = mkdtempSync(join(tmpdir(), 'fcv-probe-')), out = [];
   const first = join(tmp, `${prefix}1_avc.mov`);
-  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=320:-2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', first]);
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=320:-2', '-c:v', 'libx264', '-b:v', '20M', '-pix_fmt', 'yuv420p', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', first]);
   out.push(first);
   for (let i = 2; i <= n; i++) { const p = join(tmp, `${prefix}${i}_avc.mov`); execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', first, '-c', 'copy', '-metadata', `title=${'b'.repeat(i)}`, p]); out.push(p); }
   return out;

@@ -27,11 +27,12 @@ const app = '#app';
 const stage = () => page.$eval(app, (r) => r.dataset.stage);
 const waitStage = (list, ms = 120000) => page.waitForFunction((l) => l.includes(document.querySelector('#app').dataset.stage) && document.querySelector('#app').dataset.busy === 'false', list, { timeout: ms })
   .catch(async (e) => { console.log('TIMEOUT, ultime righe del log:\n' + (await page.evaluate(() => [...document.querySelectorAll('[data-ref="log"] div')].slice(-25).map((d) => d.textContent).join('\n')))); throw e; });
-const waitFile = () => page.waitForFunction(() => { const t = document.querySelector('[data-ref="fDur"]')?.textContent; return t && t !== '—'; }, null, { timeout: 30000 });
+// v0.38.5: ogni scelta crea/estende la coda: prima di scegliere si svuota la coda (nuova «sessione» come il vecchio «Nuovo video»)
+const waitFile = () => page.waitForFunction(() => { const li = document.querySelector('.fcv-q-item'); return li && !/lettura…/.test(li.textContent); }, null, { timeout: 30000 });
+const clearQ = async () => { if (await page.$eval('[data-ref="queue"]', (b) => !b.hidden).catch(() => false) || (await stage()) === 'done') { const b = (await stage()) === 'done' ? '[data-ref="qNew"]' : '[data-ref="qClear"]'; if (await page.$eval(b, (e) => !e.hidden && !e.disabled).catch(() => false)) { await page.click(b); await page.waitForTimeout(400); } } };
 const pick = async (path) => {
-  const ref = (await page.$eval('[data-ref="fileBox"]', (b) => b.hidden)) ? 'input' : (await stage()) === 'done' ? 'input3' : 'input2';
-  await page.setInputFiles(`[data-ref="${ref}"]`, path); await waitFile();
-  await page.waitForTimeout(300); // refreshResume / updateEstimate
+  await clearQ(); await page.setInputFiles('[data-ref="input"]', path); await waitFile();
+  await page.waitForTimeout(300); // updateEstimate
 };
 const go = async () => { await page.click('[data-ref="go"]'); };
 const snap = snap0;
@@ -43,12 +44,13 @@ const files = [AVC, AVC2];
 if (ONLY.includes('nuovo')) for (let i = 1; i <= N; i++) { // scelta file → export completo → Nuovo video
   await pick(files[i % 2]); await go(); await waitStage(['done', 'error']);
   const st = await stage();
-  if (st === 'done') { await page.click('[data-ref="save"]'); await page.waitForTimeout(300); } // «Salva»: in Chromium senza share sheet → download via Blob URL
+  if (st === 'done') { await page.click('[data-ref="qSaveAll"]'); await page.waitForTimeout(300); } // «Salva»: in Chromium senza share sheet → download via Blob URL
   await rec('nuovo', i, st === 'done' ? 'export ok + salva' : 'ERRORE: ' + (await logTail()).slice(0, 200));
 }
 if (ONLY.includes('impostazioni')) for (let i = 1; i <= N; i++) { // dopo l'export: «Altre impostazioni» → bitrate diverso → Comprimi
-  if ((await stage()) !== 'done') { await pick(files[0]); await go(); await waitStage(['done', 'error']); }
-  await page.click('[data-ref="again"]'); await page.click(`input[name="fcv-br"][value="${[4, 6, 10, 8][i % 4]}"]`, { force: true }).catch(() => {});
+  await pick(files[0]); await go(); await waitStage(['done', 'error']);
+  await page.click(`input[name="fcv-br"][value="${[4, 6, 10, 8][i % 4]}"]`, { force: true }).catch(() => {});
+  await page.setInputFiles('[data-ref="qAdd2"]', files[1]); await waitFile(); await page.waitForTimeout(300);
   await go(); await waitStage(['done', 'error']); await rec('impostazioni', i, await stage());
 }
 if (ONLY.includes('annulla')) for (let i = 1; i <= N; i++) { // annulla durante la fase video
@@ -65,9 +67,8 @@ if (ONLY.includes('ripresa')) for (let i = 1; i <= Math.min(N, 3); i++) { // rip
   await go();
   await page.waitForFunction(() => [...document.querySelectorAll('[data-ref="log"] div')].some((d) => /segmento 1\/\d+ salvato/.test(d.textContent)), null, { timeout: 60000 });
   await page.reload(); await page.waitForSelector('[data-ref="go"]'); await page.waitForTimeout(500);
-  await pick(files[0]);
-  const offer = await page.$eval('[data-ref="resume"]', (b) => !b.hidden);
-  if (offer) { await page.click('[data-ref="resumeBtn"]'); await waitStage(['done', 'error']); }
+  const offer = await page.$eval('[data-ref="qRelinkBox"]', (b) => !b.hidden) && /riprende/.test(await page.$eval('[data-ref="qList"]', (e) => e.textContent)); // v0.38.5: l'offerta è la voce in coda
+  if (offer) { await page.setInputFiles('[data-ref="qRelink"]', files[0]); await page.waitForTimeout(500); await go(); await waitStage(['done', 'error']); }
   await rec('ripresa', i, `${offer ? 'offerta ripresa → ' + (await stage()) : 'NESSUNA offerta di ripresa'} · ${(await logTail()).match(/RIPRESA[^|]*/)?.[0] || ''}`.slice(0, 160));
 }
 // riposo finale: Nuovo video senza export (il risultato precedente deve essere rilasciato anche in OPFS)

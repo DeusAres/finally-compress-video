@@ -9,7 +9,7 @@
 //          3) ripresa: [A,B,C], ricarica durante la voce 2 → coda ripristinata, A salvabile, B/C da riselezionare →
 //             «Riseleziona i video» → B riprende dai segmenti (RIPRESA nel log) → «Salva tutti»
 //          4) «Ferma la coda» durante una voce → la voce resta in attesa e riprende dai segmenti
-//          5) un solo file = esperienza singola; «Aggiungi altri video» → coda; trascinamento di più file (+ un non video)
+//          5) un solo file = coda da 1 (v0.38.5); «Aggiungi altri video» → coda; trascinamento di più file (+ un non video)
 //          6) (v0.36.2) risorse media costanti fra le voci: coda di 5 voci con qualità per scena e 2 player, PiP preparata
 //             (Chromium: PiP simulata come disponibile); durante ogni voce (player aperti) conta i <video> con src anche FUORI
 //             dal DOM, quelli in riproduzione, i <video> creati in tutto, encoder/decoder aperti: devono restare costanti
@@ -21,14 +21,14 @@
 // Misure (GC forzato) a ogni passaggio fra voci e a riposo: Blob URL, VideoFrame, encoder/decoder, Worker, <video>, OPFS.
 // Screenshot (--shots <dir>): lista, lavoro e fine coda a 320/375/390 px, chiaro e scuro; controllo overflow orizzontale.
 //
-// Uso: node tools/lab/queue_probe.mjs [--sample samples/IMG_7440.mov] [--shots <dir>] [--only 1,2,3,4,5]
+// Uso: node tools/lab/queue_probe.mjs [--sample samples/IMG_7440.mov] [--shots <dir>] [--only 1,2,3,4,5,6,7,8,9]
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync } from 'node:fs';
 import { arg, makeSamples, startServer, openProbe, SNAP_COLS } from './probe_kit.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const SRC = resolve(REPO, arg('--sample', 'samples/IMG_7440.mov')), SHOTS = arg('--shots', ''), ONLY = arg('--only', '1,2,3,4,5,6,7').split(',');
+const SRC = resolve(REPO, arg('--sample', 'samples/IMG_7440.mov')), SHOTS = arg('--shots', ''), ONLY = arg('--only', '1,2,3,4,5,6,7,8,9').split(',');
 const [A, B, C, D, E] = makeSamples(SRC, 5, 'coda');
 const server = await startServer(REPO);
 const PIP = () => { // Chromium headless: PiP «disponibile» (la richiesta vera non serve: conta il <video> preparato)
@@ -183,12 +183,11 @@ if (ONLY.includes('4')) { // ---- 4) «Ferma la coda» → riprende dai segmenti
 }
 
 if (ONLY.includes('5')) { // ---- 5) dal singolo alla coda («Aggiungi altri video») e trascinamento di più file ----
-  await page.setInputFiles('[data-ref="input"]', A);
-  await page.waitForFunction(() => { const t = document.querySelector('[data-ref="fDur"]')?.textContent; return t && t !== '—'; }, null, { timeout: 30000 });
-  ok((await page.$eval('#app', (r) => r.dataset.queue)) === 'false' && !(await page.$eval('[data-ref="fileBox"]', (e) => e.hidden)), '5: un solo file → esperienza singola di prima');
-  await page.setInputFiles('[data-ref="qAddSingle"]', [B]); await page.waitForSelector('.fcv-q-item'); await waitInfo();
+  await page.setInputFiles('[data-ref="input"]', A); await page.waitForSelector('.fcv-q-item'); await waitInfo();
+  ok((await page.$eval('#app', (r) => r.dataset.queue)) === 'true' && (await page.$$('.fcv-q-item')).length === 1 && !(await page.$eval('[data-ref="qClear"]', (e) => e.hidden)) && !!(await page.$('[data-ref="qAdd"]')), '5: un solo file = coda da 1 (lista, cestino, Aggiungi video, Svuota coda)');
+  await page.setInputFiles('[data-ref="qAdd"]', [B]); await page.waitForFunction(() => document.querySelectorAll('.fcv-q-item').length === 2); await waitInfo();
   const names = await page.$$eval('.fcv-q-name', (e) => e.map((x) => x.textContent));
-  ok(names.join() === 'coda1_avc.mov,coda2_avc.mov', `5: «Aggiungi altri video» → coda con il video già scelto per primo (${names})`);
+  ok(names.join() === 'coda1_avc.mov,coda2_avc.mov', `5: «Aggiungi altri video» → il video aggiunto va in fondo (${names})`);
   await page.evaluate(() => { // trascinamento: 2 video (uno in due rappresentazioni) + un file non video
     const dt = new DataTransfer(), mk = (n, size, type) => new File([new Uint8Array(size)], n, { type, lastModified: 5 });
     for (const f of [mk('X.MOV', 10, 'video/quicktime'), mk('X.mp4', 20, 'video/mp4'), mk('Y.MOV', 30, 'video/quicktime'), mk('nota.txt', 5, 'text/plain')]) dt.items.add(f);
@@ -201,6 +200,34 @@ if (ONLY.includes('5')) { // ---- 5) dal singolo alla coda («Aggiungi altri vid
   ok((await page.$eval('#app', (r) => r.dataset.queue)) === 'false', '5: «Svuota coda» → passo 1');
 }
 
+if (ONLY.includes('8')) { // ---- 8) (v0.38.5) 1 video, poi aggiungo il 2° PRIMA di comprimere: coda da 2 ----
+  await page.setInputFiles('[data-ref="input"]', A); await page.waitForSelector('.fcv-q-item'); await waitInfo(); await sceneOff();
+  ok(/Comprimi 1 video/.test(await page.$eval('[data-ref="go"]', (e) => e.textContent)), '8: 1 video, Comprimi 1 video');
+  await page.setInputFiles('[data-ref="qAdd"]', [B]); await page.waitForFunction(() => document.querySelectorAll('.fcv-q-item').length === 2); await waitInfo();
+  ok(/Comprimi 2 video/.test(await page.$eval('[data-ref="go"]', (e) => e.textContent)), '8: aggiunto il 2°, Comprimi 2 video');
+  await page.click('[data-ref="go"]'); await waitIdle(); await page.waitForFunction(() => document.querySelector('#app').dataset.stage === 'done');
+  ok((await sts()).join() === 'fatto,fatto', `8: tutte e due fatte (${await sts()})`);
+  ok(!(await page.$eval('[data-ref="qdScroll"]', (e) => e.hidden)), '8: con 2 video la tabella di riepilogo c\'è');
+  const lg = await logAll(); ok(/\[1\/2 /.test(lg) && /\[2\/2 /.test(lg), '8: log con prefisso [n/N]');
+  await shots('due');
+  await page.click('[data-ref="qNew"]'); await page.waitForTimeout(300);
+}
+if (ONLY.includes('9')) { // ---- 9) (v0.38.5) 1 video compresso, poi ne aggiungo un altro e comprimo; fine pulita per 1 solo ----
+  await page.setInputFiles('[data-ref="input"]', A); await page.waitForSelector('.fcv-q-item'); await waitInfo(); await sceneOff();
+  if (SHOTS) { mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: join(SHOTS, 'single-queue.png'), fullPage: true }); }
+  await page.click('[data-ref="go"]'); await waitIdle(); await page.waitForFunction(() => document.querySelector('#app').dataset.stage === 'done');
+  ok(!(await page.$eval('[data-ref="qdOne"]', (e) => e.hidden)) && (await page.$eval('[data-ref="qdScroll"]', (e) => e.hidden)), '9: coda da 1, risultato pulito senza tabella');
+  const t1 = await page.$eval('[data-ref="qdone"]', (e) => e.innerText);
+  ok(/[−+]\d+\s*%/.test(t1) && /Prima/.test(t1) && /Dopo/.test(t1) && /Salva nelle Foto/.test(t1), `9: meno x %, dettagli e Salva nelle Foto (${t1.replace(/\s+/g, ' ').slice(0, 140)})`);
+  await shots('uno-fatto');
+  if (SHOTS) await page.screenshot({ path: join(SHOTS, 'single-done.png'), fullPage: true });
+  await page.setInputFiles('[data-ref="qAdd2"]', [B]); await page.waitForFunction(() => document.querySelectorAll('.fcv-q-item').length === 2); await waitInfo();
+  ok((await page.$eval('#app', (r) => r.dataset.stage)) === 'ready' && /Comprimi 1 video/.test(await page.$eval('[data-ref="go"]', (e) => e.textContent)), '9: aggiunto un video dopo la fine, di nuovo Comprimi 1 video');
+  await page.click('[data-ref="go"]'); await waitIdle(); await page.waitForFunction(() => document.querySelector('#app').dataset.stage === 'done');
+  ok((await sts()).join() === 'fatto,fatto', `9: il primo resta fatto, il 2° compresso (${await sts()})`);
+  const sv = await page.$eval('[data-ref="qSaveAllTxt"]', (e) => e.textContent); ok(/2/.test(sv), `9: ${sv}`);
+  await page.click('[data-ref="qNew"]'); await page.waitForTimeout(300);
+}
 if (ONLY.includes('6')) { // ---- 6) risorse media costanti fra le voci (5 voci, qualità per scena, 2 player, PiP preparata) ----
   await page.setInputFiles('[data-ref="input"]', [A, B, C, D, E]);
   await page.waitForFunction(() => document.querySelectorAll('.fcv-q-item').length === 5); await waitInfo();
