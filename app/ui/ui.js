@@ -20,6 +20,8 @@ const KF_INFO = {
   4: 'Equilibrio consigliato tra peso e scorrimento.',
   10: 'File un filo più leggero, scorrimento meno preciso.',
 };
+const RES_LIST = [2160, 1440, 1080, 720, 540, 480]; // formati standard (lato corto); solo quelli sotto la sorgente, mai ingrandimenti
+const resLbl = (v) => (v === 'orig' ? 'Originale' : v === 2160 ? '2160p 4K' : `${v}p`);
 const MODE_INFO = {
   hdr: '<b>HDR</b> 10 bit, Dolby Vision conservato.',
   sdr: '<b>SDR</b> Compatibile ovunque, più veloce, niente HDR.',
@@ -96,7 +98,7 @@ function template(opts) {
     <span class="fcv-pick-cta">Tocca per scegliere</span>
     <small>Uno o più video (più video = coda). Restano sul telefono.</small>
   </label>
-  <details class="fcv-note" data-ref="pickNote">
+  <details class="fcv-note fcv-pick-note" data-ref="pickNote">
     <summary>${chev}<span>Meglio «Scegli file» che «Libreria foto»</span></summary>
     <div class="fcv-dbody"><p class="fcv-subtle">Da «Scegli file» (app File) il video arriva intatto; da «Libreria foto» iOS può consegnare una copia ricodificata. Nessun caricamento: il video non lascia l'iPhone.</p></div>
   </details>
@@ -146,6 +148,10 @@ function template(opts) {
     </label>
     <p class="fcv-mode-d" data-ref="modeDesc" aria-live="polite"></p>
   </div>
+  <fieldset class="fcv-field fcv-res" data-ref="resBox" hidden>
+    <legend class="px-label">Risoluzione</legend>
+    <div class="fcv-resgrid" data-ref="resGrid"></div>
+  </fieldset>
   <details class="fcv-est">
     <summary aria-label="Previsione di peso e tempo; tocca per i dettagli">
       <div class="fcv-tiles" aria-live="polite">
@@ -180,10 +186,6 @@ function template(opts) {
           <label class="fcv-radio"><input type="radio" name="fcv-container" value="mp4" data-desc="File .mp4 (come fino alla v0.33), per programmi che non leggono il MOV."><div><b>MP4</b></div></label>
         </div>
         <p class="fcv-hint" data-ref="contHint"></p>
-      </fieldset>
-      <fieldset class="fcv-field" data-ref="dsBox" hidden>
-        <legend class="px-label">Risoluzione</legend>
-        ${opt('fcv-ds', 'Riduci a 1080p', 'sperimentale: oggi non funziona', 'Misurato su iPhone (Safari 27.0.1): quando è l\'encoder di Safari a ridurre il 4K a 1080p l\'uscita diventa 8 bit (HDR perso), quindi l\'app ferma l\'export con un messaggio invece di salvare un video senza HDR. Lascia l\'opzione spenta: resta qui solo per riprovare dopo un aggiornamento di Safari. Se un giorno funzionasse: video a 1080×1920 (o 1920×1080) HDR a 10 bit, tempo come il 4K.')}
       </fieldset>
       <fieldset class="fcv-field">
         <legend class="px-label">Sperimentale</legend>
@@ -443,7 +445,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.fRes.title = fi.width && fi.height ? `${fi.width}×${fi.height}` : 'Formato';
     const chips = [];
     if (fi.hdr) chips.push('<span class="px-chip px-chip--hdr">HDR</span>');
-    if (fi.dolbyVision) chips.push('<span class="px-chip px-chip--dv">Dolby Vision</span>');
+    if (fi.dolbyVision) chips.push('<span class="px-chip px-chip--dv" title="Dolby Vision">DV</span>');
     if (fi.fps) chips.push(`<span class="px-chip px-chip--num">${Math.round(fi.fps)} fps</span>`);
     if (fi.apac) chips.push('<span class="px-chip">Audio spaziale</span>');
     if (fi.meta) chips.push('<span class="px-chip">Metadati iPhone</span>');
@@ -486,17 +488,26 @@ export function mountUI(root, handlers = {}, opts = {}) {
   R.qAddSingle.addEventListener('change', pickedTo({ add: true, includeCurrent: true }));
 
   // ---------- passo 2: impostazioni ----------
-  // «Riduci a 1080p»: visibile/attivo solo se il lato corto della sorgente supera 1080 (default OFF)
-  const dsAvailable = () => Math.min(st.file?.width || 0, st.file?.height || 0) > 1080;
+  // Risoluzione (solo SDR, a 10 bit non si può ridurre): «Originale» + i formati standard SOTTO il lato corto della sorgente (verticale/orizzontale uguale).
+  const shortSide = (f) => Math.min(f?.width || 0, f?.height || 0);
+  const srcShort = () => (st.qMode ? Math.max(0, ...(st.queue?.items || []).filter((it) => it.info?.W).map((it) => Math.min(it.info.W, it.info.H))) : shortSide(st.file));
+  const resSel = () => { const v = root.querySelector('input[name="fcv-res"]:checked')?.value; return v && v !== 'orig' ? +v : 'orig'; };
+  const resApplies = (res, f) => (res !== 'orig' && res > 0 && res < shortSide(f) ? res : 'orig'); // risoluzione effettiva su un file
+  function buildRes(want = st.wantRes ?? resSel()) {
+    const sh = srcShort(), opts = ['orig', ...RES_LIST.filter((v) => v < sh)], cur = opts.includes(want) ? want : 'orig';
+    R.resGrid.innerHTML = opts.map((v) => `<label><input type="radio" name="fcv-res" value="${v}"${v === cur ? ' checked' : ''}><span>${resLbl(v)}</span></label>`).join('');
+    st.wantRes = cur; st.resOpts = opts.length;
+  }
+  const syncResBox = () => { R.resBox.hidden = st.settings.mode !== 'sdr' || (st.resOpts || 0) < 2; };
   function syncDs() {
-    const ok = dsAvailable(), c = root.querySelector('input[name="fcv-ds"]');
-    R.dsBox.hidden = !ok; if (c) { c.disabled = !ok; if (!ok) c.checked = false; }
+    buildRes();
     R.apacBox.hidden = !(st.file?.apac || st.file?.meta); // «Mantieni audio spaziale e metadati iPhone»: solo se la sorgente ha apac o tracce mebx
     syncSettings();
   }
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    return { mode: root.querySelector('input[name="fcv-mode"]')?.checked === false ? 'sdr' : 'hdr', bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq'), downscale: !!v('fcv-ds') && dsAvailable(), apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
+    const sdr = root.querySelector('input[name="fcv-mode"]')?.checked === false, res = sdr ? resSel() : 'orig'; // settings.res = 'orig' | 2160 | 1440 | 1080 | 720 | 540 | 480; downscale = alias di res 1080
+    return { mode: root.querySelector('input[name="fcv-mode"]')?.checked === false ? 'sdr' : 'hdr', bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq'), res, downscale: res === 1080, apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
@@ -506,7 +517,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (s.par2 != null) { const c = root.querySelector('input[name="fcv-par2"]'); if (c) c.checked = !!s.par2; }
     set('fcv-npar', s.par3 ? 3 : 2);
     if (s.sceneQ != null) { const c = root.querySelector('input[name="fcv-sceneq"]'); if (c) c.checked = !!s.sceneQ; }
-    if (s.downscale != null) { const c = root.querySelector('input[name="fcv-ds"]'); if (c) c.checked = !!s.downscale; }
+    if (s.res != null || s.downscale != null) { st.wantRes = s.res != null ? s.res : s.downscale ? 1080 : 'orig'; buildRes(st.wantRes); }
     if (s.apac != null) { const c = root.querySelector('input[name="fcv-apac"]'); if (c) c.checked = !!s.apac; }
     if (s.container) set('fcv-container', s.container);
     syncSettings();
@@ -515,17 +526,19 @@ export function mountUI(root, handlers = {}, opts = {}) {
     st.settings = readSettings();
     const { bitrateMbps: br, keyframeS: kf, audioMode: am } = st.settings;
     const info = BR_INFO[br] || BR_INFO[8];
-    R.brHint.textContent = st.settings.sceneQ ? `Per scena: ${br} Mbps è il massimo, ogni tratto riceve il minimo.` : info.t;
+    R.brHint.textContent = st.settings.sceneQ ? `Per scena: massimo ${br} Mbps.` : info.t;
+    syncResBox();
     R.modeDesc.innerHTML = MODE_INFO[st.settings.mode] || MODE_INFO.hdr;
     for (const [n, ref] of [['fcv-audio', 'audioHint'], ['fcv-container', 'contHint']]) R[ref].textContent = root.querySelector(`input[name="${n}"]:checked`)?.dataset.desc || '';
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
     if (st.qMode && st.queue) renderQueue();
-    R.advSum.textContent = `${st.settings.mode === 'sdr' ? 'SDR · ' : ''}${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ` · ${st.settings.par3 ? 3 : 2} player` : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
+    R.advSum.textContent = `${st.settings.mode === 'sdr' ? 'SDR · ' : ''}${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ` · ${st.settings.par3 ? 3 : 2} player` : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.res !== 'orig' ? ` · ${st.settings.res}p` : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
     updateEstimate();
   }
-  const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js
-  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: parN(st.settings), width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: st.settings.downscale }) : null; };
+  const pixRatio = (s, f) => { const r = resApplies(s.res, f), sh = shortSide(f); return r === 'orig' || !sh ? 1 : (r * r) / (sh * sh); }; // pixel scelti / pixel sorgente (stesso rapporto d'aspetto)
+  const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, pixelRatio: pixRatio(st.settings, st.file), audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js
+  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: parN(st.settings), width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: resApplies(st.settings.res, f) !== 'orig' }) : null; };
   function updateEstimate() {
     if (st.qMode) { updateQueueEstimate(); return; }
     const d = st.file?.durationS, src = st.file?.sizeMB;
@@ -537,7 +550,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.est.innerHTML = `${vary ? '<small class="vary">variabile, al massimo</small>' : ''}<span class="v">${vary ? '≤' : '≈'} ${fmtMB(est)} <small>MB</small></span>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${vary ? 'almeno ' : ''}${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
     const tt = predictTime();
     R.estT.innerHTML = `${vary ? '<small class="vary">variabile, circa</small>' : ''}<span class="v">≈ ${fmtTime(tt.s)} <small>m:ss</small></span>`;
-    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? `, ${st.settings.par3 ? 3 : 2} player` : ', 1 player'})${vary ? `, ×${nf1.format(SCENE_TIME_FACTOR)} per le prove per scena` : ''}${st.settings.downscale ? ' · estrazione dal 4K, uscita 1080p (stessa durata del 4K)' : ''}.`;
+    R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? `, ${st.settings.par3 ? 3 : 2} player` : ', 1 player'})${vary ? `, ×${nf1.format(SCENE_TIME_FACTOR)} per le prove per scena` : ''}${resApplies(st.settings.res, st.file) !== 'orig' ? ` · uscita ${st.settings.res}p (estrazione dalla sorgente, peso in proporzione ai pixel)` : ''}.`;
     R.estSrc.hidden = false;
     if (pct != null && pct < 10) {
       R.warn.hidden = false;
@@ -551,8 +564,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
   const itemFile = (it) => (it?.info?.dur ? { durationS: it.info.dur, width: it.info.W, height: it.info.H, fps: it.info.fps, aacBps: it.info.aacBps, apacBps: it.info.apacBps, sizeMB: it.sizeMB } : null);
   function predictItem(it) {
     const f = itemFile(it); if (!f) return null; const s = st.settings;
-    const mb = estimateOutBytes({ durS: f.durationS, videoMbps: s.bitrateMbps, audioMode: s.audioMode, aacBps: f.aacBps, apacBps: s.apac ? f.apacBps : 0 }) / 1048576;
-    const t = estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: s.audioMode, par2: parN(s), width: f.width, height: f.height, sceneQ: s.sceneQ, downscale: s.downscale && Math.min(f.width, f.height) > 1080 });
+    const mb = estimateOutBytes({ durS: f.durationS, videoMbps: s.bitrateMbps, pixelRatio: pixRatio(s, f), audioMode: s.audioMode, aacBps: f.aacBps, apacBps: s.apac ? f.apacBps : 0 }) / 1048576;
+    const t = estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: s.audioMode, par2: parN(s), width: f.width, height: f.height, sceneQ: s.sceneQ, downscale: resApplies(s.res, f) !== 'orig' });
     return { mb, s: t?.s ?? null, pct: f.sizeMB ? (1 - mb / f.sizeMB) * 100 : null };
   }
   const needsFile = (it) => !it.hasFile && ['attesa', 'corso', 'errore', 'annullata'].includes(it.status);
@@ -569,8 +582,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (!T.pend) { R.est.innerHTML = R.estT.innerHTML = '—'; R.estSrc.textContent = 'Nessun video in attesa.'; R.estSrc.hidden = false; return; }
     if (T.unknown === T.pend) { R.est.innerHTML = R.estT.innerHTML = '…'; R.estSrc.hidden = true; return; }
     const pct = T.inMB ? (1 - T.mb / T.inMB) * 100 : null;
-    R.est.innerHTML = `<small class="vary">${T.pend} video${vary ? ', al massimo' : ''}${T.unknown ? ` (${T.pend - T.unknown} letti)` : ''}</small><span class="v">${vary ? '≤' : '≈'} ${fmtMB(T.mb)} <small>MB</small></span>` + (pct != null && !T.unknown ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
-    R.estT.innerHTML = `<small class="vary">in totale${vary ? ', variabile' : ''}</small><span class="v">≈ ${fmtTime(T.t)} <small>m:ss</small></span>`;
+    R.est.innerHTML = `<small class="qv">${T.pend} video${vary ? ', al massimo' : ''}${T.unknown ? ` (${T.pend - T.unknown} letti)` : ''}</small><span class="v">${vary ? '≤' : '≈'} ${fmtMB(T.mb)} <small>MB</small></span>` + (pct != null && !T.unknown ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
+    R.estT.innerHTML = `<small class="qv">in totale${vary ? ', variabile' : ''}</small><span class="v">≈ ${fmtTime(T.t)} <small>m:ss</small></span>`;
     R.estSrc.textContent = `Previsione per tutta la coda (${T.pend} video in attesa), uno dopo l'altro. Le stime per video sono nella lista.`; R.estSrc.hidden = false;
   }
   const chip = (t, c = '') => `<span class="px-chip${c ? ' ' + c : ''}">${t}</span>`;
@@ -593,10 +606,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (it.status === 'fatto' && it.hasOut && !it.saved) act += `<button class="px-btn px-btn--ok" type="button" data-act="save" data-id="${it.id}">Salva nelle Foto</button>`;
     if ((it.status === 'errore' || it.status === 'annullata')) act += `<button class="px-btn" type="button" data-act="retry" data-id="${it.id}">Riprova</button>`;
     const est = p ? `<p class="fcv-q-est">→ ${vary ? '≤' : '≈'} ${fmtMB(p.mb)} MB${p.pct != null ? ` (${p.pct > 0 ? '−' : '+'}${nf0.format(Math.abs(p.pct))} %)` : ''} · ≈ ${fmtTime(p.s)}</p>` : isPending(it) && !inf && it.hasFile ? '<p class="fcv-q-est">lettura…</p>' : '';
-    const orig = inf?.exported ? `<p class="fcv-q-orig">Copia ricodificata da Foto, non l'originale (${esc(inf.exported[0] || '')}). Per l'originale: Foto › Condividi › Opzioni › «Attuale» › Salva in File, poi «Scegli file».</p>` : '';
+    const orig = inf?.exported ? `<p class="fcv-q-orig">Copia ricodificata da Foto (${esc(inf.exported[0] || '')}). Meglio l'originale: Foto › Condividi › Opzioni › «Attuale» › Salva in File.</p>` : '';
     const bad = inf?.error && isPending(it) ? `<p class="fcv-q-orig">Non leggibile: ${esc(inf.error)}</p>` : '';
     return `<li class="fcv-q-item" data-qid="${it.id}" data-st="${it.status}"${nf ? ' data-nf' : ''}>
-      <div class="fcv-q-head"><span class="fcv-q-n">${i + 1}</span><b class="fcv-q-name">${esc(it.name)}</b>${it.status !== 'corso' ? `<button class="px-btn fcv-q-x" type="button" data-act="rm" data-id="${it.id}" aria-label="Rimuovi ${esc(it.name)} dalla coda">Rimuovi</button>` : ''}</div>
+      <div class="fcv-q-head"><span class="fcv-q-n">${i + 1}</span><b class="fcv-q-name">${esc(it.name)}</b>${it.status !== 'corso' ? `<button class="px-btn fcv-q-x" type="button" data-act="rm" data-id="${it.id}" aria-label="Rimuovi ${esc(it.name)} dalla coda" title="Rimuovi dalla coda">${sprite(SPRITES.x, { scale: 2 })}</button>` : ''}</div>
       <div class="fcv-chips">${chips.join('')}</div>${est}
       <p class="fcv-q-st">${stTxt}</p>${it.status === 'corso' ? `<div class="px-bar fcv-q-bar" style="--p:${Math.max(0, st.lastPct) / 100}"><i></i></div>` : ''}${orig}${bad}${act ? `<div class="fcv-q-btns">${act}</div>` : ''}
     </li>`;
@@ -605,6 +618,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const q = st.queue; if (!q) return;
     const items = q.items, T = queueTotals(), S = items.filter((it) => it.status === 'fatto' && it.result);
     R.qCount.textContent = `${items.length}`;
+    { const sh = srcShort(); if (sh !== st.resShort) { st.resShort = sh; buildRes(); st.settings = readSettings(); syncResBox(); } }
     R.qList.innerHTML = items.map(itemHTML).join('');
     R.qMsg.hidden = !q.msg; if (q.msg) { R.qMsg.textContent = q.msg.text; R.qMsg.dataset.kind = q.msg.kind || ''; }
     const doneIn = S.reduce((a, it) => a + it.result.inMB, 0), doneOut = S.reduce((a, it) => a + it.result.outMB, 0);
@@ -684,7 +698,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.resume.hidden = !st.resume;
     if (!st.resume) return;
     const s = st.resume.settings || {};
-    R.resumeText.textContent = `Trovato un export interrotto di questo video (${s.bitrateMbps} Mbps${s.sceneQ ? ' max, qualità per scena' : ''}${s.downscale ? ', 1080p' : ''}, key ${s.keyframeS}s): ${st.resume.done} segmenti su ${st.resume.total} già pronti.`;
+    R.resumeText.textContent = `Trovato un export interrotto di questo video (${s.bitrateMbps} Mbps${s.sceneQ ? ' max, qualità per scena' : ''}${s.res && s.res !== 'orig' ? `, ${s.res}p` : s.downscale ? ', 1080p' : ''}, key ${s.keyframeS}s): ${st.resume.done} segmenti su ${st.resume.total} già pronti.`;
     R.resumeBtn.textContent = `Riprendi export di ${st.resume.name} (segmenti ${st.resume.done}/${st.resume.total})`;
   }
   R.again.addEventListener('click', () => { setStage('ready'); root.querySelector('.fcv-step-set').scrollIntoView({ block: 'start' }); });
@@ -695,12 +709,12 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   // ---------- avanzamento ----------
   function startProgress({ keepLog = false } = {}) {
-    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = parN(st.settings); st.sceneUsed = st.settings.sceneQ; st.dsUsed = st.settings.downscale; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
+    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = parN(st.settings); st.sceneUsed = st.settings.sceneQ; st.dsUsed = resApplies(st.settings.res, st.file) !== 'orig'; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
     if (!keepLog) clearLog();
     const s = st.settings;
     R.qNow.hidden = !st.qCur;
     if (st.qCur) R.qNow.innerHTML = `Video <b>${st.qCur.idx}</b> di <b>${st.qCur.n}</b>`;
-    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span>${s.downscale ? '<span class="px-chip px-chip--num">1080p</span>' : ''}<span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
+    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span>${s.res && s.res !== 'orig' ? `<span class="px-chip px-chip--num">${s.res}p</span>` : ''}${s.mode === 'sdr' ? '<span class="px-chip">SDR</span>' : ''}<span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
     R.elapsed.textContent = '0:00';
     R.progNote.textContent = KEEP_OPEN; R.progNote.dataset.kind = ''; st.pipOn = false; R.pipBox.hidden = true;
@@ -717,20 +731,20 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const show = !!(late && st.busy && document.pictureInPictureEnabled);
     const sa = standalone();
     R.pipBox.hidden = !show; R.pipBtn.hidden = sa;
-    if (show && sa) R.pipNote.textContent = 'Per lavorare in background apri il sito in Safari (nell\'app installata la finestrella PiP non funziona).';
-    else R.pipNote.textContent = st.pipOn ? 'Finestrella aperta: puoi usare altre app, la compressione continua finché resta aperta.' : 'Puoi usare altre app: la compressione continua finché la finestrella resta aperta.';
+    if (show && sa) R.pipNote.textContent = 'Per il background apri il sito in Safari (nell\'app installata la PiP non funziona).';
+    else R.pipNote.textContent = st.pipOn ? 'Finestrella aperta: puoi usare altre app.' : 'Puoi usare altre app finché la finestrella resta aperta.';
     R.pipBtn.textContent = st.pipOn ? 'Chiudi Picture-in-Picture' : 'Continua in Picture-in-Picture';
   }
   // v0.35.3: dall'app installata, tasto «Apri in Safari» (lì funziona la PiP). iOS: schema x-safari-https:// (apre Safari);
   // se dopo ~1 s la pagina è ancora visibile, ripiego: link copiato negli appunti da incollare in Safari.
   if (standalone()) {
-    R.safariBox.hidden = false;
+    R.safariBtn.hidden = false;
     R.safariBtn.addEventListener('click', () => {
       const url = location.href.split('#')[0];
       try { location.href = 'x-safari-' + url; } catch {}
       setTimeout(() => {
         if (document.visibilityState !== 'visible') return;
-        const ok = () => { R.safariMsg.textContent = 'Link copiato: aprilo incollandolo in Safari. (Nota: un export interrotto qui non si riprende in Safari, i dati sono separati.)'; };
+        const ok = () => { R.safariMsg.textContent = 'Link copiato: incollalo in Safari. Un export interrotto qui non si riprende in Safari (dati separati).'; };
         const ko = () => { R.safariMsg.textContent = `Apri Safari e vai su ${url}`; };
         try { navigator.clipboard?.writeText ? navigator.clipboard.writeText(url).then(ok, ko) : ko(); } catch { ko(); }
       }, 1000);
@@ -829,6 +843,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
         learnSpeed(realT);
       } else { R.pT1.textContent = R.pT2.textContent = R.pT3.textContent = '—'; R.pT3.className = ''; }
       R.pred.hidden = false;
+      R.predSum.textContent = `peso ${fmtDev(dev)}${devT != null ? `, tempo ${fmtDev(devT)}` : ''}`;
       if (st.sceneUsed) { R.predNote.textContent = 'Qualità per scena: la previsione del peso è il massimo (bitrate scelto come limite); ogni tratto ha ricevuto solo il bitrate che gli serviva.'; R.predNote.hidden = false; }
       else if (Math.abs(dev) > 15) { R.predNote.textContent = 'Scarto peso oltre il 15%: la previsione usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.'; R.predNote.hidden = false; }
       appendLog(`PREVISIONE: peso ${st.predMB.toFixed(2)} MB previsto · ${r.outMB.toFixed(2)} MB reale · scarto ${dev > 0 ? '+' : ''}${dev.toFixed(1)} %${tl}`, 'summary');
@@ -972,6 +987,28 @@ export function mountUI(root, handlers = {}, opts = {}) {
   R.stFree.addEventListener('click', () => handlers.onStorageAct?.('free'));
   R.stAll.addEventListener('click', () => handlers.onStorageAct?.('all'));
   R.stBody.addEventListener('click', (e) => { const b = e.target.closest?.('button[data-sact]'); if (b && !b.disabled) handlers.onStorageAct?.('del', b.dataset.id); });
+
+  // ---------- «i» (spiegazioni lunghe), About ----------
+  root.addEventListener('click', (e) => {
+    const b = e.target.closest?.('.fcv-i'); if (!b) return;
+    e.preventDefault(); const d = b.closest('.fcv-radio')?.querySelector('.fcv-d'); if (!d) return;
+    d.hidden = !d.hidden; b.setAttribute('aria-expanded', String(!d.hidden));
+  });
+  // BUILD_ID «0.37.4-20261127T012743Z» → data/ora locali (Roma); senza buildId si usa l'etichetta della testata («v0.37.4 · 27/11 02:27»).
+  function aboutInfo() {
+    const lbl = String(opts.version || ''), id = String(opts.buildId || ''), m = id.match(/^(.+?)-(\d{4})(\d\d)(\d\d)T(\d\d)(\d\d)(\d\d)Z$/);
+    let when = lbl.split('·')[1]?.trim() || '', ver = (lbl.match(/v?\d[\w.]*/) || [''])[0] || (m ? m[1] : '');
+    if (m) { try { when = new Date(Date.UTC(+m[2], m[3] - 1, +m[4], +m[5], +m[6], +m[7])).toLocaleString('it-IT', { timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'short' }); } catch {} if (!ver) ver = m[1]; }
+    return { ver: ver ? (/^v/.test(ver) ? ver : 'v' + ver) : '—', build: [id, when].filter(Boolean).join(' · ') || '—' };
+  }
+  const openAbout = () => { const a = aboutInfo(); R.abVer.textContent = a.ver; R.abBuild.textContent = a.build; try { R.about.showModal(); } catch { R.about.setAttribute('open', ''); } };
+  const closeAbout = () => { try { R.about.close(); } catch { R.about.removeAttribute('open'); } };
+  R.verBtn.addEventListener('click', openAbout);
+  R.abClose.addEventListener('click', closeAbout);
+  R.about.addEventListener('click', (e) => { if (e.target === R.about) closeAbout(); }); // tocco sullo sfondo
+  const gotoBox = (box) => () => { closeAbout(); box.open = true; setTimeout(() => box.scrollIntoView?.({ block: 'center', behavior: 'smooth' }), 50); };
+  R.abLog.addEventListener('click', gotoBox(R.logBox));
+  R.abStore.addEventListener('click', gotoBox(R.stBox));
 
   // ---------- bus ----------
   const subs = {

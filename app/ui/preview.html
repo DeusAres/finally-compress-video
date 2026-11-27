@@ -21,7 +21,7 @@
 <nav class="dev" id="dev" aria-label="Simulatore">
   <button data-s="pick">Vuota</button><button data-s="ready">File</button><button data-s="busy">Export</button>
   <button data-s="done">Risultato</button><button data-s="error">Errore</button><button data-s="run">▶ Simula</button>
-  <button data-t>Tema</button>
+  <button data-s="queue">Coda</button><button data-t>Tema</button>
 </nav>
 <main id="app"></main>
 <script type="module">
@@ -38,7 +38,7 @@ const ui = mountUI(document.getElementById('app'), {
   onStart: (s) => { say(`avvio: ${JSON.stringify(s)}`); run(s); },
   onCancel: () => { stop = true; },
   onSave: () => ui.setSaveMessage('Anteprima: qui si aprirebbe la share sheet → «Salva video».'),
-}, { version: "v0.18" });
+}, { version: "v0.18 · 27/11 02:27", buildId: "0.18-20261127T012743Z" });
 
 const FILE = { name: 'IMG_7440.MOV', sizeMB: 412.6, durationS: 83.4, width: 3840, height: 2160, hdr: true, dolbyVision: true, fps: 60 };
 function fakeFile(name = FILE.name, sizeMB = FILE.sizeMB) { emit('file', { ...FILE, name, sizeMB }); }
@@ -78,9 +78,19 @@ async function run(s = ui.getSettings(), speed = 1) {
 }
 
 // stati statici per screenshot
+function showQueue() {
+  const info = (dur, W, H, extra = {}) => ({ dur, W, H, fps: 60, hdr: true, dv: true, aacBps: 256000, ...extra });
+  ui.setQueueMode(true);
+  ui.setQueue({ running: false, curId: null, msg: null, items: [
+    { id: 1, name: 'IMG_7440.MOV', sizeMB: 412.6, status: 'attesa', info: info(83.4, 3840, 2160), hasFile: true },
+    { id: 2, name: 'IMG_7441.MOV', sizeMB: 180.2, status: 'attesa', info: info(36, 1920, 1080, { dv: false }), hasFile: true },
+    { id: 3, name: 'IMG_7442_con_nome_molto_lungo_per_provare_il_taglio.MOV', sizeMB: 95, status: 'attesa', info: info(20, 3840, 2160), hasFile: true },
+  ] });
+}
 function show(state) {
   stop = true; ui.reset();
   if (state === 'pick') return;
+  if (state === 'queue') { showQueue(); return; }
   chooseFile();
   if (state === 'ready') return;
   ui.setBusy(true);
@@ -106,6 +116,9 @@ document.getElementById('dev').addEventListener('click', (e) => {
   if (b.dataset.s === 'run') { show('ready'); run(); } else show(b.dataset.s);
 });
 show(q.get('state') || 'ready');
+if (q.get('sdr')) ui.applySettings({ mode: 'sdr', res: q.get('res') === 'orig' ? 'orig' : +q.get('res') || 'orig' });
+if (q.get('open')) for (const s of q.get('open').split(',')) { const d = document.querySelector(s); if (d) d.open = true; }
+if (q.get('standalone')) document.querySelector('[data-ref=safariBtn]').hidden = false;
 requestAnimationFrame(() => scrollTo(0, 0));
 </script>
 </body>

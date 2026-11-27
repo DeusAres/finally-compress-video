@@ -37,7 +37,9 @@ export const frameTiming = (f) => ({ timestamp: f.ts, duration: Math.max(1, f.du
 /** Finestra del controllo bitrate in SDR: 30 frame o ½ s (sdr8 v2.1: reale/target 0.99 con r0 1.25). */
 export const sdrWindow = (fps) => Math.max(SDR.minWin, Math.round((fps > 0 ? fps : 30) / 2));
 /** Prese per lato nello shader (media N×N dei pixel sorgente coperti da un pixel di uscita). */
-export const scaleTaps = (sw, sh, dw, dh) => Math.max(1, Math.ceil(Math.max(sw / dw, sh / dh) - 1e-9));
+export const scaleTaps = (sw, sh, dw, dh) => (sw === dw && sh === dh ? 0 : Math.max(1, Math.ceil(Math.max(sw / dw, sh / dh) - 1e-9))); // 0 = nessuna scalatura
+/** Stride NV12 (byte per riga di Y e di UV): larghezza arrotondata a 4. */
+export const nv12Stride = (w) => Math.ceil(w / 4) * 4;
 /** Codec 8 bit: HEVC Main (livello 5.1 oltre 2.5 Mpx) o, se il browser non codifica HEVC (Chromium), H.264 solo per prova. */
 export const sdrCodec = (kind, w, h) => (kind === 'avc' ? 'avc1.640033' : `hvc1.1.6.L${w * h > 2.5e6 ? 153 : 123}.B0`);
 export async function pickSdrCodec(w, h, framerate = 30) {
@@ -46,9 +48,16 @@ export async function pickSdrCodec(w, h, framerate = 30) {
 }
 
 // ---------- shader: un'invocazione = 4×2 pixel di uscita (4 byte di Y per riga, 2 coppie UV) ----------
-const WGSL = `struct U{src:vec2f,dst:vec2f,tm:f32,lw:f32,taps:f32,pad:f32};
+// Scalatura (lato corto a scelta, mai ingrandire): filtro ad AREA con prese bilineari. Per ogni pixel di uscita n×n prese (n = ceil(rapporto))
+// distribuite uniformemente sulla sua impronta nella sorgente, ciascuna campionata in bilineare (prefiltro a tenda) nel dominio del
+// segnale, poi tone mapping per presa e media nel dominio BT.709. A rapporto intero (2160→1080) le prese cadono sui centri dei texel:
+// media 2×2 esatta. Costo ≈ un tone mapping per pixel SORGENTE (come la conversione 1:1 della sorgente). Senza scalatura: textureLoad
+// diretto (percorso validato su iPhone). stride = larghezza arrotondata a 4 (NV12 a parole di 4 byte; le colonne in più sono ignorate).
+const WGSL = `struct U{src:vec2f,dst:vec2f,tm:f32,lw:f32,taps:f32,stride:f32};
 @group(0)@binding(0) var t:texture_external;@group(0)@binding(1) var<uniform> u:U;@group(0)@binding(2) var<storage,read_write> ob:array<u32>;
+@group(0)@binding(3) var sp:sampler;
 fn ld(p:vec2i)->vec3f{return textureLoad(t,p).rgb;}
+fn sm(uv:vec2f)->vec3f{return textureSampleBaseClampToEdge(t,sp,uv).rgb;}
 fn hb(x:f32)->f32{return ((x*(0.15*x+0.05)+0.004)/(x*(0.15*x+0.5)+0.06))-0.02/0.3;}
 fn hlgi(e:vec3f)->vec3f{let a=0.17883277;let b=0.28466892;let c=0.55991073;let x=clamp(e,vec3f(0),vec3f(1));return select((exp((x-c)/a)+b)/12.0,x*x/3.0,x<=vec3f(0.5));}
 fn sdr(c:vec3f)->vec3f{
@@ -61,19 +70,21 @@ fn sdr(c:vec3f)->vec3f{
  let v=clamp(l*(o/sg),vec3f(0),vec3f(1));
  return select(1.099*pow(v,vec3f(0.45))-0.099,4.5*v,v<vec3f(0.018));}
 fn px(o:vec2u)->vec3f{
- let n=max(1,i32(u.taps));let s=u.src/u.dst;let mx=vec2i(u.src)-vec2i(1);var a=vec3f(0);
- for(var j=0;j<n;j++){for(var i=0;i<n;i++){let q=vec2i(floor((vec2f(o)+(vec2f(f32(i),f32(j))+0.5)/f32(n))*s));a+=sdr(ld(clamp(q,vec2i(0),mx)));}}
+ let q=min(o,vec2u(u.dst)-vec2u(1));
+ if(u.taps<0.5){return sdr(ld(vec2i(q)));}
+ let n=max(1,i32(u.taps));let s=u.src/u.dst;var a=vec3f(0);
+ for(var j=0;j<n;j++){for(var i=0;i<n;i++){let p=(vec2f(q)+(vec2f(f32(i),f32(j))+0.5)/f32(n))*s;a+=sdr(sm(p/u.src));}}
  return a/f32(n*n);}
 fn q8(v:f32)->u32{return u32(clamp(round(v),0.0,255.0));}
 @compute @workgroup_size(8,8) fn cs(@builtin(global_invocation_id) g:vec3u){
- let W=u32(u.dst.x);let H=u32(u.dst.y);if(g.x*4u>=W||g.y*2u>=H){return;}
+ let W=u32(u.stride);let H=u32(u.dst.y);if(g.x*4u>=W||g.y*2u>=H){return;}
  var c:array<vec3f,8>;
  for(var j=0u;j<2u;j++){var w=0u;for(var i=0u;i<4u;i++){let p=px(vec2u(g.x*4u+i,g.y*2u+j));c[j*4u+i]=p;w|=q8(16.0+219.0*dot(p,vec3f(0.2126,0.7152,0.0722)))<<(8u*i);}ob[((g.y*2u+j)*W)/4u+g.x]=w;}
  var uv=0u;for(var k=0u;k<2u;k++){let a=(c[2u*k]+c[2u*k+1u]+c[4u+2u*k]+c[5u+2u*k])*0.25;let yy=dot(a,vec3f(0.2126,0.7152,0.0722));
   uv|=(q8(128.0+224.0*(a.b-yy)/1.8556)<<(16u*k))|(q8(128.0+224.0*(a.r-yy)/1.5748)<<(16u*k+8u));}
  ob[(W*H)/4u+g.y*(W/4u)+g.x]=uv;}`;
 // ripiego (browser senza importExternalTexture da VideoFrame, es. Chromium headless): texture rgba copiata (colori convertiti dal browser)
-const WGSL_COPY = WGSL.replace('var t:texture_external;', 'var t:texture_2d<f32>;').replace('textureLoad(t,p)', 'textureLoad(t,p,0)');
+const WGSL_COPY = WGSL.replace('var t:texture_external;', 'var t:texture_2d<f32>;').replace('textureLoad(t,p)', 'textureLoad(t,p,0)').replace('textureSampleBaseClampToEdge(t,sp,uv)', 'textureSampleLevel(t,sp,uv,0.0)');
 export const _wgsl = { WGSL, WGSL_COPY };
 
 // ---------- WebGPU ----------
@@ -85,7 +96,7 @@ async function gpu() {
   if (!navigator.gpu) throw new Error('WebGPU non disponibile (navigator.gpu assente)');
   const ad = await navigator.gpu.requestAdapter(); if (!ad) throw new Error('WebGPU: nessun adapter');
   const dev = await ad.requestDevice(), pipes = {};
-  const g = { dev, path: '', pipe: (copy) => pipes[+copy] || (pipes[+copy] = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: copy ? WGSL_COPY : WGSL }), entryPoint: 'cs' } })) };
+  const g = { dev, smp: dev.createSampler({ minFilter: 'linear', magFilter: 'linear' }), pipe: (copy) => pipes[+copy] || (pipes[+copy] = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: copy ? WGSL_COPY : WGSL }), entryPoint: 'cs' } })) };
   dev.lost.then(() => { g.lost = true; });
   G = g; return g;
 }
@@ -112,10 +123,11 @@ function srcEntry(g, f, tmp, note) {
  * MAP_READ → mapAsync (asincrono, `depth` frame in volo) → new VideoFrame(NV12). Evita VideoFrame(canvas WebGPU) (sdr8 v1: 102 fps).
  */
 export async function createNv12Converter({ sw, sh, dw, dh, hlg, depth = SDR.inFlight, note = () => {} }) {
-  if (dw % 4 || dh % 2) throw new Error(`SDR: uscita ${dw}×${dh} non multipla di 4×2`);
-  const g = await gpu(), size = dw * dh * 3 / 2, taps = scaleTaps(sw, sh, dw, dh);
+  if (dw % 2 || dh % 2) throw new Error(`SDR: uscita ${dw}×${dh} con lato dispari`);
+  if (dw > sw || dh > sh) throw new Error(`SDR: ${sw}×${sh} → ${dw}×${dh} ingrandirebbe`);
+  const g = await gpu(), S = nv12Stride(dw), size = S * dh * 3 / 2, taps = scaleTaps(sw, sh, dw, dh);
   const ub = g.dev.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  g.dev.queue.writeBuffer(ub, 0, new Float32Array([sw, sh, dw, dh, hlg ? 2 : 0, SDR.hlgPeakNits, taps, 0]));
+  g.dev.queue.writeBuffer(ub, 0, new Float32Array([sw, sh, dw, dh, hlg ? 2 : 0, SDR.hlgPeakNits, taps, S]));
   const sb = g.dev.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }); // unico: la coda GPU è seriale
   const slots = Array.from({ length: depth }, () => ({ mb: g.dev.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), busy: Promise.resolve() }));
   let n = 0;
@@ -127,14 +139,14 @@ export async function createNv12Converter({ sw, sh, dw, dh, hlg, depth = SDR.inF
       const tmp = []; let p;
       try {
         const src = srcEntry(g, f, tmp, note), pipe = g.pipe(src.copy);
-        const bg = g.dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: src.res }, { binding: 1, resource: { buffer: ub } }, { binding: 2, resource: { buffer: sb } }] });
+        const bg = g.dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: src.res }, { binding: 1, resource: { buffer: ub } }, { binding: 2, resource: { buffer: sb } }, { binding: 3, resource: g.smp }] });
         const ce = g.dev.createCommandEncoder(), pass = ce.beginComputePass();
-        pass.setPipeline(pipe); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(Math.ceil(dw / 32), Math.ceil(dh / 16)); pass.end();
+        pass.setPipeline(pipe); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(Math.ceil(S / 32), Math.ceil(dh / 16)); pass.end();
         ce.copyBufferToBuffer(sb, 0, s.mb, 0, size); g.dev.queue.submit([ce.finish()]);
         const tg = performance.now();
         p = s.mb.mapAsync(GPUMapMode.READ).then(() => {
           if (T) { T.gpu += performance.now() - tg; T.gpuN++; }
-          try { return new VideoFrame(new Uint8Array(s.mb.getMappedRange()), { format: 'NV12', codedWidth: dw, codedHeight: dh, layout: [{ offset: 0, stride: dw }, { offset: dw * dh, stride: dw }], ...frameTiming(fr), colorSpace: CS709 }); }
+          try { return new VideoFrame(new Uint8Array(s.mb.getMappedRange()), { format: 'NV12', codedWidth: dw, codedHeight: dh, layout: [{ offset: 0, stride: S }, { offset: S * dh, stride: S }], ...frameTiming(fr), colorSpace: CS709 }); }
           finally { s.mb.unmap(); }
         });
       } catch (e) { p = Promise.reject(e); }

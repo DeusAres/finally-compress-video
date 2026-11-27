@@ -5,7 +5,8 @@
 
 // framerate: frame rate MEDIO reale della sorgente (frame/durata dal demux, 2 decimali; per VFR la media), non più 60 fisso.
 // width/height: dimensioni CONFIGURATE; se i frame passati sono più grandi («Riduci a 1080p») deve scalarli l'encoder (WebCodecs).
-export function createHevcEncoder({ width, height, bitrate, framerate = 60, onChunk, onError, log }) {
+// codec/extra (v0.38, modalità SDR): codec 8 bit (hvc1.1.6…, o avc1 in Chromium solo per prova) e campi in più (es. avc: {format:'avc'}).
+export function createHevcEncoder({ width, height, bitrate, framerate = 60, onChunk, onError, log, codec = 'hvc1.2.4.L123.B0', extra = null }) {
   let decoderConfig = null;
   const enc = new VideoEncoder({
     output: (chunk, meta) => {
@@ -14,7 +15,7 @@ export function createHevcEncoder({ width, height, bitrate, framerate = 60, onCh
     },
     error: (e) => onError(e),
   });
-  const cfg = { codec: 'hvc1.2.4.L123.B0', width, height, bitrate, framerate, latencyMode: 'quality', bitrateMode: 'variable' };
+  const cfg = { codec, ...(extra || {}), width, height, bitrate, framerate, latencyMode: 'quality', bitrateMode: 'variable' };
   log?.(`encoder: framerate ${framerate} fps`);
   // v0.35.4: se configure() lancia (dimensioni/config rifiutate) l'encoder va chiuso qui: il chiamante non ne riceve il riferimento
   // e un VideoEncoder non chiuso resta vivo con le sue callback (che trattengono player, frame e analisi della run).

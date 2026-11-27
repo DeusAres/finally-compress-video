@@ -4,14 +4,27 @@ import { parseSps } from './hevc-vui.js?v=0.37.4';
 
 export const DS_SHORT = 1080;
 export const DS_MESSAGE = 'Safari non riesce a ridurre la risoluzione mantenendo l\'HDR a 10 bit: riprova senza «Riduci a 1080p».';
-export const dsError = (detail) => Object.assign(new Error(DS_MESSAGE), { name: 'DownscaleError', detail });
+export const dsError = (detail, message = DS_MESSAGE) => Object.assign(new Error(message), { name: 'DownscaleError', detail });
+// Modalità SDR (v0.38): la scalatura la fa il compute shader a 8 bit (app/lib/sdrpath.js); l'encoder deve solo produrre quelle dimensioni.
+export const SDR_DS_MESSAGE = 'La riduzione di risoluzione in modalità SDR non è riuscita: riprova con la risoluzione originale.';
+export const sdrDsError = (detail) => Object.assign(dsError(detail, SDR_DS_MESSAGE), { sdr: true });
+/** Risoluzioni SDR a scelta (lato corto). 'orig' = nessuna riduzione. */
+export const SDR_RES = [2160, 1440, 1080, 720, 540, 480];
+/** Lato corto richiesto in SDR: settings.res ('orig' | numero), settings.downscale vero = alias di 1080. null = originale. */
+export function sdrRes(s) {
+  const r = s?.res;
+  if (r != null && r !== '' && r !== 'orig') { const n = +r; return n > 0 ? Math.round(n) : null; }
+  return s?.downscale ? DS_SHORT : null;
+}
+/** Dimensioni SDR: lato corto `res`, proporzioni mantenute, lati pari; mai ingrandire (res ≥ lato corto → null = originale). */
+export const resDims = (W, H, res) => (res > 0 ? downscaleDims(W, H, res) : null);
 
 /** L'opzione ha senso solo se il lato corto della sorgente supera 1080. */
 export const canDownscale = (W, H) => Math.min(W || 0, H || 0) > DS_SHORT;
 
 /** Dimensioni di uscita: lato corto 1080, lato lungo in proporzione (pari), stesso orientamento di W×H. null se non serve. */
 export function downscaleDims(W, H, short = DS_SHORT) {
-  if (!(Math.min(W, H) > short)) return null;
+  if (!(short > 0) || !(Math.min(W, H) > short)) return null;
   const portrait = H >= W, s = Math.min(W, H), l = Math.max(W, H);
   const lo = Math.round(l * short / s / 2) * 2, exact = Number.isInteger(l * short / s) && (l * short / s) % 2 === 0;
   return { width: portrait ? short : lo, height: portrait ? lo : short, exact };
@@ -53,6 +66,7 @@ export function verifyDownscale(desc, want) {
   const r = { w: s.displayWidth, h: s.displayHeight, codedW: s.codedWidth, codedH: s.codedHeight, bitDepth: s.bitDepthLuma, bitDepthChroma: s.bitDepthChroma, hvccDepth, profile: b[1] & 31 };
   const why = [];
   if (r.w !== want.width || r.h !== want.height) why.push(`dimensioni ${r.w}×${r.h} (coded ${r.codedW}×${r.codedH}) invece di ${want.width}×${want.height}`);
-  if (r.bitDepth < 10 || r.bitDepthChroma < 10 || hvccDepth < 10) why.push(`bit depth ${r.bitDepth}/${r.bitDepthChroma} (hvcC ${hvccDepth}) invece di 10`);
+  const bd = want.bitDepth ?? 10; // HDR: almeno 10 bit; SDR (v0.38): esattamente 8
+  if (bd >= 10 ? (r.bitDepth < bd || r.bitDepthChroma < bd || hvccDepth < bd) : (r.bitDepth !== bd || r.bitDepthChroma !== bd || hvccDepth !== bd)) why.push(`bit depth ${r.bitDepth}/${r.bitDepthChroma} (hvcC ${hvccDepth}) invece di ${bd}`);
   return { ok: !why.length, why: why.join('; '), ...r };
 }
