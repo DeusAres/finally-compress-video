@@ -2,7 +2,7 @@
    v0.38: tutto compatto per stare in una schermata di iPhone (~390×664) senza scorrere; le spiegazioni lunghe stanno in tendine (<details>)
    con altezza massima 40vh e scroll interno (.fcv-dbody) o dietro il tasto «i». Font: Jersey 10 (brand, titoli, cifre grandi), Jersey 15 (testo e numeri). */
 .fcv {
-  --lh-text: 1.2;
+  --lh-text: 1.2; line-height: 1.2;
   max-width: 560px; margin: 0 auto;
   padding: max(var(--sp-2), env(safe-area-inset-top)) max(var(--sp-3), env(safe-area-inset-right)) max(var(--sp-3), env(safe-area-inset-bottom)) max(var(--sp-3), env(safe-area-inset-left));
   display: grid; gap: var(--sp-2);
@@ -62,13 +62,13 @@
 /* Scelta file */
 .fcv-pick {
   position: relative; display: grid; justify-items: center; gap: var(--sp-1); text-align: center;
-  padding: var(--sp-3) var(--sp-3); cursor: pointer; color: var(--accent);
+  padding: var(--sp-2) var(--sp-3); cursor: pointer; color: var(--accent);
   background: repeating-linear-gradient(45deg, transparent 0 8px, color-mix(in srgb, var(--accent) 8%, transparent) 8px 16px), var(--surface);
   outline: var(--px-unit) dashed var(--accent); outline-offset: calc(-1 * var(--px-unit) * 2);
 }
 .fcv-pick input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
 .fcv-pick input:focus-visible ~ .fcv-pick-cta { outline: var(--px-unit) dashed var(--highlight); outline-offset: 4px; }
-.fcv-pick svg { width: 40px; height: 40px; }
+.fcv-pick svg { width: 32px; height: 32px; }
 .fcv-pick-cta { font: 700 var(--fs-lg)/1.1 var(--font-body); }
 .fcv-pick small { color: var(--muted); font-size: var(--fs-sm); }
 
@@ -85,6 +85,7 @@
 /* Impostazioni */
 .fcv-field { display: grid; gap: var(--sp-1); border: 0; margin: 0; padding: 0; min-width: 0; }
 .fcv-field legend { padding: 0; margin-bottom: var(--sp-1); }
+.fcv .px-seg span { min-height: 42px; }
 .fcv .px-seg span small { font: 700 var(--fs-xs)/1 var(--font-body); margin-top: 2px; opacity: .9; }
 .fcv-seg-br span { position: relative; }
 .fcv-seg-br span .star { position: absolute; top: 3px; right: 3px; line-height: 0; }
@@ -93,7 +94,10 @@
 .fcv-hearts { display: flex; gap: 2px; }
 .fcv-hearts svg { width: 21px; height: 18px; }
 .fcv-hint { min-height: 1.2em; font-size: var(--fs-sm); line-height: 1.2; color: var(--muted); }
-.fcv-seg-br + .fcv-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fcv-hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.fcv-hint:empty { display: none; }
+.fcv-rowh .fcv-hint { flex: 1; }
+.fcv[data-picked="0"] .fcv-est { display: none; }
 
 /* Interruttore HDR / SDR (sole / luna) */
 .fcv-mode { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--sp-3); align-items: center; }
@@ -116,12 +120,21 @@
 .fcv-mode-d { font-size: var(--fs-sm); line-height: 1.2; color: var(--muted); }
 .fcv-mode-d b { color: var(--text); font-family: var(--font-pixel); font-size: var(--fs-md); margin-right: var(--sp-1); }
 
-/* Risoluzione (solo SDR) */
+/* «Veloce» (HDR a 8 bit): casella compatta accanto all'interruttore */
+.fcv-mode-r { display: grid; gap: 2px; min-width: 0; }
+.fcv-fast { display: flex; align-items: center; gap: var(--sp-2); cursor: pointer; font: 700 var(--fs-sm)/1.1 var(--font-body); min-height: 28px; }
+.fcv-fast input { appearance: none; -webkit-appearance: none; flex: none; width: 18px; height: 18px; margin: 2px; background: var(--surface); box-shadow: 0 0 0 3px var(--line); cursor: pointer; }
+.fcv-fast input:checked { background: var(--accent); box-shadow: 0 0 0 3px var(--line), inset 0 0 0 3px var(--surface); }
+.fcv-fast input:focus-visible { outline: 3px dashed var(--highlight); outline-offset: 4px; }
+.fcv-fast span { min-width: 0; font-size: var(--fs-xs); }
+
+/* Risoluzione (SDR e HDR veloce) */
 .fcv-res legend { margin-bottom: 2px; }
-.fcv-resgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--sp-1); margin: var(--px-border); }
+.fcv-resgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(46px, 1fr)); gap: var(--sp-1); margin: var(--px-border); }
+.fcv-resgrid label:first-child { grid-column: span 2; }
 .fcv-resgrid label { position: relative; display: block; min-width: 0; }
 .fcv-resgrid input { position: absolute; inset: 0; opacity: 0; margin: 0; width: 100%; height: 100%; cursor: pointer; }
-.fcv-resgrid span { display: grid; place-items: center; min-height: 34px; padding: 0 2px; background: var(--surface-2); box-shadow: var(--px-ring); font: 700 var(--fs-sm)/1 var(--font-body); text-align: center; white-space: nowrap; }
+.fcv-resgrid span { display: grid; place-items: center; min-height: 32px; padding: 0 2px; background: var(--surface-2); box-shadow: var(--px-ring); font: 700 var(--fs-sm)/1 var(--font-body); text-align: center; white-space: nowrap; }
 .fcv-resgrid input:checked + span { background: var(--accent); color: var(--accent-text); }
 .fcv-resgrid input:focus-visible + span { outline: var(--px-unit) dashed var(--highlight); outline-offset: 1px; }
 .fcv-resgrid input:disabled + span { opacity: .55; }
@@ -301,18 +314,19 @@
 .fcv-queue > header .fcv-q-count { margin-left: auto; }
 .fcv-q-tot { font: 400 var(--fs-sm)/1.15 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
 .fcv-q-tot b { font: 700 var(--fs-sm)/1.2 var(--font-body); color: var(--text); }
-.fcv-q-list { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; max-height: 26vh; max-height: 26dvh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-.fcv-q-item { display: grid; gap: 2px; min-width: 0; margin: var(--px-border); padding: var(--sp-1) var(--sp-2); background: var(--surface-2); box-shadow: var(--px-ring); }
+.fcv-q-list { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; max-height: 24vh; max-height: 24dvh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.fcv-q-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-2); min-width: 0; margin: var(--px-border); padding: var(--sp-1) var(--sp-2); background: var(--surface-2); box-shadow: var(--px-ring); }
 .fcv-q-item[data-st="corso"] { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
 .fcv-q-item[data-st="fatto"] { background: color-mix(in srgb, var(--ok) 14%, var(--surface)); }
 .fcv-q-item[data-st="errore"] { background: color-mix(in srgb, var(--danger) 14%, var(--surface)); }
 .fcv-q-item[data-st="annullata"], .fcv-q-item[data-nf] { opacity: .85; }
-.fcv-q-head { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.fcv-q-head { flex: 1 0 100%; display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
 .fcv-q-n { display: grid; place-items: center; flex: none; width: 22px; height: 22px; background: var(--text); color: var(--surface); font: 400 var(--fs-sm)/1 var(--font-pixel); }
 .fcv-q-name { flex: 1; min-width: 0; font: 700 var(--fs-md)/1.1 var(--font-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fcv-q-x { flex: none; min-height: 28px; min-width: 28px; padding: 0; margin: 2px; }
 .fcv-q-x svg { width: 14px; height: 14px; }
-.fcv-q-item .fcv-chips { margin-top: 0; }
+.fcv-q-item .fcv-chips { margin-top: 0; flex: 1 0 100%; }
+.fcv-q-item > .fcv-q-bar, .fcv-q-item > .fcv-q-orig, .fcv-q-item > .fcv-q-btns { flex: 1 0 100%; }
 .fcv-q-item .fcv-chips .px-chip { min-height: 22px; font-size: var(--fs-sm); }
 .fcv-q-est { font: 400 var(--fs-sm)/1.1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
 .fcv-q-st { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-2); font-size: var(--fs-sm); line-height: 1.2; min-width: 0; }
@@ -377,7 +391,6 @@ dialog.fcv-about::backdrop { background: rgba(14, 15, 24, .72); }
   .fcv-switch .knob svg { width: 18px; height: 18px; }
   .fcv-switch .knob b, .fcv-switch .lb { font-size: 20px; }
   .fcv-tile .tv { font-size: 26px; }
-  .fcv-resgrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .fcv-freed .sep { display: none; }
   .fcv-freed .nw { display: block; }
   .fcv-pred-tbl th, .fcv-pred-tbl td { padding-inline: 2px; font-size: var(--fs-sm); }

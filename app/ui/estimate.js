@@ -32,13 +32,16 @@ export const DEFAULT_FPS = { p3: { hd: 110, uhd: 80 }, p2: { hd: 90, uhd: 70 }, 
 // SDR (v0.38, VideoDecoder → WebGPU → HEVC 8 bit, nessun <video> di seek): classe «sdr» indipendente dai player. hd misurato su iPhone
 // (sdr8 v2.1, 1080p60: 250 fps, limite l'encoder); uhd e uhd ridotto sono IPOTESI (decoder 4K ~4× più lento, encoder 4K ~¼), da rimisurare.
 export const DEFAULT_SDR_FPS = { hd: 250, uhd: 70, 'uhd.ds': 160 };
-export const speedKey = ({ par2, width, height, downscale, mode }) => `fcv.fps.${mode === 'sdr' ? 'sdr' : par2 === 3 ? 'p3' : par2 ? 'p2' : 'p1'}.${Math.max(width || 0, height || 0) > 1920 ? 'uhd' : 'hd'}${downscale ? '.ds' : ''}`;
+// HDR veloce 8 bit ('hdr8'): frame del decoder diretti all'encoder; hd misurato su iPhone (sdr8 c_hlg8: 257 fps), uhd IPOTESI come SDR
+export const DEFAULT_HDR8_FPS = { hd: 257, uhd: 70, 'uhd.ds': 160 };
+const fastMode = (m) => m === 'sdr' || m === 'hdr8';
+export const speedKey = ({ par2, width, height, downscale, mode }) => `fcv.fps.${fastMode(mode) ? mode : par2 === 3 ? 'p3' : par2 ? 'p2' : 'p1'}.${Math.max(width || 0, height || 0) > 1920 ? 'uhd' : 'hd'}${downscale ? '.ds' : ''}`;
 
 /** Velocità attesa {fps, measured}. */
 export function expectedFps(o) {
   try { const v = +localStorage.getItem(speedKey(o)); if (v > 1 && isFinite(v)) return { fps: v, measured: true }; } catch {}
   const k = speedKey(o).split('.');
-  if (k[2] === 'sdr') { const c = k[3] === 'hd' ? 'hd' : k[4] ? 'uhd.ds' : 'uhd'; return { fps: DEFAULT_SDR_FPS[c], measured: false, guess: c !== 'hd' }; }
+  if (fastMode(k[2])) { const c = k[3] === 'hd' ? 'hd' : k[4] ? 'uhd.ds' : 'uhd'; return { fps: (k[2] === 'sdr' ? DEFAULT_SDR_FPS : DEFAULT_HDR8_FPS)[c], measured: false, guess: c !== 'hd' }; }
   return { fps: DEFAULT_FPS[k[2]][k[3]], measured: false };
 }
 /** Salva la velocità reale (frame/s della fase video) e il tempo totale dell'ultimo job. */
@@ -50,10 +53,10 @@ export function saveSpeed(o, fps, totalS) {
 // rimisurare sul device con la riga «prove: tempi …» del log. Tenere uguale a scenesearch.SCENE.timeFactor.
 export const SCENE_TIME_FACTOR = 1.6;
 /** Tempo totale previsto in secondi + fonte della velocità. sceneQ: tempo del video × SCENE_TIME_FACTOR (variabile). */
-// mode 'sdr': velocità della classe sdr, qualità per scena ignorata (disattivata in SDR); downscale = qualunque riduzione (settings.res).
+// mode 'sdr' / 'hdr8': velocità della propria classe, qualità per scena ignorata (disattivata in SDR); downscale = qualunque riduzione (settings.res).
 export function estimateTimeS({ durS, fps = 30, audioMode = 'copy', par2, width, height, sceneQ = false, downscale = false, mode = 'hdr', res = null }) {
   if (!(durS > 0)) return null;
-  const sdr = mode === 'sdr', ds = sdr ? !!downscale || (res != null && res !== 'orig' && +res > 0 && +res < Math.min(width || 0, height || 0)) : downscale;
+  const sdr = fastMode(mode), ds = sdr ? !!downscale || (res != null && res !== 'orig' && +res > 0 && +res < Math.min(width || 0, height || 0)) : downscale;
   if (sdr) sceneQ = false;
   const frames = durS * (fps > 0 ? fps : 30), sp = expectedFps({ par2, width, height, downscale: ds, mode });
   const tv = frames / sp.fps * (sceneQ ? SCENE_TIME_FACTOR : 1);

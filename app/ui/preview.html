@@ -116,7 +116,7 @@ document.getElementById('dev').addEventListener('click', (e) => {
   if (b.dataset.s === 'run') { show('ready'); run(); } else show(b.dataset.s);
 });
 show(q.get('state') || 'ready');
-if (q.get('sdr')) ui.applySettings({ mode: 'sdr', res: q.get('res') === 'orig' ? 'orig' : +q.get('res') || 'orig' });
+if (q.get('sdr')) ui.applySettings({ mode: q.get('sdr') === 'fast' ? 'hdr8' : 'sdr', res: q.get('res') === 'orig' ? 'orig' : +q.get('res') || 'orig' });
 if (q.get('open')) for (const s of q.get('open').split(',')) { const d = document.querySelector(s); if (d) d.open = true; }
 if (q.get('standalone')) document.querySelector('[data-ref=safariBtn]').hidden = false;
 requestAnimationFrame(() => scrollTo(0, 0));

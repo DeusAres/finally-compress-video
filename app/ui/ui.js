@@ -21,9 +21,10 @@ const KF_INFO = {
   10: 'File un filo più leggero, scorrimento meno preciso.',
 };
 const RES_LIST = [2160, 1440, 1080, 720, 540, 480]; // formati standard (lato corto); solo quelli sotto la sorgente, mai ingrandimenti
-const resLbl = (v) => (v === 'orig' ? 'Originale' : v === 2160 ? '2160p 4K' : `${v}p`);
+const resLbl = (v) => (v === 'orig' ? 'Originale' : v === 2160 ? '4K' : `${v}p`);
 const MODE_INFO = {
-  hdr: '<b>HDR</b> 10 bit, Dolby Vision conservato.',
+  hdr: '<b>HDR</b> 10 bit, Dolby Vision',
+  hdr8: '<b>HDR</b> 8 bit, ~2,5× più veloce',
   sdr: '<b>SDR</b> Compatibile ovunque, più veloce, niente HDR.',
 };
 const AUDIO = [
@@ -96,7 +97,7 @@ function template(opts) {
     <input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input" aria-label="Scegli uno o più video">
     ${s('film', { scale: 5, className: 'px-bob' })}
     <span class="fcv-pick-cta">Tocca per scegliere</span>
-    <small>Uno o più video (più video = coda). Restano sul telefono.</small>
+    <small>Uno o più video · restano sul telefono</small>
   </label>
   <details class="fcv-note fcv-pick-note" data-ref="pickNote">
     <summary>${chev}<span>Meglio «Scegli file» che «Libreria foto»</span></summary>
@@ -136,9 +137,8 @@ function template(opts) {
   <h2 class="px-sr" id="fcv-h2">Regola la qualità</h2>
   <fieldset class="fcv-field">
     <legend class="px-sr">Bitrate video</legend>
-    <div class="fcv-rowh"><span class="px-label" aria-hidden="true">Bitrate video</span><div class="fcv-hearts" data-ref="hearts"></div></div>
     <div class="px-seg fcv-seg-br" data-ref="br">${brSeg}</div>
-    <p class="fcv-hint" data-ref="brHint" aria-live="polite"></p>
+    <div class="fcv-rowh"><p class="fcv-hint" data-ref="brHint" aria-live="polite"></p><div class="fcv-hearts" data-ref="hearts"></div></div>
   </fieldset>
   <div class="fcv-mode">
     <label class="fcv-switch" title="HDR o SDR">
@@ -146,10 +146,11 @@ function template(opts) {
       <span class="trk" aria-hidden="true"><span class="lb l">HDR</span><span class="lb r">SDR</span>
         <span class="knob"><i class="sun">${s('sun', { scale: 2 })}</i><i class="moon">${s('moon', { scale: 2 })}</i><b class="t-hdr">HDR</b><b class="t-sdr">SDR</b></span></span>
     </label>
-    <p class="fcv-mode-d" data-ref="modeDesc" aria-live="polite"></p>
+    <div class="fcv-mode-r"><p class="fcv-mode-d" data-ref="modeDesc" aria-live="polite"></p>
+      <label class="fcv-fast" data-ref="fastBox"><input type="checkbox" name="fcv-fast" value="1"><span>Veloce: 8 bit, no Dolby Vision</span></label></div>
   </div>
   <fieldset class="fcv-field fcv-res" data-ref="resBox" hidden>
-    <legend class="px-label">Risoluzione</legend>
+    <legend class="px-sr">Risoluzione</legend>
     <div class="fcv-resgrid" data-ref="resGrid"></div>
   </fieldset>
   <details class="fcv-est">
@@ -382,6 +383,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   // Pulsante «Comprimi»: singolo video o coda («Comprimi N video»: voci in attesa con il loro file).
   function syncGo() {
+    root.dataset.picked = st.file || st.qMode ? '1' : '0';
     if (!st.qMode) {
       R.go.disabled = !st.file || st.busy;
       R.go.firstChild.textContent = 'Comprimi ';
@@ -437,7 +439,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     handlers.onFile?.(f);
   }
   function showFile(fi) {
-    R.pick.hidden = true; R.fileBox.hidden = false;
+    R.pick.hidden = true; R.fileBox.hidden = false; root.dataset.picked = '1';
     R.fName.textContent = fi.name || 'video';
     R.fSize.innerHTML = fi.sizeMB != null ? `${fmtMB(fi.sizeMB)}<small>MB</small>` : '—';
     R.fDur.textContent = fi.durationS ? fmtTime(fi.durationS) : '—';
@@ -498,7 +500,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.resGrid.innerHTML = opts.map((v) => `<label><input type="radio" name="fcv-res" value="${v}"${v === cur ? ' checked' : ''}><span>${resLbl(v)}</span></label>`).join('');
     st.wantRes = cur; st.resOpts = opts.length;
   }
-  const syncResBox = () => { R.resBox.hidden = st.settings.mode !== 'sdr' || (st.resOpts || 0) < 2; };
+  const syncResBox = () => { R.resBox.hidden = st.settings.mode === 'hdr' || (st.resOpts || 0) < 2; R.fastBox.hidden = st.settings.mode === 'sdr'; };
   function syncDs() {
     buildRes();
     R.apacBox.hidden = !(st.file?.apac || st.file?.meta); // «Mantieni audio spaziale e metadati iPhone»: solo se la sorgente ha apac o tracce mebx
@@ -506,12 +508,12 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    const sdr = root.querySelector('input[name="fcv-mode"]')?.checked === false, res = sdr ? resSel() : 'orig'; // settings.res = 'orig' | 2160 | 1440 | 1080 | 720 | 540 | 480; downscale = alias di res 1080
-    return { mode: root.querySelector('input[name="fcv-mode"]')?.checked === false ? 'sdr' : 'hdr', bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq'), res, downscale: res === 1080, apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
+    const sdr = root.querySelector('input[name="fcv-mode"]')?.checked === false, mode = sdr ? 'sdr' : root.querySelector('input[name="fcv-fast"]')?.checked ? 'hdr8' : 'hdr', res = mode !== 'hdr' ? resSel() : 'orig'; // settings.mode = 'hdr' | 'hdr8' | 'sdr'; settings.res = 'orig' | 2160 | 1440 | 1080 | 720 | 540 | 480; downscale = alias di res 1080
+    return { mode, bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq'), res, downscale: res === 1080, apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
-    if (s.mode) { const c = root.querySelector('input[name="fcv-mode"]'); if (c) c.checked = s.mode !== 'sdr'; }
+    if (s.mode) { const c = root.querySelector('input[name="fcv-mode"]'); if (c) c.checked = s.mode !== 'sdr'; const f = root.querySelector('input[name="fcv-fast"]'); if (f) f.checked = s.mode === 'hdr8'; }
     set('fcv-br', s.bitrateMbps); set('fcv-kf', s.keyframeS); set('fcv-audio', s.audioMode);
     if (s.bgAudio != null) { const c = root.querySelector('input[name="fcv-bgaudio"]'); if (c) c.checked = !!s.bgAudio; }
     if (s.par2 != null) { const c = root.querySelector('input[name="fcv-par2"]'); if (c) c.checked = !!s.par2; }
@@ -533,7 +535,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
     if (st.qMode && st.queue) renderQueue();
-    R.advSum.textContent = `${st.settings.mode === 'sdr' ? 'SDR · ' : ''}${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ` · ${st.settings.par3 ? 3 : 2} player` : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.res !== 'orig' ? ` · ${st.settings.res}p` : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
+    R.advSum.textContent = `${st.settings.mode === 'sdr' ? 'SDR · ' : st.settings.mode === 'hdr8' ? 'HDR 8 bit · ' : ''}${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ` · ${st.settings.par3 ? 3 : 2} player` : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.res !== 'orig' ? ` · ${st.settings.res}p` : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
     updateEstimate();
   }
   const pixRatio = (s, f) => { const r = resApplies(s.res, f), sh = shortSide(f); return r === 'orig' || !sh ? 1 : (r * r) / (sh * sh); }; // pixel scelti / pixel sorgente (stesso rapporto d'aspetto)
@@ -714,7 +716,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const s = st.settings;
     R.qNow.hidden = !st.qCur;
     if (st.qCur) R.qNow.innerHTML = `Video <b>${st.qCur.idx}</b> di <b>${st.qCur.n}</b>`;
-    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span>${s.res && s.res !== 'orig' ? `<span class="px-chip px-chip--num">${s.res}p</span>` : ''}${s.mode === 'sdr' ? '<span class="px-chip">SDR</span>' : ''}<span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
+    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span>${s.res && s.res !== 'orig' ? `<span class="px-chip px-chip--num">${s.res}p</span>` : ''}${s.mode === 'sdr' ? '<span class="px-chip">SDR</span>' : s.mode === 'hdr8' ? '<span class="px-chip">HDR 8 bit</span>' : ''}<span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
     R.elapsed.textContent = '0:00';
     R.progNote.textContent = KEEP_OPEN; R.progNote.dataset.kind = ''; st.pipOn = false; R.pipBox.hidden = true;

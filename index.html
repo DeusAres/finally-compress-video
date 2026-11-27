@@ -20,7 +20,7 @@ import { installMediaDiag, mediaDiagLine } from './app/lib/mediadiag.js?v=0.37.4
 import { estimateOutBytes, estimateTimeS } from './app/ui/estimate.js?v=0.37.4';
 import { createHevcEncoder } from './app/lib/encode.js?v=0.37.4';
 import { downscaleDims, avgFramerate, verifyDownscale, dsError, sdrDsError, sdrRes, resDims } from './app/lib/downscale.js?v=0.37.4';
-import { openSdrSource, pickSdrCodec, sdrWindow, SDR, CS709, VUI709 } from './app/lib/sdrpath.js?v=0.37.4';
+import { openSdrSource, pickSdrCodec, sdrWindow, SDR, CS709, VUI709, CSHLG, VUIHLG } from './app/lib/sdrpath.js?v=0.37.4';
 import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.37.4';
 import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.37.4';
 import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.37.4';
@@ -179,7 +179,7 @@ async function refreshResume() {
   if (pj && pj.done > 0 && pj.manifest.app === VER && sameFile(pj.manifest.file, fileKey(file))) {
     savedJob = pj;
     ui.setResume({ name: file.name, done: pj.done, total: pj.total, settings: pj.manifest.settings });
-    log(`export interrotto trovato per questo video: ${pj.done}/${pj.total} segmenti pronti (${pj.manifest.settings.bitrateMbps} Mbps${pj.manifest.settings.sceneQ ? ' max, qualità per scena' : ''}${pj.manifest.settings.downscale ? ', 1080p' : ''}${pj.manifest.settings.mode === 'sdr' ? `, SDR${pj.manifest.settings.res && pj.manifest.settings.res !== 'orig' ? ' ' + pj.manifest.settings.res + 'p' : ''}` : ''}, key ${pj.manifest.settings.keyframeS}s)`);
+    log(`export interrotto trovato per questo video: ${pj.done}/${pj.total} segmenti pronti (${pj.manifest.settings.bitrateMbps} Mbps${pj.manifest.settings.sceneQ ? ' max, qualità per scena' : ''}${pj.manifest.settings.downscale ? ', 1080p' : ''}${pj.manifest.settings.mode === 'sdr' || pj.manifest.settings.mode === 'hdr8' ? `, ${pj.manifest.settings.mode === 'sdr' ? 'SDR' : 'HDR8'}${pj.manifest.settings.res && pj.manifest.settings.res !== 'orig' ? ' ' + pj.manifest.settings.res + 'p' : ''}` : ''}, key ${pj.manifest.settings.keyframeS}s)`);
   } else {
     ui.setResume(null);
     if (pj && !pj.done) await discardJob(); // v0.35.4: job senza segmenti completi (es. errore prima del 1°): niente da riprendere, niente file orfani
@@ -314,7 +314,7 @@ function beginSession(s, f) {
   // v0.21.1: prepara SUBITO (nel tap di Comprimi) il video della PiP: iOS non la avvia su un video senza dati o invisibile.
   try { if (pipSupported() && !(matchMedia('(display-mode: standalone)').matches || navigator.standalone === true)) { if (pip) { pip.stop(); } pip = makePip(f); pip.prepare(); } } catch (e) { log('PiP: preparazione fallita ' + (e?.message || e)); }
   cfg = { bitrateMbps: +s?.bitrateMbps || 8, keyframeS: +s?.keyframeS || 4, audioMode: s?.audioMode || 'copy', bgAudio: !!s?.bgAudio, par2: !!s?.par2, par3: !!s?.par3, sceneQ: s?.sceneQ !== false, downscale: !!s?.downscale, apac: s?.apac !== false, container: s?.container === 'mp4' ? 'mp4' : 'mov',
-    mode: s?.mode === 'sdr' ? 'sdr' : 'hdr', res: s?.res ?? 'orig' }; // v0.38: modalità SDR (app/lib/sdrpath.js) e risoluzione SDR a scelta (lato corto)
+    mode: s?.mode === 'sdr' || s?.mode === 'hdr8' ? s.mode : 'hdr', res: s?.res ?? 'orig' }; // v0.38: modalità SDR / HDR veloce 8 bit (app/lib/sdrpath.js) e risoluzione a scelta (lato corto)
   pipStat = { hiddenN: 0, hiddenMs: 0, hAt: 0, events: [], inAt: 0, fIn: 0, frames: 0, openMs: 0, tickAt: 0, tickF: 0 }; startPipWatch();
   // SINCRONO nel tap (gesto utente): l'audio di keep-alive deve partire prima di qualunque await.
   chimeUnlock(); askNotify(); // SINCRONO nel tap: sblocca l'audio del jingle finale (iOS) e, da web app installata, chiede le notifiche
@@ -450,10 +450,11 @@ async function runWith(input, { forceFresh = false } = {}) {
   const T0 = performance.now(); setProg('analisi', 0, 'lettura pacchetti');
   const bitrate = cfg.bitrateMbps * 1e6, gopSec = cfg.keyframeS, fastStart = false; // moov in coda: necessario per riscrivere il moov
   // v0.38 modalità SDR (app/lib/sdrpath.js): VideoDecoder → WebGPU (Hable → BT.709, scalatura) → HEVC 8 bit; niente <video> di seek né RPU.
-  const sdr = cfg.mode === 'sdr', sdrShort = sdr ? sdrRes(cfg) : null;
+  // sdr = percorso veloce VideoDecoder (modalità 'sdr' e 'hdr8'); hdr8 = HLG a 8 bit senza conversione dei colori (VUI/colr BT.2020 HLG)
+  const hdr8 = cfg.mode === 'hdr8', sdr = cfg.mode === 'sdr' || hdr8, sdrShort = sdr ? sdrRes(cfg) : null, MODE = hdr8 ? 'HDR8' : 'SDR';
   // «Qualità garantita per scena» (v0.28): bitrate = limite superiore, target scelto per segmento dalle prove. In SDR disattivata (per ora).
   const sceneQ = !!cfg.sceneQ && !sdr;
-  if (sdr) log(`modalità SDR: VideoDecoder → WebGPU (inversa HLG → Hable → BT.709) → HEVC 8 bit${cfg.sceneQ ? ' · qualità per scena DISATTIVATA in SDR (per ora): bitrate fisso, prove saltate' : ''}`, 'setup');
+  if (sdr) log(`modalità ${MODE}: ${hdr8 ? 'VideoDecoder → frame HLG a 8 bit invariati (WebGPU solo per ridurre la risoluzione)' : 'VideoDecoder → WebGPU (inversa HLG → Hable → BT.709)'} → HEVC 8 bit, niente Dolby Vision${cfg.sceneQ ? ` · qualità per scena DISATTIVATA in ${MODE} (per ora): bitrate fisso, prove saltate` : ''}`, 'setup');
   // 1. Demux (in cache per la ripresa in memoria dopo un errore)
   const vt = await input.getPrimaryVideoTrack(); if (!vt) throw new Error('nessuna traccia video');
   let A = analysis?.file === file && (sdr || !analysis.noRpu) ? analysis : null; // un'analisi SDR non ha gli RPU: non vale per l'HDR
@@ -472,7 +473,7 @@ async function runWith(input, { forceFresh = false } = {}) {
       if (dvBox && !sdr) { const r = extractNals(p.data, [62]); if (r.length) { e.rpu = r.map((n) => n.slice()); rpuCount++; } }
       if (pk.length % 256 === 0) { checkCancel(); await whenVisible(); setProg('analisi', info?.dur ? Math.min(1, p.timestamp / info.dur) : 0, `pacchetti ${pk.length}`); await new Promise((r) => setTimeout(r)); }
     }
-    if (dvBox && !sdr) log(`RPU Dolby Vision letti: ${rpuCount}`); else if (dvBox) log('Dolby Vision: in SDR gli RPU non si copiano (né il dvvC)');
+    if (dvBox && !sdr) log(`RPU Dolby Vision letti: ${rpuCount}`); else if (dvBox) log(`Dolby Vision: in ${MODE} gli RPU non si copiano (né il dvvC)`);
     pk.sort((a, b) => a.ts - b.ts);
     const neg = pk.filter((p) => p.ts < 0).length; const frames = pk.filter((p) => p.ts >= 0);
     log(`pacchetti ${pk.length}, presentabili ${frames.length} (scartati ts<0: ${neg}), primo ts ${frames[0]?.ts.toFixed(4)} s`);
@@ -503,7 +504,7 @@ async function runWith(input, { forceFresh = false } = {}) {
   let why = '';
   if (saved) {
     const m = saved.manifest;
-    why = m.app !== VER ? `versione ${m.app}` : !sameFile(m.file, want.file) ? `altro file (${m.file.name})` : !sameVideoSettings(m.settings, cfg) ? `impostazioni diverse (${m.settings.bitrateMbps} Mbps, key ${m.settings.keyframeS}s${m.settings.sceneQ ? ', qualità per scena' : ''}${m.settings.downscale ? ', 1080p' : ''}${m.settings.mode === 'sdr' ? `, SDR ${m.settings.res || 'orig'}` : ', HDR'})`
+    why = m.app !== VER ? `versione ${m.app}` : !sameFile(m.file, want.file) ? `altro file (${m.file.name})` : !sameVideoSettings(m.settings, cfg) ? `impostazioni diverse (${m.settings.bitrateMbps} Mbps, key ${m.settings.keyframeS}s${m.settings.sceneQ ? ', qualità per scena' : ''}${m.settings.downscale ? ', 1080p' : ''}${m.settings.mode === 'sdr' || m.settings.mode === 'hdr8' ? `, ${m.settings.mode.toUpperCase()} ${m.settings.res || 'orig'}` : ', HDR'})`
       : (m.video.nFrames !== NF || Math.abs(m.video.firstTs - want.video.firstTs) > 1e-6 || Math.abs(m.video.lastTs - want.video.lastTs) > 1e-6 || m.video.keyEvery !== keyEvery || m.video.dv !== want.video.dv || JSON.stringify(m.segStarts) !== JSON.stringify(segStarts)) ? 'fotogrammi/segmenti diversi'
       : !saved.done ? 'nessun segmento completo' : !m.config ? 'configurazione decoder mancante' : '';
     if (why) log(`job salvato non riutilizzabile (${why}): ricomincio da capo`);
@@ -519,9 +520,10 @@ async function runWith(input, { forceFresh = false } = {}) {
   if (doneSeg < nSeg) {
     const runStart = segStarts[doneSeg]; progFrame = runStart; hbRef = runStart; // nuovo run: azzera il riferimento dell'heartbeat
     vidRun = new AbortController(); if (document.hidden && !bgInt) bgInt = { at: Date.now(), seg: segsSaved }; if (document.hidden) vidRun.abort();
+    if (hdr8 && !hlg) log(`⚠️ HDR8: sorgente non HLG (${srcCs?.transfer || '?'}): l'uscita è etichettata HLG BT.2020, i colori potrebbero essere sbagliati`, 'warn');
     // SDR: sorgente VideoDecoder + WebGPU (riparte dal keyframe che precede il segmento); nessun <video> di seek (la PiP resta a parte)
     let video = null, sdrSrc = null;
-    if (sdr) { sdrSrc = await openSdrSource({ MB, track: vt, log: (t, c) => log(`[${clock()}] ${t}`, c) }); if (vidRun.signal.aborted) throw Object.assign(new Error('interrotto: pagina in background'), { name: 'BackgroundInterrupt' }); }
+    if (sdr) { sdrSrc = await openSdrSource({ MB, track: vt, tonemap: !hdr8, log: (t, c) => log(`[${clock()}] ${MODE}: ${t}`, c) }); if (vidRun.signal.aborted) throw Object.assign(new Error('interrotto: pagina in background'), { name: 'BackgroundInterrupt' }); }
     else { video = await openPlayer(0, vidRun.signal); cur.video = video; }
     let xs = []; // v0.37: player di seek aggiuntivi (1 con «2 player», 2 con «3 player (sperimentale)»)
     // v0.36.2: player bloccato (seek timeout) → ricreato e frame riprovato una volta (frames.js); qui si aggiornano i riferimenti
@@ -550,9 +552,9 @@ async function runWith(input, { forceFresh = false } = {}) {
       if (!v.ok) throw (sdr ? sdrDsError : dsError)(v.why || 'verifica non riuscita');
       return v;
     };
-    if (sdr && sdrShort && !ds) log(`riduzione SDR: ignorata (lato corto ${Math.min(W, H)} ≤ ${sdrShort}: mai ingrandire, resta l'originale)`);
+    if (sdr && sdrShort && !ds) log(`riduzione ${MODE}: ignorata (lato corto ${Math.min(W, H)} ≤ ${sdrShort}: mai ingrandire, resta l'originale)`);
     else if (!sdr && cfg.downscale && !ds) log(`downscale: ignorato (lato corto ${Math.min(W, H)} ≤ 1080)`);
-    if (dsOn && sdr) log(`riduzione SDR: ${W}×${H} → ${outW}×${outH} (lato corto ${sdrShort}${ds.exact ? '' : ', proporzione arrotondata a pari'}) nel compute shader: filtro ad area con prese bilineari, encoder a ${outW}×${outH}, verifica sul primo chunk`);
+    if (dsOn && sdr) log(`riduzione ${MODE}: ${W}×${H} → ${outW}×${outH} (lato corto ${sdrShort}${ds.exact ? '' : ', proporzione arrotondata a pari'}) nel compute shader${hdr8 ? ' (valori HLG scalati senza conversione)' : ''}: filtro ad area con prese bilineari, encoder a ${outW}×${outH}, verifica sul primo chunk`);
     else if (dsOn) {
       log(`downscale: frame nativi ${W}×${H} → encoder ${outW}×${outH}${ds.exact ? '' : ' ⚠️ proporzione non esatta (arrotondata a pari)'}; scalatura DELL'ENCODER (nessun canvas/WebGPU: manterrebbe solo 8 bit), da verificare sul primo chunk`);
       if (dvBox && !sdr) log('downscale: Dolby Vision, RPU copiati invariati (L1/L2 non dipendono dalla risoluzione). ⚠️ L5 (active area in pixel) NON viene rilevata dall\'app: se il video ha barre nere/letterbox controlla il risultato a occhio');
@@ -637,7 +639,7 @@ async function runWith(input, { forceFresh = false } = {}) {
     let enc;
     // SDR: HEVC Main 8 bit (Chromium non codifica HEVC → H.264 solo per verificare la logica)
     const vc = sdr ? await pickSdrCodec(outW, outH, framerate) : { kind: 'hevc' }, hevc = vc.kind === 'hevc';
-    if (sdr) log(`encoder SDR: ${vc.codec} ${outW}×${outH} 8 bit${hevc ? '' : ' ⚠️ HEVC non codificabile in questo browser: H.264 solo per prova (Safari usa HEVC)'}`, hevc ? 'setup' : 'warn');
+    if (sdr) log(`encoder ${MODE}: ${vc.codec} ${outW}×${outH} 8 bit${hevc ? '' : ' ⚠️ HEVC non codificabile in questo browser: H.264 solo per prova (Safari usa HEVC)'}`, hevc ? 'setup' : 'warn');
     try { enc = createHevcEncoder({ width: outW, height: outH, bitrate: curBr, framerate, log: (t) => log(t), codec: vc.codec, extra: vc.extra,
       onError: (e) => { encErr ||= dsWrap(e, 'encoder'); },
       onChunk: (chunk, meta) => {
@@ -657,8 +659,8 @@ async function runWith(input, { forceFresh = false } = {}) {
           else if (dsOn) { if (dc.codedWidth && (dc.codedWidth !== outW || dc.codedHeight !== outH)) { encErr = sdrDsError(`encoder ${dc.codedWidth}×${dc.codedHeight} invece di ${outW}×${outH}`); return; } dsVerified = true; } // dimensioni/bit depth dall'hvcC: se non sono quelle chieste il job si ferma
           const dcfg = { codec: dc.codec, codedWidth: outW, codedHeight: outH, // muxer (tkhd/stsd): dimensioni di USCITA
             // SDR: VUI dell'SPS e colr BT.709 (1/1/1, range limitato)
-            description: sdr ? (hevc ? patchHvcC(desc, VUI709) : desc) : hlg ? patchHvcC(desc, { primaries: 9, transfer: 18, matrix: 9, fullRange: false }) : desc,
-            colorSpace: sdr ? { ...CS709 } : hlg ? { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false } : (srcCs ? { ...srcCs } : undefined) };
+            description: sdr ? (hevc ? patchHvcC(desc, hdr8 ? VUIHLG : VUI709) : desc) : hlg ? patchHvcC(desc, { primaries: 9, transfer: 18, matrix: 9, fullRange: false }) : desc,
+            colorSpace: sdr ? { ...(hdr8 ? CSHLG : CS709) } : hlg ? { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false } : (srcCs ? { ...srcCs } : undefined) };
           const old = job.getConfig();
           if (old) {
             if (old.codec !== dcfg.codec || !bytesEqual(old.description, dcfg.description)) { encErr = Object.assign(new Error(`hvcC diverso da quello salvato (${old.description.length} vs ${dcfg.description.length} byte)`), { name: 'HvccMismatch' }); return; }
@@ -720,7 +722,7 @@ async function runWith(input, { forceFresh = false } = {}) {
     job0Br = curBr;
     if (job.doneCount !== nSeg) throw new Error(`segmenti completati ${job.doneCount}/${nSeg} (pacchetti ${nChunks}/${NF - runStart})`);
     const encSec = (performance.now() - tE) / 1000;
-    if (sdr) log(`SDR: ${sstats.n || 0} frame convertiti · decodificati ${sstats.decoded || 0} (fuori ordine ${sstats.ooo || 0}, riordinati per pts; fuori intervallo ${sstats.extra || 0}) · GPU ${((sstats.gpu || 0) / Math.max(1, sstats.gpuN || 0)).toFixed(2)} ms/frame · percorso ${sdrSrc.gpuPath}${dsOn ? ` · ridotto a ${outW}×${outH}` : ''}`, 'summary');
+    if (sdr) log(`${MODE}: ${sstats.n || 0} frame all'encoder · decodificati ${sstats.decoded || 0} (fuori ordine ${sstats.ooo || 0}, riordinati per pts; fuori intervallo ${sstats.extra || 0}) · GPU ${((sstats.gpu || 0) / Math.max(1, sstats.gpuN || 0)).toFixed(2)} ms/frame · percorso ${sdrSrc.gpuPath}${dsOn ? ` · ridotto a ${outW}×${outH}` : ''}`, 'summary');
     else if (usedP > 1) { const fps = (x) => (x.n / encSec).toFixed(0); vstats.players.forEach((q, p) => log(`verifica player ${p + 1}: ${q.n} seek (${fps(q)} fps), doppioni ${q.dup}, fuori posto ${q.off}, senza callback ${q.noCallback}${q.retried ? `, seek ripetuti ${q.retried}` : ''}${q.recovered ? `, frame recuperati ${q.recovered} (${(q.recoverMs / 1000).toFixed(1)} s)` : ''}${q.reopenBad ? `, ricreato ${q.reopenBad}×` : ''}`)); log(`estrazione parallela (${usedP} player): ${i} frame in ${encSec.toFixed(1)} s = ${(i / encSec).toFixed(0)} fps${vstats.fellBack ? ` · fallback ${vstats.falls}× (primo: ${vstats.fallbackReason}), ritorni al parallelo ${vstats.rejoined}, frame a 1 player ${vstats.soloFrames}` : ''}`); }
     if (!sdr) log(`verifica frame${usedP > 1 ? ' (globale)' : ''}: ${vstats.n} seek, doppioni ${vstats.dup}, fuori posto ${vstats.off}, senza callback ${vstats.noCallback}${vstats.retried ? `, seek ripetuti ${vstats.retried}` : ''} ${vstats.samples.length ? 'es. ' + JSON.stringify(vstats.samples) : ''}`);
     // v0.36.3: i contatori qui sopra sono per SEEK (tentativi compresi); nel file vanno solo frame verificati (altrimenti errore FramesUnverified)
@@ -767,7 +769,7 @@ async function runWith(input, { forceFresh = false } = {}) {
   const base = file.name.replace(/\.[^.]+$/, ''), brTag = sceneQ ? `autoQ88-max${bitrate / 1e6}M` : `${bitrate / 1e6}M`;
   // SDR: «_SDR» + risoluzione se ridotta (es. _SDR_720p); HDR: «_1080p» come prima
   const sdrDs = sdr && info ? resDims(info.W, info.H, sdrShort) : null;
-  const dsTag = sdr ? `_SDR${sdrDs ? `_${Math.min(sdrDs.width, sdrDs.height)}p` : ''}` : cfg.downscale && info && downscaleDims(info.W, info.H) ? '_1080p' : '';
+  const dsTag = sdr ? `_${MODE}${sdrDs ? `_${Math.min(sdrDs.width, sdrDs.height)}p` : ''}` : cfg.downscale && info && downscaleDims(info.W, info.H) ? '_1080p' : '';
   // Contenitore (v0.34): QuickTime MOV come gli originali iPhone (ftyp 'qt  ', default) o MP4 (fino alla v0.33). Con MOV il moov
   // finale ricalca quello dell'iPhone (alignToQuickTime: hdlr mhlr/dhlr, dinf alis, tapt, hvc1 «HEVC», stsd AAC sorgente) e
   // l'ftyp è quello della sorgente: Foto riconosce le tracce mebx / apac come nell'originale (research/04 «Contenitore MOV»).
@@ -795,7 +797,7 @@ async function runWith(input, { forceFresh = false } = {}) {
     }
   }
   const apacT = ptSel?.tracks.find((t) => t.entry === 'apac') || null;
-  const resTxt = sdr ? ` · SDR${sdrDs ? ' ' + Math.min(sdrDs.width, sdrDs.height) + 'p' : ''}` : dsTag ? ' · 1080p' : '';
+  const resTxt = sdr ? ` · ${MODE}${sdrDs ? ' ' + Math.min(sdrDs.width, sdrDs.height) + 'p' : ''}` : dsTag ? ' · 1080p' : '';
   const label = `${base} · ${sceneQ ? `qualità per scena ≤ ${bitrate / 1e6}` : bitrate / 1e6} Mbps${resTxt} · key ${gopSec}s · ${aTag} · ${VER}`;
   store = await openOpfsStore(outName);
   const target = new MB.StreamTarget(new WritableStream({ write: (c) => store.write(c.position, c.data) }), { chunked: true, chunkSize: 4 * MB_ });
@@ -881,7 +883,7 @@ async function runWith(input, { forceFresh = false } = {}) {
   const { prefixLength, moov } = await rewriteMoov({ size: outSize, read: (o, l) => store.read(o, l) }, (m) => {
     const r = finishMoov(srcMoov, m, { dvBox: sdr ? null : dvBox, quickTime: mov, audioCopied: !echoFix, strings: {
       'com.apple.quicktime.displayname': label,
-      'com.apple.quicktime.description': `finally-compress-video ${VER} · ${mov ? 'MOV' : 'MP4'} · ${sceneQ ? 'qualità per scena (VMAF stimato ≥ 88), limite' : 'target'} ${bitrate / 1e6} Mbps${sdr ? ` · SDR BT.709 8 bit (Hable)${sdrDs ? ` · ridotto a ${Math.min(sdrDs.width, sdrDs.height)}p` : ''}` : dsTag ? ' · ridotto a 1080p' : ''} · keyframe ${gopSec}s · audio ${aTag}${apacT ? ' + spaziale (apac)' : ''}${ptSel && ptSel.tracks.some((t) => t.entry === 'mebx') ? ' + metadati iPhone' : ''}` } });
+      'com.apple.quicktime.description': `finally-compress-video ${VER} · ${mov ? 'MOV' : 'MP4'} · ${sceneQ ? 'qualità per scena (VMAF stimato ≥ 88), limite' : 'target'} ${bitrate / 1e6} Mbps${sdr ? ` · ${hdr8 ? 'HDR HLG 8 bit' : 'SDR BT.709 8 bit (Hable)'}${sdrDs ? ` · ridotto a ${Math.min(sdrDs.width, sdrDs.height)}p` : ''}` : dsTag ? ' · ridotto a 1080p' : ''} · keyframe ${gopSec}s · audio ${aTag}${apacT ? ' + spaziale (apac)' : ''}${ptSel && ptSel.tracks.some((t) => t.entry === 'mebx') ? ' + metadati iPhone' : ''}` } });
     qtChanges = r.changes; return r.moov; });
   if (qtChanges.length) log(`MOV allineato all'originale: ${qtChanges.join(' · ')}`, 'summary');
   if (mov && srcMoov) { // ftyp della sorgente ('qt  ', minor 0) al posto di quello di Mediabunny se ha la stessa lunghezza (nulla si sposta)
@@ -915,7 +917,7 @@ async function runWith(input, { forceFresh = false } = {}) {
   const f0 = await store.getFile(); outOpfsName = store.name; store = null;
   outFile = f0.type === mime && f0.name === outName ? f0 : new File([f0], outName, { type: mime }); // File su disco (OPFS), nessuna copia in RAM; MIME video/quicktime per MOV (share sheet / download)
   setProg('scrittura', 1, 'completato');
-  log(`RPU trapiantati: ${rpuUsed}/${nV}${dvBox && !sdr && rpuUsed !== nV ? ' ⚠️ INCOMPLETO' : ''}${sdr ? ' (SDR: nessun RPU)' : ''}. Metadati originali copiati: ${srcMoov ? 'sì' : 'no'}.`);
+  log(`RPU trapiantati: ${rpuUsed}/${nV}${dvBox && !sdr && rpuUsed !== nV ? ' ⚠️ INCOMPLETO' : ''}${sdr ? ` (${MODE}: nessun RPU)` : ''}. Metadati originali copiati: ${srcMoov ? 'sì' : 'no'}.`);
   let sceneSum = null;
   if (sceneQ && job.manifest.scene) { // riepilogo per scena (anche dei segmenti fatti in run precedenti: record nel manifest)
     const segDur = segStarts.map((a, k) => ({ duration: frames.slice(a, segEnd(segStarts, k, NF)).reduce((x, f) => x + f.dur, 0) }));

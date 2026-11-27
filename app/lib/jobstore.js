@@ -17,10 +17,10 @@ const te = new TextEncoder();
 export const fileKey = (f) => ({ name: f.name, size: f.size, lastModified: f.lastModified });
 export const sameFile = (a, b) => !!(a && b && a.name === b.name && a.size === b.size && a.lastModified === b.lastModified);
 /** Only the settings that change the encoded video matter for resuming (audio is processed at assembly). */
-// v0.38: anche la modalità ('hdr' | 'sdr', assente = 'hdr') e, in SDR, la risoluzione (lato corto; settings.res, downscale = alias di 1080):
+// v0.38: anche la modalità ('hdr' | 'sdr' | 'hdr8', assente = 'hdr') e, in sdr/hdr8, la risoluzione (lato corto; settings.res, downscale = alias di 1080):
 // una ripresa con modalità o risoluzione diversa non riusa i segmenti.
-export const videoMode = (s) => (s?.mode === 'sdr' ? 'sdr' : 'hdr');
-export const videoRes = (s) => { if (videoMode(s) !== 'sdr') return 'orig'; const r = s?.res; if (r != null && r !== '' && r !== 'orig' && +r > 0) return String(Math.round(+r)); return s?.downscale ? '1080' : 'orig'; };
+export const videoMode = (s) => (s?.mode === 'sdr' || s?.mode === 'hdr8' ? s.mode : 'hdr');
+export const videoRes = (s) => { if (videoMode(s) === 'hdr') return 'orig'; const r = s?.res; if (r != null && r !== '' && r !== 'orig' && +r > 0) return String(Math.round(+r)); return s?.downscale ? '1080' : 'orig'; };
 export const sameVideoSettings = (a, b) => !!(a && b && +a.bitrateMbps === +b.bitrateMbps && +a.keyframeS === +b.keyframeS && !!a.sceneQ === !!b.sceneQ && !!a.downscale === !!b.downscale && videoMode(a) === videoMode(b) && videoRes(a) === videoRes(b));
 
 export const toB64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };

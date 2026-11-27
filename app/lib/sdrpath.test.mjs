@@ -1,7 +1,7 @@
 // Test Node della modalità SDR (v0.38): riordino per pts, timestamp, pipeline decoder → convertitore, risoluzioni, manifest con mode/res.
 // Uso: node app/lib/sdrpath.test.mjs
 import assert from 'node:assert/strict';
-const { nearestIndex, createReorder, frameTiming, sdrWindow, scaleTaps, nv12Stride, sdrCodec, decodeOrdered, convertOrdered, _wgsl } = await import('./sdrpath.js');
+const { createDirectConverter, nearestIndex, createReorder, frameTiming, sdrWindow, scaleTaps, nv12Stride, sdrCodec, decodeOrdered, convertOrdered, _wgsl } = await import('./sdrpath.js');
 const { resDims, sdrRes, verifyDownscale, sdrDsError, SDR_DS_MESSAGE } = await import('./downscale.js');
 const { sameVideoSettings, videoMode, videoRes } = await import('./jobstore.js');
 const { estimateTimeS, speedKey } = await import('../ui/estimate.js');
@@ -33,13 +33,13 @@ const { estimateTimeS, speedKey } = await import('../ui/estimate.js');
   console.log('ok 3 timestamp, finestra, shader, codec');
 }
 
-// decoder finto: emette i frame con un ritardo di riordino (ordine di decodifica ≠ presentazione), apre/chiude VideoFrame contati
+// decoder finto: emette i frame in ORDINE DI DECODIFICA (come Safari: 135 su 271 fuori ordine), con 2 frame di ritardo, apre/chiude VideoFrame contati
 const open = new Set();
 class FakeFrame { constructor(ts) { this.timestamp = ts; open.add(this); } close() { open.delete(this); } }
 class FakeDecoder {
   constructor({ output, error }) { this.o = output; this.e = error; this.state = 'unconfigured'; this.decodeQueueSize = 0; this.buf = []; }
   configure() { this.state = 'configured'; }
-  decode(c) { if (c.fail) { setTimeout(() => this.e(new Error('decoder rotto'))); return; } this.buf.push(c.timestamp); this.buf.sort((a, b) => a - b); if (this.buf.length > 2) { const t = this.buf.shift(); setTimeout(() => this.o(new FakeFrame(t))); } }
+  decode(c) { if (c.fail) { setTimeout(() => this.e(new Error('decoder rotto'))); return; } this.buf.push(c.timestamp); if (this.buf.length > 2) { const t = this.buf.shift(); setTimeout(() => this.o(new FakeFrame(t))); } }
   async flush() { await new Promise((r) => setTimeout(r)); for (const t of this.buf.splice(0)) this.o(new FakeFrame(t)); await new Promise((r) => setTimeout(r)); }
   close() { this.state = 'closed'; }
 }
@@ -79,7 +79,7 @@ const conv = { depth: 4, submit: (f, fr) => new Promise((r) => setTimeout(() => 
   assert.deepEqual(resDims(1080, 1920, 540), { width: 540, height: 960, exact: true });
   const r480 = resDims(1920, 1080, 480); assert.deepEqual([r480.width, r480.height], [854, 480]); assert.equal(r480.exact, false);
   assert.equal(resDims(1920, 1080, 1080), null); assert.equal(resDims(1920, 1080, 1440), null); assert.equal(resDims(3840, 2160, null), null);
-  assert.equal(sdrRes({ res: 'orig' }), null); assert.equal(sdrRes({ res: 720 }), 720); assert.equal(sdrRes({ res: '540' }), 540); assert.equal(sdrRes({ downscale: true }), 1080); assert.equal(sdrRes({ res: 'orig', downscale: true }), null);
+  assert.equal(sdrRes({ res: 'orig' }), null); assert.equal(sdrRes({ res: 720 }), 720); assert.equal(sdrRes({ res: '540' }), 540); assert.equal(sdrRes({ downscale: true }), 1080); assert.equal(sdrRes({ res: 'orig', downscale: true }), 1080, 'downscale = alias di 1080');
   // verifica dell'encoder in SDR: 8 bit attesi (un hvcC a 10 bit non va bene)
   const SAFARI_HVCC = '010220000000b0000000000078f000fcfdfafa00000f04a00001001840010c01ffff022000000300b00000030000030078170240a100010023420101022000000300b00000030000030078a00220801e072ed8817924591572e5cba2a2000100074401c0764c14c9a70001000d4e019408002fe9a03d13404280';
   const v = verifyDownscale(Uint8Array.from(Buffer.from(SAFARI_HVCC, 'hex')), { width: 1080, height: 1920, bitDepth: 8 });
@@ -108,5 +108,18 @@ const conv = { depth: 4, submit: (f, fr) => new Promise((r) => setTimeout(() => 
   assert.equal(speedKey({ mode: 'sdr', width: 1920, height: 1080 }), 'fcv.fps.sdr.hd');
   assert.equal(speedKey({ par2: true, width: 1920, height: 1080 }), 'fcv.fps.p2.hd', 'HDR invariato');
   console.log('ok 8 stima tempo SDR');
+}
+// 9) HDR veloce 8 bit ('hdr8'): frame diretti col pts sorgente, manifest e stima distinti da sdr/hdr
+{
+  globalThis.VideoFrame = class { constructor(src, o) { this.timestamp = o.timestamp; this.duration = o.duration; this.src = src; } close() {} };
+  let closed = 0; const f = { close: () => closed++ };
+  const v = await createDirectConverter().submit(f, { ts: 4242, dur: 16683 });
+  assert.equal(v.src, f); assert.equal(v.timestamp, 4242); assert.equal(v.duration, 16683); assert.equal(closed, 1, 'frame del decoder chiuso');
+  const base = { bitrateMbps: 8, keyframeS: 4 };
+  assert.ok(!sameVideoSettings({ ...base, mode: 'hdr8' }, { ...base, mode: 'sdr' })); assert.ok(!sameVideoSettings({ ...base, mode: 'hdr8' }, base));
+  assert.equal(videoRes({ mode: 'hdr8', res: 720 }), '720');
+  const t = estimateTimeS({ durS: 10, fps: 60, mode: 'hdr8', width: 1920, height: 1080 }); assert.equal(t.fps, 257); assert.equal(t.guess, false);
+  assert.equal(speedKey({ mode: 'hdr8', width: 3840, height: 2160, downscale: true }), 'fcv.fps.hdr8.uhd.ds');
+  console.log('ok 9 hdr8');
 }
 console.log('sdrpath: tutti ok');

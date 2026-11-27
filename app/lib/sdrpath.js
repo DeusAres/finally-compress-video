@@ -53,7 +53,7 @@ export async function pickSdrCodec(w, h, framerate = 30) {
 // segnale, poi tone mapping per presa e media nel dominio BT.709. A rapporto intero (2160→1080) le prese cadono sui centri dei texel:
 // media 2×2 esatta. Costo ≈ un tone mapping per pixel SORGENTE (come la conversione 1:1 della sorgente). Senza scalatura: textureLoad
 // diretto (percorso validato su iPhone). stride = larghezza arrotondata a 4 (NV12 a parole di 4 byte; le colonne in più sono ignorate).
-const WGSL = `struct U{src:vec2f,dst:vec2f,tm:f32,lw:f32,taps:f32,stride:f32};
+const WGSL = `struct U{src:vec2f,dst:vec2f,tm:f32,lw:f32,taps:f32,stride:f32,mat:f32};
 @group(0)@binding(0) var t:texture_external;@group(0)@binding(1) var<uniform> u:U;@group(0)@binding(2) var<storage,read_write> ob:array<u32>;
 @group(0)@binding(3) var sp:sampler;
 fn ld(p:vec2i)->vec3f{return textureLoad(t,p).rgb;}
@@ -76,12 +76,15 @@ fn px(o:vec2u)->vec3f{
  for(var j=0;j<n;j++){for(var i=0;i<n;i++){let p=(vec2f(q)+(vec2f(f32(i),f32(j))+0.5)/f32(n))*s;a+=sdr(sm(p/u.src));}}
  return a/f32(n*n);}
 fn q8(v:f32)->u32{return u32(clamp(round(v),0.0,255.0));}
+fn kw()->vec3f{if(u.mat>0.5){return vec3f(0.2627,0.678,0.0593);}return vec3f(0.2126,0.7152,0.0722);}
+fn kb()->f32{if(u.mat>0.5){return 1.8814;}return 1.8556;}
+fn kr()->f32{if(u.mat>0.5){return 1.4746;}return 1.5748;}
 @compute @workgroup_size(8,8) fn cs(@builtin(global_invocation_id) g:vec3u){
  let W=u32(u.stride);let H=u32(u.dst.y);if(g.x*4u>=W||g.y*2u>=H){return;}
  var c:array<vec3f,8>;
- for(var j=0u;j<2u;j++){var w=0u;for(var i=0u;i<4u;i++){let p=px(vec2u(g.x*4u+i,g.y*2u+j));c[j*4u+i]=p;w|=q8(16.0+219.0*dot(p,vec3f(0.2126,0.7152,0.0722)))<<(8u*i);}ob[((g.y*2u+j)*W)/4u+g.x]=w;}
- var uv=0u;for(var k=0u;k<2u;k++){let a=(c[2u*k]+c[2u*k+1u]+c[4u+2u*k]+c[5u+2u*k])*0.25;let yy=dot(a,vec3f(0.2126,0.7152,0.0722));
-  uv|=(q8(128.0+224.0*(a.b-yy)/1.8556)<<(16u*k))|(q8(128.0+224.0*(a.r-yy)/1.5748)<<(16u*k+8u));}
+ for(var j=0u;j<2u;j++){var w=0u;for(var i=0u;i<4u;i++){let p=px(vec2u(g.x*4u+i,g.y*2u+j));c[j*4u+i]=p;w|=q8(16.0+219.0*dot(p,kw()))<<(8u*i);}ob[((g.y*2u+j)*W)/4u+g.x]=w;}
+ var uv=0u;for(var k=0u;k<2u;k++){let a=(c[2u*k]+c[2u*k+1u]+c[4u+2u*k]+c[5u+2u*k])*0.25;let yy=dot(a,kw());
+  uv|=(q8(128.0+224.0*(a.b-yy)/kb())<<(16u*k))|(q8(128.0+224.0*(a.r-yy)/kr())<<(16u*k+8u));}
  ob[(W*H)/4u+g.y*(W/4u)+g.x]=uv;}`;
 // ripiego (browser senza importExternalTexture da VideoFrame, es. Chromium headless): texture rgba copiata (colori convertiti dal browser)
 const WGSL_COPY = WGSL.replace('var t:texture_external;', 'var t:texture_2d<f32>;').replace('textureLoad(t,p)', 'textureLoad(t,p,0)').replace('textureSampleBaseClampToEdge(t,sp,uv)', 'textureSampleLevel(t,sp,uv,0.0)');
@@ -122,12 +125,17 @@ function srcEntry(g, f, tmp, note) {
  * Convertitore frame del decoder → VideoFrame NV12 BT.709 (dw×dh). Compute → buffer di storage → copia in uno di `depth` buffer
  * MAP_READ → mapAsync (asincrono, `depth` frame in volo) → new VideoFrame(NV12). Evita VideoFrame(canvas WebGPU) (sdr8 v1: 102 fps).
  */
-export async function createNv12Converter({ sw, sh, dw, dh, hlg, depth = SDR.inFlight, note = () => {} }) {
+// hlg: tone mapping Hable → BT.709 (modalità 'sdr'); keep2020 (modalità 'hdr8'): nessuna conversione, i valori HLG sono solo scalati e
+// riscritti in Y'CbCr con la matrice BT.2020 (la stessa con cui la texture esterna li ha letti), uscita colorSpace HLG.
+export const CSHLG = { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false };
+export const VUIHLG = { primaries: 9, transfer: 18, matrix: 9, fullRange: false };
+export async function createNv12Converter({ sw, sh, dw, dh, hlg, keep2020 = false, depth = SDR.inFlight, note = () => {} }) {
   if (dw % 2 || dh % 2) throw new Error(`SDR: uscita ${dw}×${dh} con lato dispari`);
   if (dw > sw || dh > sh) throw new Error(`SDR: ${sw}×${sh} → ${dw}×${dh} ingrandirebbe`);
   const g = await gpu(), S = nv12Stride(dw), size = S * dh * 3 / 2, taps = scaleTaps(sw, sh, dw, dh);
-  const ub = g.dev.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  g.dev.queue.writeBuffer(ub, 0, new Float32Array([sw, sh, dw, dh, hlg ? 2 : 0, SDR.hlgPeakNits, taps, S]));
+  const ub = g.dev.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  g.dev.queue.writeBuffer(ub, 0, new Float32Array([sw, sh, dw, dh, hlg && !keep2020 ? 2 : 0, SDR.hlgPeakNits, taps, S, keep2020 ? 1 : 0, 0, 0, 0]));
+  const outCs = keep2020 ? CSHLG : CS709;
   const sb = g.dev.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC }); // unico: la coda GPU è seriale
   const slots = Array.from({ length: depth }, () => ({ mb: g.dev.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), busy: Promise.resolve() }));
   let n = 0;
@@ -146,7 +154,7 @@ export async function createNv12Converter({ sw, sh, dw, dh, hlg, depth = SDR.inF
         const tg = performance.now();
         p = s.mb.mapAsync(GPUMapMode.READ).then(() => {
           if (T) { T.gpu += performance.now() - tg; T.gpuN++; }
-          try { return new VideoFrame(new Uint8Array(s.mb.getMappedRange()), { format: 'NV12', codedWidth: dw, codedHeight: dh, layout: [{ offset: 0, stride: S }, { offset: S * dh, stride: S }], ...frameTiming(fr), colorSpace: CS709 }); }
+          try { return new VideoFrame(new Uint8Array(s.mb.getMappedRange()), { format: 'NV12', codedWidth: dw, codedHeight: dh, layout: [{ offset: 0, stride: S }, { offset: S * dh, stride: S }], ...frameTiming(fr), colorSpace: outCs }); }
           finally { s.mb.unmap(); }
         });
       } catch (e) { p = Promise.reject(e); }
@@ -156,6 +164,11 @@ export async function createNv12Converter({ sw, sh, dw, dh, hlg, depth = SDR.inF
     },
     close() { try { ub.destroy(); sb.destroy(); for (const s of slots) s.mb.destroy(); } catch {} },
   };
+}
+
+/** 'hdr8' senza scalatura: il frame del decoder (NV12 8 bit, HLG grezzo) va diretto all'encoder, solo con il pts sorgente. */
+export function createDirectConverter(depth = SDR.inFlight) {
+  return { depth, taps: 0, submit(f, fr) { try { return Promise.resolve(new VideoFrame(f, frameTiming(fr))); } catch (e) { return Promise.reject(e); } finally { try { f.close(); } catch {} } }, close() {} };
 }
 
 // ---------- decoder con riordino ----------
@@ -229,33 +242,39 @@ export async function* convertOrdered(dec, conv, frames, stats = null, signal = 
  * Apre la sorgente SDR sul track Mediabunny `track` (MB = modulo Mediabunny): decoder config, colore, dimensioni dal primo frame,
  * percorso GPU provato. Ritorna {width, height, hlg, transfer, gpuPath, frames(list, stats, signal, {width, height}) → async gen, close}.
  */
-export async function openSdrSource({ MB, track, log = () => {} }) {
+// tonemap: true = modalità 'sdr' (Hable → BT.709); false = 'hdr8' (HLG così com'è; GPU solo se si scala).
+export async function openSdrSource({ MB, track, log = () => {}, tonemap = true }) {
   const config = await track.getDecoderConfig(); if (!config) throw new Error('SDR: codec non decodificabile (decoder config assente)');
   let transfer = null; try { transfer = (await track.getColorSpace())?.transfer || null; } catch {}
   const hlg = transfer === 'hlg';
   if (transfer === 'pq') log('SDR: sorgente PQ, tone mapping non previsto (solo HLG): colori non convertiti', 'warn');
   const sink = new MB.EncodedPacketSink(track);
-  const notes = [], note = (t) => { notes.push(t); log('SDR GPU: ' + t, 'warn'); };
+  const notes = [], note = (t) => { notes.push(t); log('GPU: ' + t, 'warn'); };
   // dal keyframe che precede startS (decodifica in avanti), chunk in ordine di decodifica
   async function* chunksFrom(startS) {
     const key = await sink.getKeyPacket(startS, { verifyKeyPackets: true }) || await sink.getFirstPacket();
     if (!key) return;
     for await (const p of sink.packets(key)) yield p.toEncodedVideoChunk();
   }
-  // primo frame: dimensioni reali (orientamento codificato: la rotazione va nella traccia) e prova del percorso GPU
-  let width = 0, height = 0, gpuPath = '';
-  {
-    const first = await sink.getFirstPacket(); if (!first) throw new Error('SDR: nessun pacchetto video');
+  // primo frame: dimensioni reali (orientamento codificato: la rotazione va nella traccia)
+  const first = await sink.getFirstPacket(); if (!first) throw new Error('SDR: nessun pacchetto video');
+  async function firstFrame(use) {
     const d = decodeOrdered({ chunks: chunksFrom(first.timestamp + 1e-6), config, wantUs: [first.microsecondTimestamp ?? Math.round(first.timestamp * 1e6)] });
     let f = null;
-    try { f = await d.next(); } catch (e) { d.close(); throw Object.assign(new Error(`SDR: VideoDecoder non riuscito (${errStr(e)})`), { name: e?.name || 'Error' }); }
-    try {
-      width = f.displayWidth; height = f.displayHeight;
+    try { f = await d.next(); } catch (e) { d.close(); throw Object.assign(new Error(`VideoDecoder non riuscito (${errStr(e)})`), { name: e?.name || 'Error' }); }
+    try { return await use(f); } finally { f?.close(); d.close(); }
+  }
+  let width = 0, height = 0, gpuPath = 'nessuno (frame diretti)', format = '';
+  await firstFrame((f) => { width = f.displayWidth; height = f.displayHeight; format = f.format; });
+  log(`decoder ${config.codec} → frame ${format} ${width}×${height}, colore ${transfer || '?'} → ${tonemap ? (hlg ? 'Hable (inversa HLG → BT.709)' : 'nessun tone mapping') : 'HLG invariato (nessuna conversione)'}`);
+  /** Prova il percorso GPU sul primo frame (un import fallito può invalidare il device: se ne crea uno nuovo). */
+  async function probeGpu() {
+    await firstFrame(async (f) => {
       const g = await gpu(), tmp = []; try { srcEntry(g, f, tmp, note); } finally { for (const t of tmp) t.destroy(); }
-      if (!EXT) { G = null; await gpu(); } // un import fallito può invalidare il device
+      if (!EXT) { G = null; await gpu(); }
       gpuPath = EXT ? 'importExternalTexture' : COPY === 'frame' ? 'copyExternalImageToTexture' : 'canvas 2D';
-      log(`SDR: decoder ${config.codec} → frame ${f.format} ${width}×${height}, colore ${transfer || '?'} → ${hlg ? 'Hable (inversa HLG → BT.709)' : 'nessun tone mapping'}, GPU: ${gpuPath}`);
-    } finally { f?.close(); d.close(); }
+    });
+    log(`GPU: ${gpuPath}`);
   }
   return {
     width, height, hlg, transfer, config, notes, get gpuPath() { return gpuPath; },
@@ -263,8 +282,9 @@ export async function openSdrSource({ MB, track, log = () => {} }) {
     async *frames(list, stats = null, signal = null, out = {}) {
       if (!list.length) return;
       const T = stats || {}; T.gpu ??= 0; T.gpuN ??= 0;
-      const dw = out.width || width, dh = out.height || height;
-      const conv = await createNv12Converter({ sw: width, sh: height, dw, dh, hlg, note });
+      const dw = out.width || width, dh = out.height || height, direct = !tonemap && dw === width && dh === height;
+      if (!direct && gpuPath.startsWith('nessuno')) await probeGpu();
+      const conv = direct ? createDirectConverter() : await createNv12Converter({ sw: width, sh: height, dw, dh, hlg, keep2020: !tonemap, note });
       let dec;
       try {
         dec = decodeOrdered({ chunks: chunksFrom(list[0].ts / 1e6 + 1e-6), config, wantUs: list.map((f) => f.ts), signal, stats: T });
