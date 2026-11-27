@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.38.3';
-import { sprite, SPRITES } from './sprite.js?v=0.38.3';
-import { createLogStore } from './logstore.js?v=0.38.3';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.3';
+import { bus } from './bus.js?v=0.38.4';
+import { sprite, SPRITES } from './sprite.js?v=0.38.4';
+import { createLogStore } from './logstore.js?v=0.38.4';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.4';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -105,7 +105,7 @@ function template(opts) {
   </details>
   <p class="fcv-drop-msg" data-ref="dropMsg" role="status" aria-live="polite" hidden></p>
   <div class="fcv-file" data-ref="fileBox" hidden>
-    <div class="fcv-file-name">${s('film', { scale: 3 })}<strong data-ref="fName"></strong>
+    <div class="fcv-file-name">${s('film', { scale: 3 })}<img class="fcv-thumb" data-ref="fThumb" alt="" hidden><strong data-ref="fName"></strong>
       <label class="px-btn fcv-relabel fcv-sm" title="Aggiungi altri video (coda)">Aggiungi<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAddSingle" aria-label="Aggiungi altri video (coda)"></label>
       <label class="px-btn fcv-relabel fcv-sm" data-ref="change">Cambia<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input2" aria-label="Cambia video"></label>
     </div>
@@ -405,7 +405,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       : miss ? 'Riseleziona i video della coda per continuare.' : 'Nessun video in attesa: aggiungine alla coda.';
   }
   function setBusy(b) {
-    st.busy = !!b; if (!b) st.pipOn = false; updatePip();
+    st.busy = !!b; if (!b) { st.pipOn = false; setTimeout(() => thumbPump(), 0); } updatePip();
     root.dataset.busy = String(st.busy);
     root.querySelectorAll('.fcv-step-set input, [data-ref^="input"]').forEach((i) => { i.disabled = st.busy; });
     syncGo(); syncStorage();
@@ -445,6 +445,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     clearLog();
     setStage('ready');
     handlers.onFile?.(f);
+    thumbFor('single', f, (u) => { R.fThumb.src = u || ''; R.fThumb.hidden = !u; const ic = R.fThumb.previousElementSibling; if (ic) ic.hidden = !!u; });
   }
   function showFile(fi) {
     R.pick.hidden = true; R.fileBox.hidden = false; root.dataset.picked = '1';
@@ -504,7 +505,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   const resSel = () => { const v = root.querySelector('input[name="fcv-res"]:checked')?.value; return v && v !== 'orig' ? +v : 'orig'; };
   const resApplies = (res, f) => (res !== 'orig' && res > 0 && res < shortSide(f) ? res : 'orig'); // risoluzione effettiva su un file
   function buildRes(want = st.wantRes ?? resSel()) {
-    const sh = srcShort(), opts = ['orig', ...RES_LIST.filter((v) => !sh || v < sh)], // senza sorgente: tutte le tacche
+    const sh = srcShort(), opts = ['orig', ...RES_LIST.filter((v) => !sh || (st.qMode ? v <= sh : v < sh))], // coda: tacche fino alla risoluzione massima (4K compreso), valore «al massimo» per voce; file singolo: la tacca uguale alla sorgente è «Originale», esclusa; senza sorgente: tutte
       near = (w) => (w === 'orig' ? 'orig' : RES_LIST.filter((v) => opts.includes(v)).sort((a, b) => Math.abs(a - w) - Math.abs(b - w))[0] ?? 'orig'), cur = opts.includes(want) ? want : near(want), key = opts.join();
     st.wantRes = cur; st.resOpts = opts.length;
     if (st.resKey !== key || !R.resGrid.querySelector('.fcv-resrail')) { // struttura solo se cambiano le opzioni (mai durante il trascinamento)
@@ -601,6 +602,36 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   root.querySelector('.fcv-step-set').addEventListener('change', syncSettings);
 
+  // ---------- miniature (v0.38.4) ----------
+  // Un <video> temporaneo alla volta: frame a ~10 % → canvas 96 px → JPEG; poi il <video> viene svuotato. Cache in memoria per id; mai durante un export.
+  const thumbs = new Map(); let thumbBusy = false;
+  function makeThumb(blob) {
+    return new Promise((res) => {
+      const v = document.createElement('video'), url = URL.createObjectURL(blob); let done = false, t;
+      const fin = (u) => { if (done) return; done = true; clearTimeout(t); try { v.removeAttribute('src'); v.load(); } catch {} URL.revokeObjectURL(url); res(u); };
+      const grab = () => { try { const w = v.videoWidth, h = v.videoHeight; if (!w || !h) return fin(null); const k = 96 / Math.max(w, h), c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k)); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); fin(c.toDataURL('image/jpeg', 0.7)); } catch { fin(null); } };
+      v.muted = true; v.playsInline = true; v.preload = 'metadata'; t = setTimeout(() => fin(null), 8000);
+      v.addEventListener('error', () => fin(null));
+      v.addEventListener('loadedmetadata', () => {
+        let seeked = false; const go = () => { if (seeked) return; seeked = true; grab(); };
+        v.addEventListener('seeked', () => { if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(go); else go(); setTimeout(go, 600); }, { once: true });
+        try { v.requestVideoFrameCallback?.(() => {}); v.currentTime = Math.min(Math.max(0.05, (v.duration || 1) * 0.1), Math.max(0, (v.duration || 1) - 0.05)); } catch { fin(null); }
+      }, { once: true });
+      v.src = url;
+    });
+  }
+  const thumbOk = () => !st.busy || (st.qMode && !st.qCur); // mai durante un export (tra una voce e l'altra sì)
+  const thumbQ = [];
+  async function thumbPump() {
+    if (thumbBusy || !thumbOk()) return; const job = thumbQ.shift(); if (!job) return;
+    thumbBusy = true; const u = await makeThumb(job.blob); thumbBusy = false;
+    if (job.key !== 'single' && !thumbs.has(job.key)) { /* voce rimossa nel frattempo */ } else thumbs.set(job.key, u || 'err');
+    job.cb?.(u); if (job.key !== 'single') paintThumbs(); thumbPump();
+  }
+  function thumbFor(key, blob, cb) { if (!blob || thumbs.has(key) && key !== 'single') return; if (key !== 'single') thumbs.set(key, 'wait'); thumbQ.push({ key, blob, cb }); thumbPump(); }
+  function paintThumbs() { R.qList.querySelectorAll('.fcv-q-item').forEach((li) => { const u = thumbs.get(+li.dataset.qid), im = li.querySelector('.fcv-q-thumb'); if (im && u && u !== 'wait' && u !== 'err') { im.innerHTML = `<img src="${u}" alt="">`; } else if (im && u === 'err') im.dataset.err = '1'; }); }
+  function thumbSync(items) { const ids = new Set(items.map((it) => it.id)); for (const k of [...thumbs.keys()]) if (!ids.has(k)) thumbs.delete(k); for (let i = thumbQ.length - 1; i >= 0; i--) if (thumbQ[i].key !== 'single' && !ids.has(thumbQ[i].key)) thumbQ.splice(i, 1); for (const it of items) if (it.file && !thumbs.has(it.id)) thumbFor(it.id, it.file); }
+
   // ---------- coda (v0.36) ----------
   // Previsione di una voce con le impostazioni correnti (stesse formule del singolo: estimate.js).
   const itemFile = (it) => (it?.info?.dur ? { durationS: it.info.dur, width: it.info.W, height: it.info.H, fps: it.info.fps, aacBps: it.info.aacBps, apacBps: it.info.apacBps, sizeMB: it.sizeMB } : null);
@@ -650,17 +681,19 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const est = p ? `<p class="fcv-q-est">→ ${vary ? '≤' : '≈'} ${fmtMB(p.mb)} MB${p.pct != null ? ` (${p.pct > 0 ? '−' : '+'}${nf0.format(Math.abs(p.pct))} %)` : ''} · ≈ ${fmtTime(p.s)}</p>` : isPending(it) && !inf && it.hasFile ? '<p class="fcv-q-est">lettura…</p>' : '';
     const orig = inf?.exported ? `<p class="fcv-q-orig">Copia ricodificata da Foto (${esc(inf.exported[0] || '')}). Meglio l'originale: Foto › Condividi › Opzioni › «Attuale» › Salva in File.</p>` : '';
     const bad = inf?.error && isPending(it) ? `<p class="fcv-q-orig">Non leggibile: ${esc(inf.error)}</p>` : '';
-    return `<li class="fcv-q-item" data-qid="${it.id}" data-st="${it.status}"${nf ? ' data-nf' : ''}>
-      <div class="fcv-q-head"><span class="fcv-q-n">${i + 1}</span><b class="fcv-q-name">${esc(it.name)}</b>${it.status !== 'corso' ? `<button class="px-btn fcv-q-x" type="button" data-act="rm" data-id="${it.id}" aria-label="Rimuovi ${esc(it.name)} dalla coda" title="Rimuovi dalla coda">${sprite(SPRITES.x, { scale: 2 })}</button>` : ''}</div>
+    const tu = thumbs.get(it.id), th = `<span class="fcv-q-thumb"${tu === 'err' ? ' data-err="1"' : ''}>${tu && tu !== 'wait' && tu !== 'err' ? `<img src="${tu}" alt="">` : sprite(SPRITES.film, { scale: 3 })}</span>`;
+    return `<li class="fcv-q-item" data-qid="${it.id}" data-st="${it.status}"${nf ? ' data-nf' : ''}>${th}<div class="fcv-q-body">
+      <div class="fcv-q-head"><span class="fcv-q-n">${i + 1}</span><b class="fcv-q-name">${esc(it.name)}</b>${it.status !== 'corso' ? `<button class="px-btn fcv-q-x" type="button" data-act="rm" data-id="${it.id}" aria-label="Rimuovi ${esc(it.name)} dalla coda" title="Rimuovi dalla coda">${sprite(SPRITES.trash, { scale: 2 })}</button>` : ''}</div>
       <div class="fcv-chips">${chips.join('')}</div>${est}
       <p class="fcv-q-st">${stTxt}</p>${it.status === 'corso' ? `<div class="px-bar fcv-q-bar" style="--p:${Math.max(0, st.lastPct) / 100}"><i></i></div>` : ''}${orig}${bad}${act ? `<div class="fcv-q-btns">${act}</div>` : ''}
-    </li>`;
+    </div></li>`;
   }
   function renderQueue() {
     const q = st.queue; if (!q) return;
     const items = q.items, T = queueTotals(), S = items.filter((it) => it.status === 'fatto' && it.result);
     R.qCount.textContent = `${items.length}`;
     { const sh = srcShort(); if (sh !== st.resShort) { st.resShort = sh; buildRes(); st.settings = readSettings(); syncResBox(); } }
+    thumbSync(items);
     R.qList.innerHTML = items.map(itemHTML).join('');
     R.qMsg.hidden = !q.msg; if (q.msg) { R.qMsg.textContent = q.msg.text; R.qMsg.dataset.kind = q.msg.kind || ''; }
     const doneIn = S.reduce((a, it) => a + it.result.inMB, 0), doneOut = S.reduce((a, it) => a + it.result.outMB, 0);
@@ -1102,7 +1135,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       resetCancel(); syncSettings();
     },
     /** Vista della coda dall'app: {running, curId, msg:{text,kind}|null, items:[{id,name,sizeMB,status,info,result,error,saved,hasFile,hasOut,interrupted,lost,resume}]}. */
-    setQueue(v) { st.queue = v || null; if (v) renderQueue(); },
+    setQueue(v) { st.queue = v || null; if (v) renderQueue(); else { thumbs.clear(); thumbQ.length = 0; } },
     /** Inizio della coda (dopo setBusy(true)): log già azzerato, nessuna voce corrente. */
     queueStart() { st.qCur = null; st.qFirstIdx = null; st.qShareFb = false; resetCancel(); },
     /** Inizio di una voce: {id, idx, n, name, sizeMB, durationS?, width?, height?, fps?, …} → pannello di avanzamento azzerato (il log resta). */
@@ -1113,7 +1146,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       R.summary.insertAdjacentHTML('afterbegin', `<span class="px-chip px-chip--num" data-qchip>${m.idx}/${m.n}</span>`);
     },
     /** Voce finita: impara la velocità per le previsioni successive. */
-    queueItemDone(id, r) { if (pendingProg) { const x = pendingProg; pendingProg = null; applyProgress(x); } learnSpeed(r?.timeS || st.lastElapsed); st.qCur = null; },
+    queueItemDone(id, r) { if (pendingProg) { const x = pendingProg; pendingProg = null; applyProgress(x); } learnSpeed(r?.timeS || st.lastElapsed); st.qCur = null; thumbPump(); },
     /** Fine coda: schermata «Coda finita!» con tabella e «Salva tutti nelle Foto». */
     showQueueDone() { st.qCur = null; setStage('done'); renderQueueDone(); R.qdone.removeAttribute('data-pop'); void R.qdone.offsetWidth; R.qdone.setAttribute('data-pop', ''); if (!matchMedia('(prefers-reduced-motion: reduce)').matches && /^−/.test(R.qdBig.textContent)) confetti(R.qConfetti); R.qdone.scrollIntoView?.({ block: 'start' }); },
     /** «Salva tutti» non riuscito: un tasto per file nella schermata finale. */
@@ -1121,7 +1154,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     /** Applica impostazioni (es. quelle salvate con la coda). */
     applySettings(s = {}) { writeSettings({ ...readSettings(), ...s }); },
     /** Torna al passo 1 (nessun file). */
-    reset() { st.file = null; setResume(null); st.qMode = false; st.queue = null; root.dataset.queue = 'false'; R.queue.hidden = true; R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
+    reset() { thumbs.clear(); thumbQ.length = 0; st.file = null; setResume(null); st.qMode = false; st.queue = null; root.dataset.queue = 'false'; R.queue.hidden = true; R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
     destroy() { for (const [t, h] of dndTargets) window.removeEventListener(t, h); listeners.forEach(([t, h]) => bus.removeEventListener(t, h)); root.innerHTML = ''; },
   };
 }

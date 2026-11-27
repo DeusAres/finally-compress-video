@@ -25,8 +25,8 @@
 </nav>
 <main id="app"></main>
 <script type="module">
-import { mountUI } from './ui.js?v=0.38.3';
-import { emit } from './bus.js?v=0.38.3';
+import { mountUI } from './ui.js?v=0.38.4';
+import { emit } from './bus.js?v=0.38.4';
 
 const q = new URLSearchParams(location.search);
 if (q.get('theme')) document.documentElement.dataset.theme = q.get('theme');
@@ -82,8 +82,8 @@ function showQueue() {
   const info = (dur, W, H, extra = {}) => ({ dur, W, H, fps: 60, hdr: true, dv: true, aacBps: 256000, ...extra });
   ui.setQueueMode(true);
   ui.setQueue({ running: false, curId: null, msg: null, items: [
-    { id: 1, name: 'IMG_7440.MOV', sizeMB: 412.6, status: 'attesa', info: info(83.4, 3840, 2160), hasFile: true },
-    { id: 2, name: 'IMG_7441.MOV', sizeMB: 180.2, status: 'attesa', info: info(36, 1920, 1080, { dv: false }), hasFile: true },
+    { id: 1, name: 'IMG_7440.MOV', sizeMB: 412.6, status: 'attesa', info: info(83.4, 3840, 2160), hasFile: true, file: window.__files?.[0] },
+    { id: 2, name: 'IMG_7441.MOV', sizeMB: 180.2, status: 'attesa', info: info(36, 1920, 1080, { dv: false }), hasFile: true, file: window.__files?.[1] },
     { id: 3, name: 'IMG_7442_con_nome_molto_lungo_per_provare_il_taglio.MOV', sizeMB: 95, status: 'attesa', info: info(20, 3840, 2160), hasFile: true },
   ] });
 }

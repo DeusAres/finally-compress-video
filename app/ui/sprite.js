@@ -45,6 +45,9 @@ export const SPRITES = {
   film: [
     'c.cccc.c', 'cccccccc', 'c.c..c.c', 'ccc..ccc', 'c.c..c.c', 'ccc..ccc', 'cccccccc', 'c.cccc.c',
   ],
+  trash: [
+    '..cccc..', 'cccccccc', '........', '.c.cc.c.', '.c.cc.c.', '.c.cc.c.', '.c.cc.c.', '.cccccc.',
+  ],
   analisi: [
     '.ccc....', 'c...c...', 'c...c...', 'c...c...', '.ccc....', '....cc..', '.....cc.', '......cc',
   ],
