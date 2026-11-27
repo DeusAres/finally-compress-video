@@ -14,7 +14,7 @@ import numpy as np
 
 LW, REF, GT, J = 1000.0, 203.0, 0.8, float(os.environ.get('J', '0.5'))
 XA, SAT3, CON3 = 0.05, 1.15, 0.25
-JA, BA, SA = float(os.environ.get('JA', '0.3')), float(os.environ.get('BA', '0.5')), float(os.environ.get('SA', '0.95'))  # «apple»
+JA, BA, SA, GA = float(os.environ.get('JA', '0.3')), float(os.environ.get('BA', '0.5')), float(os.environ.get('SA', '0.95')), float(os.environ.get('GA', '1'))  # «apple»
 ENC = os.environ.get('ENC', '1886')  # codifica d'uscita delle varianti display-referred: 1886 = inversa EOTF BT.1886 (1/2.4), 709 = OETF BT.709
 K20 = np.array([0.2627, 0.678, 0.0593]); K709 = np.array([0.2126, 0.7152, 0.0722])
 M = np.array([[1.6605, -0.5876, -0.0728], [-0.1246, 1.1329, -0.0083], [-0.0182, -0.1006, 1.1187]])  # BT.2020 -> BT.709 lineare
@@ -54,7 +54,7 @@ def t_bt2408(e):  # mobius su max-RGB, 203 nit = 100 %
     return enc(gam(l * (mob(n / REF, J, LW / REF) / n)))
 def t_apple(e):  # «Apple-like»: norma ibrida luma/max-RGB (BA), mobius morbido (JA), saturazione SA, BT.1886
     d = display(e); l = d @ M.T; Y = np.maximum(d @ K20, 1e-6)[..., None]; n = np.maximum((1 - BA) * Y + BA * np.maximum(mx(l), Y), 1e-6)
-    t = l * (mob(n / REF, JA, LW / REF) / n); y = (t @ K709)[..., None]; return enc(gam(y + (t - y) * SA))
+    t = l * (mob(GA * n / REF, JA, GA * LW / REF) / n); y = (t @ K709)[..., None]; return enc(gam(y + (t - y) * SA))
 def t_hlgsdr(e):
     l = np.clip(e, 0, 1) ** 2.4 @ M.T; y = np.clip(l @ K709, 1e-6, 1)[..., None]; ls = y + (l - y) * SAT3
     ye = oetf(y); y2 = inv709(ye + (ye * ye * (3 - 2 * ye) - ye) * CON3); return enc(gam(ls * (y2 / y)))
