@@ -30,7 +30,7 @@ th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-alig
 </style>
 </head>
 <body>
-<h1>Modalità SDR veloce a 8 bit <small style="font-size:.55em;opacity:.75">v2.2 · 27/11</small></h1>
+<h1>Modalità SDR veloce a 8 bit <small style="font-size:.55em;opacity:.75">v2.3 · 27/11</small></h1>
 <p>Percorso veloce: <code>VideoDecoder</code> → WebGPU (inversa HLG → Hable → BT.709, uscita NV12) → encoder HEVC 8 bit, con controllo del bitrate a circuito chiuso. Confronto: frame del decoder diretti all'encoder con etichetta HLG (<b>c_hlg8</b>). Scegli un video HDR dell'iPhone, premi <b>Esegui</b> e tieni la pagina in primo piano fino a «finito». Poi <b>Copia risultati</b> (incolla in chat) e <b>Scarica</b> (al massimo 4 file).</p>
 
 <div class="card">
@@ -39,10 +39,10 @@ th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-alig
   <div class="row">
     <label>Frame <select id="nf"><option>300</option><option>150</option><option>60</option><option>30</option></select></label>
     <label class="full" hidden>Bitrate <select id="br"><option value="8">8 Mbps</option><option value="5,8">5 e 8 Mbps</option><option value="4,8,12">4, 8 e 12 Mbps</option></select></label>
-    <label>Prova <select id="mode"><option value="cmp">Confronto tone map (2 file)</option><option value="fast">Percorso veloce (4 file)</option></select></label>
-    <label>Tone map <select id="tm"><option value="apple">Apple-like</option><option value="bt2446c">BT.2446 C</option><option value="bt2408">BT.2408 mobius</option><option value="hlgsdr">HLG come SDR</option><option value="hable">Hable</option><option value="eetf">BT.2390 EETF</option></select></label>
+    <label>Prova <select id="mode"><option value="cmp">Confronto con Apple (3 file)</option><option value="fast">Percorso veloce (4 file)</option></select></label>
+    <label>Tone map <select id="tm"><option value="lut">3D LUT «Apple»</option><option value="apple">Apple-like</option><option value="bt2446c">BT.2446 C</option><option value="bt2408">BT.2408 mobius</option><option value="hlgsdr">HLG come SDR</option><option value="hable">Hable</option><option value="eetf">BT.2390 EETF</option></select></label>
   </div>
-  <p style="margin:0"><b>Confronto tone map</b> (predefinito): stesso frame centrale con 4 varianti → <code>tm_compare.png</code> (2×2 con istogramma della luma) + MP4 della variante scelta. Link: <code>?tm=apple|bt2446c|bt2408|hlgsdr|hable|eetf</code>, <code>?enc=709</code>, <code>?mode=fast</code>.</p>
+  <p style="margin:0"><b>Confronto con Apple</b> (predefinito, v2.3): 1) <b>b_sys</b>: <code>&lt;video&gt;</code> seek + rVFC (2 player, come l'app) → <code>drawImage</code> su canvas 2D sRGB (HLG → SDR convertito dal sistema) → encoder 8 bit; 2) stesso frame centrale con sys, 3D LUT, Hable, BT.2408, Apple-like → <code>tm_compare.png</code>; 3) MP4 della variante scelta (predefinita: LUT). Link: <code>?tm=lut|apple|bt2446c|bt2408|hlgsdr|hable|eetf</code>, <code>?enc=709</code>, <code>?mode=fast</code>.</p>
   <p style="margin:0">Percorso veloce — passi: decodifica · controllo colori del decoder · <b>b_hable</b> veloce · <b>c_hlg8</b> diretto · seek a 2 player.<span class="full" hidden> Modalità <code>?full</code>: anche a_drawimage, b_eetf, b_hable_canvas, c_cs709, filtri denoise/JND, AV1, 4K → 1080p, seek a 1 player.</span></p>
   <div class="row"><button id="go" disabled>Esegui</button></div>
   <div id="state">scegli un video</div>
@@ -50,7 +50,7 @@ th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-alig
 
 <div class="card"><h2>Riepilogo</h2><div class="tw" id="sum">Nessun dato.</div></div>
 <div class="card"><h2>File</h2><div id="files">Nessuno.</div><div class="row"><button id="dlall" disabled>Scarica</button></div>
-<p style="margin:0">Confronto: <code>tm_compare.png</code> + <code>b_&lt;tm&gt;_8M.mp4</code>. Percorso veloce: <code>b_hable_8M.mp4</code> + <code>b_hable_mid.png</code> (SDR BT.709); <code>c_hlg8_8M.mp4</code> (HLG 8 bit: giudica il colore riproducendolo su iPhone) + <code>c_hlg8_mid.png</code> (stesso frame reso con Hable).</p></div>
+<p style="margin:0">Confronto: <code>tm_compare.png</code> + <code>b_sys_8M.mp4</code> + <code>b_&lt;tm&gt;_8M.mp4</code> (misura: <code>tools/lab/sdr_apple_lab.py</code>). Percorso veloce: <code>b_hable_8M.mp4</code> + <code>b_hable_mid.png</code> (SDR BT.709); <code>c_hlg8_8M.mp4</code> (HLG 8 bit: giudica il colore riproducendolo su iPhone) + <code>c_hlg8_mid.png</code> (stesso frame reso con Hable).</p></div>
 <div class="card"><h2>Risultati</h2><div class="row"><button id="copy">Copia risultati</button><span id="copied" class="ok"></span></div><pre id="oc">{}</pre></div>
 <div class="card"><h2>Log</h2><pre id="log">In attesa.</pre></div>
 
@@ -66,7 +66,7 @@ const qn = (k, d) => { const m = Q.match(new RegExp(`[?&]${k}=(\\d+(?:\\.\\d+)?)
 // K = frame in volo nella conversione (anelli di buffer), DQ = decodifica avanti, EQ = coda massima dell'encoder, R0 = bitrate iniziale / target
 const K = qn('k', 4), DQ = qn('dq', 8), EQ = qn('eq', 4), R0 = qn('r0', 1.25), BRCTL = !/[?&]nobr\b/.test(Q);
 if (FULL) for (const e of document.querySelectorAll('.full')) e.hidden = false;
-const R = { page: 'tools/diag/sdr8.html v2.2', ua: navigator.userAgent, when: new Date().toISOString(), settings: {}, features: {}, source: {}, runs: {}, notes: [] };
+const R = { page: 'tools/diag/sdr8.html v2.3', ua: navigator.userAgent, when: new Date().toISOString(), settings: {}, features: {}, source: {}, runs: {}, notes: [] };
 const show = () => { const { runs, ...rest } = R; $('oc').textContent = JSON.stringify(rest).slice(0, -1) + ',"runs":{\n' + Object.entries(runs).map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(',\n') + '}}'; };
 const T0 = performance.now(), now = () => performance.now();
 const log = (s, cls) => { const L = $('log'); if (L.textContent === 'In attesa.') L.textContent = ''; L.textContent += `[${((now() - T0) / 1000).toFixed(1)}s] ${s}\n`; L.scrollTop = L.scrollHeight; if (cls === 'state') $('state').textContent = s; };
@@ -150,7 +150,7 @@ const newT = () => ({ ooo: 0, extra: 0, missing: 0, decWait: 0, decLat: 0, decN:
 // ---------- WebGPU: inversa HLG → OOTF → BT.2020→709 → tone map → OETF BT.709 (+ pre-filtri) ----------
 // Parametri delle varianti di tone map (?tm=, ?j=, ?ja=, ?ba=, ?sa=, ?ga=, ?enc=709): fonti e misure in research/19 §Tone map
 const f4 = (x) => (+x).toFixed(4), MJ = f4(qn('j', 0.5)), JA = f4(qn('ja', 0.2)), BA = f4(qn('ba', 1)), SA = f4(qn('sa', 0.95)), GA = f4(qn('ga', 0.8)), E1886 = /[?&]enc=709\b/.test(Q) ? '0.0' : '1.0';
-const TMV = { bt2446c: '1 · BT.2446-1 metodo C (crosstalk 0.05)', apple: '2 · «Apple-like»: mobius j 0.2 su max-RGB, bianco rif. 80 %, sat ×0.95', bt2408: '3 · BT.2408: 203 nit = 100 %, mobius j 0.5 su max-RGB', hable: '4 · Hable (attuale, OETF BT.709)', hlgsdr: 'HLG letto come SDR (+sat/contrasto)', eetf: 'BT.2390 EETF verso 203 nit' };
+const TMV = { sys: 'sys · <video> → drawImage canvas sRGB (conversione del sistema)', lut: '5 · 3D LUT 33³ che imita Apple (research/22)', bt2446c: '1 · BT.2446-1 metodo C (crosstalk 0.05)', apple: '2 · «Apple-like»: mobius j 0.2 su max-RGB, bianco rif. 80 %, sat ×0.95', bt2408: '3 · BT.2408: 203 nit = 100 %, mobius j 0.5 su max-RGB', hable: '4 · Hable (OETF BT.709, curva più vicina ad Apple)', hlgsdr: 'HLG letto come SDR (+sat/contrasto)', eetf: 'BT.2390 EETF verso 203 nit' };
 const TMQ = (Q.match(/[?&]tm=(\w+)/) || [])[1], CMP = !/[?&]mode=fast\b/.test(Q);
 const WGSL = `struct U{size:vec2f,tm:f32,filt:f32,lw:f32,tgt:f32,k:f32,sig:f32};
 @group(0)@binding(0) var t:texture_external;@group(0)@binding(1) var s:sampler;@group(0)@binding(2) var<uniform> u:U;
@@ -178,6 +178,8 @@ fn hlgi(e:vec3f)->vec3f{let a=0.17883277;let b=0.28466892;let c=0.55991073;let x
 //  hlgsdr:  HLG letto come SDR (BT.2100: compatibilità con display BT.1886 γ 2.4), 2020→709 lineare, saturazione ×SAT3,
 //           curva a S sulla luma (smoothstep al CON3), gamut morbido;
 //  hable:   attuale (Hable su max-RGB, nominale 100 nit, normalizzato al picco). eetf: BT.2390 EETF max-RGB verso 203 nit.
+//  lut:     3D LUT 33³ HLG R'G'B' → SDR R'G'B' BT.709 adattata sulla conversione «compatibile» di Apple (tools/lab/sdr_apple_lab.py,
+//           vendor/lut/apple_hlg_sdr33.bin), texture 3D rgba16float, interpolazione trilineare del campionatore (solo percorso NV12).
 const K20=vec3f(0.2627,0.678,0.0593);const K7=vec3f(0.2126,0.7152,0.0722);const GT=0.8;const XA=0.05;const MJ=${MJ};const SAT3=1.15;const CON3=0.25;const JA=${JA};const BA=${BA};const SA=${SA};const GA=${GA};const E1886=${E1886};
 fn m709(d:vec3f)->vec3f{return vec3f(dot(vec3f(1.6605,-0.5876,-0.0728),d),dot(vec3f(-0.1246,1.1329,-0.0083),d),dot(vec3f(-0.0182,-0.1006,1.1187),d));}
 fn mx3(v:vec3f)->f32{return max(v.r,max(v.g,v.b));}
@@ -198,6 +200,7 @@ fn i709(v:f32)->f32{if(v<0.081){return v/4.5;}return pow((v+0.099)/1.099,1.0/0.4
 fn hlgsdr(e:vec3f)->vec3f{let l=m709(pow(clamp(e,vec3f(0),vec3f(1)),vec3f(2.4)));let y=clamp(dot(l,K7),1e-6,1.0);let ls=vec3f(y)+(l-vec3f(y))*SAT3;
  let ye=oetf(vec3f(y)).x;let y2=i709(ye+(ye*ye*(3.0-2.0*ye)-ye)*CON3);return enc(gam(ls*(y2/y)));}
 fn sdr(c:vec3f)->vec3f{
+ if(u.tm>6.5){return lutf(c);}
  if(u.tm<0.5){return c;}
  if(u.tm>4.5&&u.tm<5.5){return hlgsdr(c);}
  let sc=hlgi(c);let ys=dot(sc,K20);
@@ -210,6 +213,7 @@ fn sdr(c:vec3f)->vec3f{
  var o:f32;if(u.tm<1.5){o=eetf(sg)/u.tgt;}else{o=hb(sg/100.0)/hb(u.lw/100.0);}
  return oetf(l*(o/sg));}
 fn luma(c:vec3f)->f32{return dot(c,vec3f(0.2126,0.7152,0.0722));}
+fn lutf(c:vec3f)->vec3f{return c;} // la LUT esiste solo nel percorso NV12 (compute)
 fn jnd(uv:vec2f)->vec3f{
  let px=1.0/u.size;var cs:array<vec3f,9>;var ls:array<f32,9>;
  for(var j=0;j<3;j++){for(var i=0;i<3;i++){let c=sdr(smp(uv+vec2f(f32(i-1),f32(j-1))*px));cs[j*3+i]=c;ls[j*3+i]=luma(c)*255.0;}}
@@ -240,10 +244,27 @@ async function gpu() {
       cpipe: (copy) => cpipes[+copy] || (cpipes[+copy] = dev.createComputePipeline({ layout: 'auto', compute: { module: cmods[+copy], entryPoint: 'cs' } })),
       pipe: (dn, copy) => pipes[`${dn}${copy}`] || (pipes[`${dn}${copy}`] = dev.createRenderPipeline({ layout: 'auto', vertex: { module: mods[+copy], entryPoint: 'vs' },
         fragment: { module: mods[+copy], entryPoint: dn ? 'fsDn' : 'fsMain', targets: dn ? [{ format: 'rgba8unorm' }, { format: 'rgba16float' }] : [{ format: 'rgba8unorm' }] } })) };
+    g.lut = await loadLut(dev);
     dev.lost.then((info) => { g.lost = true; R.features.gpuLost = (R.features.gpuLost || 0) + 1; log(`GPU: device perso (${info?.message || '?'})`); });
     R.features.gpuPath = R.features.gpuPath || (EXT ? 'importExternalTexture' : 'copyExternalImageToTexture (?noext)');
     G = g; return G;
   } catch (e) { G = { err: e }; throw e; }
+}
+// ---------- 3D LUT «Apple» (v2.3): 33³ × RGB uint16 LE, r veloce → texture 3D rgba16float ----------
+const LUTN = 33, LUTURL = '../../vendor/lut/apple_hlg_sdr33.bin';
+const f2h = (v) => { v = Math.min(1, Math.max(0, v)); if (v < 6.103515625e-5) return Math.round(v / 5.960464477539063e-8); let e = Math.floor(Math.log2(v)), m = Math.round((v / 2 ** e - 1) * 1024); if (m === 1024) { e++; m = 0; } return ((e + 15) << 10) | m; };
+async function loadLut(dev) {
+  let n = 1, data = new Uint16Array([0, 0, 0, 0x3c00]);
+  try {
+    const b = await (await fetch(LUTURL)).arrayBuffer(), q = new Uint16Array(b);
+    if (q.length !== LUTN ** 3 * 3) throw new Error(`dimensione ${b.byteLength} B`);
+    n = LUTN; data = new Uint16Array(n ** 3 * 4);
+    for (let i = 0; i < n ** 3; i++) { for (let c = 0; c < 3; c++) data[4 * i + c] = f2h(q[3 * i + c] / 65535); data[4 * i + 3] = 0x3c00; }
+    R.features.lut = `${LUTN}³ (${(b.byteLength / 1024).toFixed(0)} KB)`;
+  } catch (e) { R.features.lut = `assente: ${errStr(e)} (la variante lut esce nera)`; }
+  const t = dev.createTexture({ size: [n, n, n], dimension: '3d', format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  dev.queue.writeTexture({ texture: t }, data, { bytesPerRow: n * 8, rowsPerImage: n }, [n, n, n]);
+  return t;
 }
 let COPY = 'frame'; // ripiego: copia dal VideoFrame, poi (se fallisce, es. Chromium headless) da un canvas 2D
 async function srcEntry(g, f, tmp) {
@@ -272,7 +293,7 @@ async function probeGpu(f) {
     R.features.webgpu = 'ok'; R.features.waitSubmitted = WAIT; R.features.readback = READBACK || COPY !== 'frame';
   } catch (e) { R.features.webgpu = errStr(e); }
 }
-const TM = { none: 0, eetf: 1, hable: 2, bt2446c: 3, bt2408: 4, hlgsdr: 5, apple: 6 }, FILT = { none: 0, dn: 1, jnd: 2 };
+const TM = { none: 0, eetf: 1, hable: 2, bt2446c: 3, bt2408: 4, hlgsdr: 5, apple: 6, lut: 7 }, FILT = { none: 0, dn: 1, jnd: 2 };
 /** Convertitore WebGPU: frame (HLG) → canvas rgba8unorm w×h (SDR BT.709) → VideoFrame. Scala se w×h ≠ sorgente (campionamento bilineare, 2:1 = media 2×2). */
 function convGpu(tm, filt) {
   let g, cv, ctx, ub, hist = null, w, h, rb = null;
@@ -313,6 +334,35 @@ function convGpu(tm, filt) {
     close() { try { ub?.destroy(); rb?.tex.destroy(); rb?.buf.destroy(); for (const t of hist || []) t.destroy(); } catch {} },
   };
 }
+/** v2.3 «sys»: frame nativi da <video> (seek + rVFC verificati, P player come l'app: app/lib/frames.js parallelFrames), in ordine. */
+function seekSource(P) {
+  return async (T) => {
+    const vids = [], stats = newStats(); let it = null;
+    try { for (let p = 0; p < P; p++) vids.push(await openVideoElement(S.file, null)); }
+    catch (e) { for (const v of vids) releaseVideoElement(v); throw e; }
+    const frames = S.pts.map((t, i) => ({ ts: t, dur: Math.round(i + 1 < S.pts.length ? S.pts[i + 1] - t : S.frameDur) }));
+    it = P === 1 ? seekFrames(vids[0], frames, stats, null, { onBad: 'mark', reopenBad: false }) : parallelFrames(vids, frames, stats, null, { onBad: 'mark', reopenBad: false });
+    return {
+      async next() { const t0 = now(); const x = await it.next(); T.decWait += now() - t0; return x.done ? null : x.value; },
+      report: () => ({ players: P, dup: stats.dup, off: stats.off, noCb: stats.noCallback, retried: stats.retried, unverified: stats.unverified || 0, fellBack: stats.fellBack || false }),
+      async close() { try { await it.return(); } catch {} for (const v of vids) releaseVideoElement(v); },
+    };
+  };
+}
+/** v2.3 «sys»: drawImage del frame HLG nativo su canvas 2D sRGB → il sistema (WebKit/CoreImage/ColorSync) converte in SDR → VideoFrame(canvas).
+ *  Se il frame del <video> arriva già ruotato per la visualizzazione, lo si riporta all'orientamento codificato (il MP4 porta la rotazione). */
+function convSys() {
+  let cv, ctx, w, h;
+  return {
+    prepare(W, H) { w = W; h = H; cv = new OffscreenCanvas(w, h); ctx = cv.getContext('2d', { colorSpace: 'srgb', alpha: false }); if (!ctx) throw new Error('getContext 2d null'); return 'drawImage(VideoFrame del <video>) su canvas 2D sRGB → VideoFrame(canvas)'; },
+    make(f, i) {
+      const fw = f.displayWidth, fh = f.displayHeight;
+      if (fw === w && fh === h) ctx.drawImage(f, 0, 0, w, h);
+      else { R.features.sysFrame = `${fw}x${fh} → ruotato di −${S.rot}°`; ctx.save(); ctx.translate(w / 2, h / 2); ctx.rotate(-S.rot * Math.PI / 180); ctx.drawImage(f, -fw / 2, -fh / 2, fw, fh); ctx.restore(); }
+      return new VideoFrame(cv, { timestamp: tsOf(i), duration: durOf(i) });
+    },
+  };
+}
 /** (a) drawImage del frame su canvas 2D sRGB (come il concorrente, research/09). */
 function conv2d() {
   let cv, ctx;
@@ -327,6 +377,8 @@ function conv2d() {
 const CORE = WGSL.slice(WGSL.indexOf('const m1='), WGSL.indexOf('fn luma('));
 const NV12 = `struct U{size:vec2f,tm:f32,filt:f32,lw:f32,tgt:f32,k:f32,sig:f32};
 @group(0)@binding(0) var t:texture_external;@group(0)@binding(2) var<uniform> u:U;@group(0)@binding(4) var<storage,read_write> ob:array<u32>;
+@group(0)@binding(5) var lt:texture_3d<f32>;@group(0)@binding(6) var ls:sampler;
+fn lutf(c:vec3f)->vec3f{return textureSampleLevel(lt,ls,clamp(c,vec3f(0),vec3f(1))*(32.0/33.0)+vec3f(0.5/33.0),0.0).rgb;}
 fn ld(x:i32,y:i32)->vec3f{return textureLoad(t,vec2i(x,y)).rgb;}
 ${CORE}
 fn q8(v:f32)->u32{return u32(clamp(round(v),0.0,255.0));}
@@ -357,7 +409,7 @@ function convNv12(tm) {
       let p;
       try {
         const src = await srcEntry(g, f, tmp), pipe = g.cpipe(src.copy);
-        const bg = g.dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: src.res }, { binding: 2, resource: { buffer: ub } }, { binding: 4, resource: { buffer: sb } }] });
+        const bg = g.dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [{ binding: 0, resource: src.res }, { binding: 2, resource: { buffer: ub } }, { binding: 4, resource: { buffer: sb } }, { binding: 5, resource: g.lut.createView({ dimension: '3d' }) }, { binding: 6, resource: g.smp }] });
         const ce = g.dev.createCommandEncoder(), pass = ce.beginComputePass();
         pass.setPipeline(pipe); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(Math.ceil(W / 32), Math.ceil(H / 16)); pass.end();
         ce.copyBufferToBuffer(sb, 0, s.mb, 0, size); g.dev.queue.submit([ce.finish()]);
@@ -429,7 +481,7 @@ async function pipeRun(o) {
     if (rc) cfg.bitrate = rc.start();
     enc.configure(cfg);
     r.conv = (await o.conv.prepare?.(o.w, o.h)) ?? null;
-    src = startDecoder(o.decCfg || S.dcfg, S.n, B, T);
+    src = o.source ? await o.source(T) : startDecoder(o.decCfg || S.dcfg, S.n, B, T);
     const t0 = now();
     const prod = (async () => {
       for (let i = 0; i < S.n && !fail; i++) {
@@ -448,6 +500,7 @@ async function pipeRun(o) {
       try {
         if (i === 0) r.encIn = fInfo(vf);
         if (o.png && i === S.mid) midFrame = vf.clone();
+        if (o.onMid && i === S.mid) o.onMid(vf.clone());
         const te = now(); while (enc.encodeQueueSize >= EQ && !fail) await B.wait(); T.encWait += now() - te;
         if (fail) throw fail;
         const nb = rc?.pending; if (nb) { cfg.bitrate = nb; enc.configure(cfg); }
@@ -461,11 +514,12 @@ async function pipeRun(o) {
     r.ms = msPF(T, done); r.dec = { ooo: T.ooo, extra: T.extra, missing: T.missing };
     r.encTs = { ...tsCheck(chunks.map((c) => c.timestamp)), dur0: chunks.filter((c) => !c.duration).length };
     const wf = (x) => x / ms; // quota del tempo totale in attesa
-    r.limit = wf(T.encWait) > 0.4 ? 'encoder' : wf(T.decWait) > 0.4 ? 'decoder' : wf(T.convWait) > 0.4 ? 'conversione GPU' : 'thread principale';
+    if (src?.report) r.verify = src.report();
+    r.limit = wf(T.encWait) > 0.4 ? 'encoder' : wf(T.decWait) > 0.4 ? (o.source ? 'seek <video>' : 'decoder') : wf(T.convWait) > 0.4 ? 'conversione GPU' : 'thread principale';
   } catch (e) { r.err = errStr(fail || e); }
   finally {
     for (const p of pend) p?.then((v) => v.close(), () => {});
-    src?.close(); try { if (enc.state !== 'closed') enc.close(); } catch {} try { o.conv.close?.(); } catch {}
+    await src?.close(); try { if (enc.state !== 'closed') enc.close(); } catch {} try { o.conv.close?.(); } catch {}
   }
   if (rc) r.br = { win: rc.win, r0: R0, hist: rc.hist };
   if (chunks.length) {
@@ -570,7 +624,7 @@ async function mux(chunks, meta, kind, w, h, cs, r) {
 }
 
 // ---------- confronto dei tone map: stesso frame centrale, 4 varianti, PNG 2×2 con istogramma della luma ----------
-const CMPK = ['bt2446c', 'apple', 'bt2408', 'hable'];
+const CMPK = ['lut', 'hable', 'bt2408', 'apple']; // v2.3: + «sys» in testa se presente (griglia 2 colonne)
 /** Statistiche del segnale NV12 (codici 8 bit BT.709 limitati): luma media/σ, |CbCr| medio, % Y ≥ 233 (alte luci tagliate), % Y ≤ 24, istogramma 64 classi. */
 async function nv12Stats(vf) {
   const buf = new Uint8Array(vf.allocationSize()), lay = await vf.copyTo(buf), w = vf.codedWidth, h = vf.codedHeight, hist = new Array(64).fill(0);
@@ -580,9 +634,22 @@ async function nv12Stats(vf) {
   const n = w * h, m = s / n;
   return { Ymean: r2(m), Ystd: r2(Math.sqrt(s2 / n - m * m)), sat: r2(c / (n / 4)), clipHi: r2(hi / n * 100), dark: r2(lo / n * 100), hist };
 }
-async function cmpRun() {
-  const r = { name: 'frame centrale con le 4 varianti (NV12 dello shader) → tm_compare.png', order: CMPK, variants: {} }, B = bell(), keep = S.n;
+/** Frame non NV12 (es. RGBA del canvas di «sys»): stesse statistiche, codici Y'CbCr BT.709 limitati calcolati dai pixel del canvas. */
+async function rgbStats(vf) {
+  const w = vf.displayWidth, h = vf.displayHeight, cv = new OffscreenCanvas(w, h), cx = cv.getContext('2d', { colorSpace: 'srgb' }); cx.drawImage(vf, 0, 0);
+  const d = cx.getImageData(0, 0, w, h).data, hist = new Array(64).fill(0); let s = 0, s2 = 0, hi = 0, lo = 0, c = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const R0 = d[i] / 255, G0 = d[i + 1] / 255, B0 = d[i + 2] / 255, yl = 0.2126 * R0 + 0.7152 * G0 + 0.0722 * B0, y = Math.round(16 + 219 * yl);
+    s += y; s2 += y * y; if (y >= 233) hi++; if (y <= 24) lo++; hist[y >> 2]++; c += Math.hypot(224 * (B0 - yl) / 1.8556, 224 * (R0 - yl) / 1.5748);
+  }
+  const n = w * h, m = s / n;
+  return { Ymean: r2(m), Ystd: r2(Math.sqrt(s2 / n - m * m)), sat: r2(c / n), clipHi: r2(hi / n * 100), dark: r2(lo / n * 100), hist };
+}
+async function cmpRun(sysMid = null) {
+  const keys = (sysMid ? ['sys'] : []).concat(CMPK);
+  const r = { name: `frame centrale: ${keys.join(', ')} → tm_compare.png`, order: keys, variants: {} }, B = bell(), keep = S.n;
   let mid = null, src = null; const outs = [];
+  if (sysMid) { outs.push(sysMid); r.variants.sys = { label: TMV.sys, ...(await rgbStats(sysMid)) }; }
   try {
     S.n = S.mid + 1; src = startDecoder(S.dcfg, S.n, B, newT());
     for (let f; (f = await src.next());) { mid?.close(); mid = f; }
@@ -592,17 +659,17 @@ async function cmpRun() {
       try { outs.push(await c.submit(mid.clone(), S.mid, T)); } finally { c.close(); }
       r.variants[k] = { label: TMV[k], ...(await nv12Stats(outs[outs.length - 1])) };
     }
-    r.png = 'tm_compare.png'; addFile(r.png, await gridPng(outs, CMPK.map((k) => r.variants[k])));
-    for (const k of CMPK) delete r.variants[k].hist;
+    r.png = 'tm_compare.png'; addFile(r.png, await gridPng(outs, keys.map((k) => r.variants[k])));
+    for (const k of keys) delete r.variants[k].hist;
   } catch (e) { r.err = errStr(e); }
   finally { S.n = keep; for (const v of outs) v.close(); mid?.close(); src?.close(); }
   return r;
 }
-/** Griglia 2×2: per riquadro titolo + misure, frame ruotato come la sorgente (lato lungo ≤ 1080), istogramma della luma (rosso: ≥ 233, blu: ≤ 24). */
+/** Griglia a 2 colonne (2×2, 3×2 con «sys»): per riquadro titolo + misure, frame ruotato come la sorgente (lato lungo ≤ 1080), istogramma della luma (rosso: ≥ 233, blu: ≤ 24). */
 async function gridPng(vfs, info) {
   const w0 = vfs[0].displayWidth, h0 = vfs[0].displayHeight, rot = ((S.rot % 360) + 360) % 360, sw = rot === 90 || rot === 270;
   const sc = Math.min(1, 1080 / Math.max(w0, h0)), tw = Math.round((sw ? h0 : w0) * sc), th = Math.round((sw ? w0 : h0) * sc), TH = 50, HH = 110, PAD = 8;
-  const cw = tw + 2 * PAD, ch = TH + th + HH + 2 * PAD, cv = new OffscreenCanvas(2 * cw, 2 * ch), ctx = cv.getContext('2d', { colorSpace: 'srgb' });
+  const cw = tw + 2 * PAD, ch = TH + th + HH + 2 * PAD, cv = new OffscreenCanvas(2 * cw, Math.ceil(vfs.length / 2) * ch), ctx = cv.getContext('2d', { colorSpace: 'srgb' });
   ctx.fillStyle = '#16181c'; ctx.fillRect(0, 0, cv.width, cv.height);
   vfs.forEach((vf, i) => {
     const x = (i % 2) * cw + PAD, y = Math.floor(i / 2) * ch + PAD, m = info[i];
@@ -654,9 +721,11 @@ $('go').onclick = async () => {
     const base = { kind: S.kind8, w: S.W, h: S.H };
     const hable = (mbps) => ({ ...base, id: `b_${tm}`, name: `VideoDecoder → WebGPU compute (inversa HLG → ${tm} → BT.709) → NV12 → HEVC 8 bit`, mbps, conv: convNv12(tm), png: !cmp });
     if (cmp) { // confronto: un PNG 2×2 delle 4 varianti sullo stesso frame + un MP4 della variante scelta (al massimo 2 file)
-      await step('tm_cmp', cmpRun);
+      let sysMid = null; // v2.3: prima «sys» (conversione del sistema), poi la griglia con il suo frame centrale, poi la variante scelta
+      await step('b_sys@8', () => pipeRun({ ...base, id: 'b_sys', name: '<video> seek + rVFC (2 player) → drawImage canvas 2D sRGB → VideoFrame(canvas) → encoder 8 bit', mbps: 8, conv: syncConv(convSys()), source: seekSource(2), onMid: (vf) => { sysMid?.close(); sysMid = vf; } }));
+      await step('tm_cmp', () => cmpRun(sysMid));
       await step(`b_${tm}@8`, () => pipeRun(hable(8)));
-      log('finito: guarda tm_compare.png, premi «Copia risultati» e scarica i file', 'state');
+      log('finito: guarda tm_compare.png, premi «Copia risultati» e scarica i file (b_sys_8M.mp4 va confrontato con l\'export di Apple: tools/lab/sdr_apple_lab.py)', 'state');
       return;
     }
     const hlg8 = (mbps) => ({ ...base, id: 'c_hlg8', name: 'VideoDecoder → encoder diretto, VUI/colr BT.2020 HLG', mbps, conv: convDirect(), vui: CSHLG, keepMid: true, pngVia: () => convNv12('hable') });
@@ -686,8 +755,8 @@ $('go').onclick = async () => {
   finally { show(); renderSummary(); $('go').disabled = false; }
 };
 $('mode').value = CMP ? 'cmp' : 'fast';
-$('tm').value = TMQ && TMV[TMQ] ? TMQ : CMP ? 'apple' : 'hable';
-$('mode').onchange = () => { if (!TMQ) $('tm').value = $('mode').value === 'cmp' ? 'apple' : 'hable'; };
+$('tm').value = TMQ && TMV[TMQ] && TMQ !== 'sys' ? TMQ : CMP ? 'lut' : 'hable';
+$('mode').onchange = () => { if (!TMQ) $('tm').value = $('mode').value === 'cmp' ? 'lut' : 'hable'; };
 $('dlall').onclick = async () => { for (const a of $('files').querySelectorAll('a')) { a.click(); await sleep(800); } };
 $('copy').onclick = () => {
   const s = JSON.stringify(R);
