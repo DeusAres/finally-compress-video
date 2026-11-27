@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SDR veloce 8 bit</title>
+<style>
+/* Layout: colonna unica da laboratorio, card impilate (stile di tools/diag/downscale10.html) */
+:root{--bg:#f6f7f9;--fg:#15191f;--mut:#5b6573;--card:#fff;--line:#dde2e8;--acc:#1d5fd1;--ok:#137a3a;--ko:#b3261e;--warn:#9a6700;--mono:ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1216;--fg:#e8ecf1;--mut:#9aa5b3;--card:#171b21;--line:#2a313a;--acc:#6ea0ff;--ok:#5cd08a;--ko:#ff8a80;--warn:#e3b341;color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,sans-serif;margin:0 auto;padding:20px max(16px,env(safe-area-inset-right)) 40px max(16px,env(safe-area-inset-left));max-width:820px}
+h1{font-size:1.35rem;margin:0 0 4px;text-wrap:balance}h2{font-size:1rem;margin:0}
+p,li{color:var(--mut)}p{margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px;display:grid;gap:10px;min-width:0}
+button{font:inherit;background:var(--acc);color:var(--bg);border:0;border-radius:8px;padding:10px 14px;cursor:pointer;justify-self:start}
+button:disabled{opacity:.45;cursor:default}button:focus-visible{outline:3px solid var(--fg)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+label{display:flex;gap:6px;align-items:center;color:var(--fg)}
+select,input[type=file]{font:inherit;max-width:100%}
+pre{font:12px/1.4 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;max-height:320px;margin:0;white-space:pre-wrap;word-break:break-word}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;font:12px var(--mono);min-width:100%}
+th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+.ok{color:var(--ok)}.ko{color:var(--ko)}.warn{color:var(--warn)}
+#state{font:600 1rem var(--mono)}
+.steps{display:grid;gap:4px}.steps label{align-items:flex-start}.steps small{color:var(--mut)}
+#files{display:grid;gap:4px;font:13px var(--mono)}#files a{color:var(--acc);word-break:break-all}
+</style>
+</head>
+<body>
+<h1>Modalità SDR veloce a 8 bit <small style="font-size:.55em;opacity:.75">v1 · 27/11</small></h1>
+<p>Misura i punti aperti della modalità «SDR veloce»: decodifica sequenziale con <code>VideoDecoder</code>, tre modi di passare da HDR (HLG) a SDR, due pre-filtri a 8 bit in WebGPU, AV1 contro HEVC e il 4K → 1080p. Procedura: scegli un video HDR dell'iPhone (meglio 1080p; un 4K abilita anche il punto 5), premi <b>Esegui</b> e tieni la pagina in primo piano fino a «finito». Poi <b>Copia risultati</b> (incolla in chat) e scarica gli MP4/PNG elencati sotto.</p>
+
+<div class="card">
+  <h2>Impostazioni</h2>
+  <div class="row"><input type="file" id="file" accept="video/*"></div>
+  <div class="row">
+    <label>Frame <select id="nf"><option>300</option><option>150</option><option>60</option><option>30</option></select></label>
+    <label>Bitrate <select id="br"><option value="5,8">5 e 8 Mbps</option><option value="8">8 Mbps</option><option value="4,8,12">4, 8 e 12 Mbps</option></select></label>
+    <label>Tone map per 3–5 <select id="tm"><option value="eetf">BT.2390 EETF</option><option value="hable">Hable</option></select></label>
+  </div>
+  <div class="steps">
+    <label><input type="checkbox" data-s="1" checked><span><b>1</b> <small>Velocità di decodifica: VideoDecoder (solo decode, → canvas 2D, → WebGPU) contro seek + rVFC (1 e 2 player)</small></span></label>
+    <label><input type="checkbox" data-s="2" checked><span><b>2</b> <small>HDR → SDR: (a) drawImage su canvas sRGB, (b) shader WebGPU EETF e Hable, (c) VideoDecoderConfig.colorSpace BT.709 forzato</small></span></label>
+    <label><input type="checkbox" data-s="3" checked><span><b>3</b> <small>Pre-filtri a 8 bit in WebGPU: denoise temporale leggero, filtro JND (stesso bitrate)</small></span></label>
+    <label><input type="checkbox" data-s="4" checked><span><b>4</b> <small>AV1 8 bit contro HEVC 8 bit dagli stessi frame SDR</small></span></label>
+    <label><input type="checkbox" data-s="5" checked><span><b>5</b> <small>4K → 1080p in WebGPU (solo se la sorgente è 4K)</small></span></label>
+  </div>
+  <div class="row"><button id="go" disabled>Esegui</button></div>
+  <div id="state">scegli un video</div>
+</div>
+
+<div class="card"><h2>Riepilogo</h2><div class="tw" id="sum">Nessun dato.</div></div>
+<div class="card"><h2>File da scaricare</h2><div id="files">Nessuno.</div><div class="row"><button id="dlall" disabled>Scarica tutti</button></div>
+<p style="margin:0">Nomi: <code>variante_codec_bitrate.mp4</code>; <code>variante_mid.png</code> = frame centrale dopo la conversione. Per il VMAF: <code>tools/lab/sdr8_score.sh sorgente.mov cartella_mp4</code>.</p></div>
+<div class="card"><h2>Log</h2><pre id="log">In attesa.</pre></div>
+<div class="card"><h2>Risultati</h2><div class="row"><button id="copy">Copia risultati</button><span id="copied" class="ok"></span></div><pre id="oc">{}</pre></div>
+<video id="v0" muted playsinline preload="auto" hidden></video>
+<video id="v1" muted playsinline preload="auto" hidden></video>
+
+<script type="module">
+import * as MB from '../../vendor/mediabunny-1.65.1.min.mjs';
+
+const $ = (id) => document.getElementById(id);
+const R = { page: 'tools/diag/sdr8.html v1', ua: navigator.userAgent, when: new Date().toISOString(), settings: {}, features: {}, source: {}, runs: {}, notes: [] };
+const show = () => { $('oc').textContent = JSON.stringify(R, null, 1); };
+const T0 = performance.now();
+const log = (s, cls) => { const L = $('log'); if (L.textContent === 'In attesa.') L.textContent = ''; L.textContent += `[${((performance.now() - T0) / 1000).toFixed(1)}s] ${s}\n`; L.scrollTop = L.scrollHeight; if (cls === 'state') $('state').textContent = s; };
+const errStr = (e) => `${e?.name || 'Error'}: ${e?.message || e}`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const csJ = (cs) => { if (!cs) return null; const j = cs.toJSON ? cs.toJSON() : cs; return { primaries: j.primaries ?? null, transfer: j.transfer ?? null, matrix: j.matrix ?? null, fullRange: j.fullRange ?? null }; };
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error(`${what}: timeout ${ms} ms`), { name: 'Timeout' })), ms))]);
+const waitEv = (el, ev, ms) => new Promise((res) => { const t = setTimeout(() => { el.removeEventListener(ev, f); res('timeout'); }, ms); const f = () => { clearTimeout(t); res(ev); }; el.addEventListener(ev, f, { once: true }); });
+const fInfo = (f) => ({ format: f.format, coded: [f.codedWidth, f.codedHeight], display: [f.displayWidth, f.displayHeight], colorSpace: csJ(f.colorSpace) });
+const CS709 = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
+// Parametri del tone mapping (riportati nel JSON; lo script di laboratorio usa gli stessi per il riferimento Hable)
+const TMP = { hlgPeakNits: 1000, systemGamma: 1.2, eetfTargetNits: 203, hableNominalNits: 100, dnStrength: 0.5, dnSigma8bit: 4, jndCap: 0.6 };
+
+// ---------- sorgente: demux Mediabunny (come index.html) ----------
+const S = { file: null, url: null, input: null, dcfg: null, chunks: [], n: 0, mid: 0, fps: 30, frameDur: 33333, W: 0, H: 0, rot: 0, kind8: 'hevc', files: [] };
+async function loadSource(nWanted) {
+  try { S.input?.dispose?.(); } catch {}
+  S.input = new MB.Input({ source: new MB.BlobSource(S.file), formats: MB.ALL_FORMATS });
+  const vt = await S.input.getPrimaryVideoTrack(); if (!vt) throw new Error('nessuna traccia video');
+  S.dcfg = await vt.getDecoderConfig(); if (!S.dcfg) throw new Error('codec non riconosciuto da Mediabunny');
+  S.rot = (await vt.getRotation()) || 0;
+  const chunks = [], want = nWanted + 16; // margine per il riordino dei B-frame
+  for await (const p of new MB.EncodedPacketSink(vt).packets()) { chunks.push(p.toEncodedVideoChunk()); if (chunks.length >= want) break; }
+  S.chunks = chunks;
+  const ts = chunks.map((c) => c.timestamp).sort((a, b) => a - b);
+  S.frameDur = ts.length > 1 ? (ts[ts.length - 1] - ts[0]) / (ts.length - 1) : 33333; S.fps = 1e6 / S.frameDur;
+  S.n = Math.min(nWanted, chunks.length); S.mid = Math.floor(S.n / 2);
+  let dsup = null; try { dsup = (await VideoDecoder.isConfigSupported(S.dcfg)).supported; } catch (e) { dsup = errStr(e); }
+  R.source = { name: S.file.name, sizeMB: +(S.file.size / 1048576).toFixed(1), codec: S.dcfg.codec, coded: [S.dcfg.codedWidth, S.dcfg.codedHeight], colorSpace: csJ(S.dcfg.colorSpace), rotation: S.rot, fps: +S.fps.toFixed(3), packetsRead: chunks.length, frames: S.n, bytesRead: chunks.reduce((a, c) => a + c.byteLength, 0), decoderSupported: dsup };
+}
+/** Decodifica sequenziale dei chunk; onFrame(frame, i) per i primi S.n frame in ordine di presentazione (deve chiudere il frame). */
+async function decodeAll(cfgD, onFrame) {
+  const N = S.n, q = []; let err = null, flushed = false, got = 0, wake = null, first = null;
+  const poke = () => { const w = wake; wake = null; w?.(); };
+  const dec = new VideoDecoder({ output: (f) => { q.push(f); poke(); }, error: (e) => { err = err || e; poke(); } });
+  dec.configure(cfgD);
+  (async () => {
+    for (const c of S.chunks) { while (!err && (dec.decodeQueueSize > 3 || q.length > 2)) await sleep(1); if (err || dec.state !== 'configured') return; dec.decode(c); }
+    await dec.flush();
+  })().catch((e) => { if (dec.state !== 'closed') err = err || e; }).finally(() => { flushed = true; poke(); });
+  try {
+    for (;;) {
+      if (q.length) { const f = q.shift(); if (got < N) { if (!first) first = fInfo(f); await onFrame(f, got++); } else f.close(); continue; }
+      if (err) throw err; if (flushed) break;
+      await new Promise((r) => { wake = r; setTimeout(r, 100); });
+    }
+  } finally { for (const f of q) { try { f.close(); } catch {} } try { if (dec.state !== 'closed') dec.close(); } catch {} }
+  return { frames: got, first };
+}
+const tsOf = (i) => Math.round(i * S.frameDur);
+
+// ---------- seek + rVFC (come app/lib/frames.js) ----------
+async function openVideo(el, url) {
+  el.src = url; el.load();
+  if (el.readyState < 1 && (await waitEv(el, 'loadedmetadata', 15000)) === 'timeout') throw new Error('loadedmetadata timeout' + (el.error ? ` (errore ${el.error.code})` : ''));
+  try { await withTimeout(el.play(), 3000, 'play'); el.pause(); } catch {}
+}
+async function seekFrame(el, t, ts) {
+  const pr = new Promise((res) => { const to = setTimeout(() => res(null), 400); el.requestVideoFrameCallback ? el.requestVideoFrameCallback((_, md) => { clearTimeout(to); res(md.mediaTime); }) : res(null); });
+  el.currentTime = t;
+  if ((await waitEv(el, 'seeked', 5000)) === 'timeout') throw new Error(`seek timeout @${t.toFixed(3)}s`);
+  await pr;
+  return new VideoFrame(el, { timestamp: ts, duration: Math.round(S.frameDur) });
+}
+async function seekRun(nPlayers) {
+  const r = { name: `seek + rVFC, ${nPlayers} player`, players: nPlayers };
+  const els = [$('v0'), $('v1')].slice(0, nPlayers);
+  try {
+    S.url = S.url || URL.createObjectURL(S.file);
+    for (const el of els) await openVideo(el, S.url);
+    const N = S.n, per = Math.ceil(N / nPlayers); let first = null, done = 0;
+    const t0 = performance.now();
+    await Promise.all(els.map(async (el, k) => {
+      for (let i = k * per; i < Math.min(N, (k + 1) * per); i++) { const vf = await seekFrame(el, (i + 0.5) / S.fps, tsOf(i)); if (!first) first = fInfo(vf); vf.close(); done++; }
+    }));
+    const ms = performance.now() - t0; r.frames = done; r.fps = +(done / ms * 1000).toFixed(1); r.first = first;
+  } catch (e) { r.err = errStr(e); }
+  finally { for (const el of els) { el.removeAttribute('src'); el.load(); } }
+  return r;
+}
+
+// ---------- WebGPU: inversa HLG → OOTF → BT.2020→709 → tone map → OETF BT.709 (+ pre-filtri) ----------
+const WGSL = `struct U{size:vec2f,tm:f32,filt:f32,lw:f32,tgt:f32,k:f32,sig:f32};
+@group(0)@binding(0) var t:texture_external;@group(0)@binding(1) var s:sampler;@group(0)@binding(2) var<uniform> u:U;
+@group(0)@binding(3) var hist:texture_2d<f32>;
+struct O{@builtin(position) p:vec4f};
+@vertex fn vs(@builtin(vertex_index) i:u32)->O{var q=array(vec2f(-1,-1),vec2f(3,-1),vec2f(-1,3));var o:O;o.p=vec4f(q[i],0,1);return o;}
+fn smp(uv:vec2f)->vec3f{return textureSampleBaseClampToEdge(t,s,uv).rgb;}
+const m1=0.1593017578125;const m2=78.84375;const c1=0.8359375;const c2=18.8515625;const c3=18.6875;
+fn pq(n:f32)->f32{let y=pow(max(n/10000.0,0.0),m1);return pow((c1+c2*y)/(1.0+c3*y),m2);}
+fn pqi(e:f32)->f32{let x=pow(max(e,0.0),1.0/m2);return 10000.0*pow(max(x-c1,0.0)/(c2-c3*x),1.0/m1);}
+fn eetf(n:f32)->f32{let mi=pq(u.lw);let e1=pq(n)/mi;let ml=pq(u.tgt)/mi;let ks=1.5*ml-0.5;var e2=e1;
+ if(e1>ks){let a=(e1-ks)/(1.0-ks);let a2=a*a;let a3=a2*a;e2=(2.0*a3-3.0*a2+1.0)*ks+(a3-2.0*a2+a)*(1.0-ks)+(-2.0*a3+3.0*a2)*ml;}
+ return pqi(e2*mi);}
+fn hb(x:f32)->f32{return ((x*(0.15*x+0.05)+0.004)/(x*(0.15*x+0.5)+0.06))-0.02/0.3;}
+fn hlgi(e:vec3f)->vec3f{let a=0.17883277;let b=0.28466892;let c=0.55991073;let x=clamp(e,vec3f(0),vec3f(1));return select((exp((x-c)/a)+b)/12.0,x*x/3.0,x<=vec3f(0.5));}
+fn sdr(c:vec3f)->vec3f{
+ if(u.tm<0.5){return c;}
+ let sc=hlgi(c);let ys=dot(sc,vec3f(0.2627,0.678,0.0593));
+ let d=u.lw*pow(max(ys,1e-6),0.2)*sc;
+ let l=max(vec3f(dot(vec3f(1.6605,-0.5876,-0.0728),d),dot(vec3f(-0.1246,1.1329,-0.0083),d),dot(vec3f(-0.0182,-0.1006,1.1187),d)),vec3f(0));
+ let sg=max(max(l.r,l.g),max(l.b,1e-6));
+ var o:f32;if(u.tm<1.5){o=eetf(sg)/u.tgt;}else{o=hb(sg/100.0)/hb(u.lw/100.0);}
+ let v=clamp(l*(o/sg),vec3f(0),vec3f(1));
+ return select(1.099*pow(v,vec3f(0.45))-0.099,4.5*v,v<vec3f(0.018));}
+fn luma(c:vec3f)->f32{return dot(c,vec3f(0.2126,0.7152,0.0722));}
+fn jnd(uv:vec2f)->vec3f{
+ let px=1.0/u.size;var cs:array<vec3f,9>;var ls:array<f32,9>;
+ for(var j=0;j<3;j++){for(var i=0;i<3;i++){let c=sdr(smp(uv+vec2f(f32(i-1),f32(j-1))*px));cs[j*3+i]=c;ls[j*3+i]=luma(c)*255.0;}}
+ var w=array(1.0,2.0,1.0,2.0,4.0,2.0,1.0,2.0,1.0);var bl=vec3f(0);var bg=0.0;
+ for(var k=0;k<9;k++){bl+=cs[k]*w[k]/16.0;bg+=ls[k]/9.0;}
+ let gx=(ls[2]+2.0*ls[5]+ls[8])-(ls[0]+2.0*ls[3]+ls[6]);let gy=(ls[6]+2.0*ls[7]+ls[8])-(ls[0]+2.0*ls[1]+ls[2]);let g=(abs(gx)+abs(gy))/8.0;
+ var tl=3.0/128.0*(bg-127.0)+3.0;if(bg<=127.0){tl=17.0*(1.0-sqrt(bg/127.0))+3.0;}
+ let tt=0.117*g*4.0;let th=tl+tt-0.3*min(tl,tt);let lim=u.k*th/255.0;
+ return cs[4]+clamp(bl-cs[4],vec3f(-lim),vec3f(lim));}
+@fragment fn fsMain(o:O)->@location(0) vec4f{let uv=o.p.xy/u.size;if(u.filt>1.5){return vec4f(jnd(uv),1);}return vec4f(sdr(smp(uv)),1);}
+struct FO{@location(0) c:vec4f,@location(1) h:vec4f};
+@fragment fn fsDn(o:O)->FO{let uv=o.p.xy/u.size;let c=sdr(smp(uv));let h=textureLoad(hist,vec2i(o.p.xy),0).rgb;
+ let d=abs(luma(c)-luma(h))*255.0/u.sig;let w=u.k*exp(-d*d);let r=mix(c,h,w);var f:FO;f.c=vec4f(r,1);f.h=vec4f(r,1);return f;}`;
+// Ripiego (browser senza importExternalTexture da VideoFrame): copyExternalImageToTexture in rgba16float (il browser converte i colori: solo verifica logica)
+const WGSL2 = WGSL.replace('var t:texture_external;', 'var t:texture_2d<f32>;').replace('textureSampleBaseClampToEdge(t,s,uv)', 'textureSampleLevel(t,s,uv,0.0)');
+let G = null, EXT = !/[?&]noext\b/.test(location.search);
+// ?wait: attende onSubmittedWorkDone prima di new VideoFrame(canvas) (di default no: lo snapshot segue il submit; in Chromium headless l'attesa fallisce)
+const WAIT = /[?&]wait\b/.test(location.search), READBACK = /[?&]readback\b/.test(location.search);
+async function gpu() {
+  if (G && G.lost) G = null;
+  if (G) { if (G.err) throw G.err; return G; }
+  try {
+    if (!navigator.gpu) throw new Error('navigator.gpu assente');
+    const ad = await navigator.gpu.requestAdapter(); if (!ad) throw new Error('nessun adapter WebGPU');
+    const dev = await ad.requestDevice(), mods = [dev.createShaderModule({ code: WGSL }), dev.createShaderModule({ code: WGSL2 })], pipes = {};
+    const g = { ad, dev, smp: dev.createSampler({ minFilter: 'linear', magFilter: 'linear' }),
+      pipe: (dn, copy) => pipes[`${dn}${copy}`] || (pipes[`${dn}${copy}`] = dev.createRenderPipeline({ layout: 'auto', vertex: { module: mods[+copy], entryPoint: 'vs' },
+        fragment: { module: mods[+copy], entryPoint: dn ? 'fsDn' : 'fsMain', targets: dn ? [{ format: 'rgba8unorm' }, { format: 'rgba16float' }] : [{ format: 'rgba8unorm' }] } })) };
+    dev.lost.then((info) => { g.lost = true; R.features.gpuLost = (R.features.gpuLost || 0) + 1; log(`GPU: device perso (${info?.message || '?'})`); });
+    R.features.gpuPath = R.features.gpuPath || (EXT ? 'importExternalTexture' : 'copyExternalImageToTexture (?noext)');
+    G = g; return G;
+  } catch (e) { G = { err: e }; throw e; }
+}
+let COPY = 'frame'; // ripiego: copia dal VideoFrame, poi (se fallisce, es. Chromium headless) da un canvas 2D
+async function srcEntry(g, f, tmp) {
+  if (EXT) {
+    try { return { copy: false, res: g.dev.importExternalTexture({ source: f }) }; }
+    catch (e) { EXT = false; R.features.gpuPath = `copyExternalImageToTexture rgba16float (importExternalTexture fallito: ${errStr(e)}) — colori convertiti dal browser, non HLG`; log('GPU: ' + R.features.gpuPath); }
+  }
+  const w = f.displayWidth, h = f.displayHeight;
+  if (COPY === 'frame') {
+    const t = g.dev.createTexture({ size: [w, h], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT }); tmp.push(t);
+    try { g.dev.queue.copyExternalImageToTexture({ source: f }, { texture: t }, [w, h]); return { copy: true, res: t.createView() }; }
+    catch (e) { COPY = 'bitmap'; R.features.gpuPath += ` · copia dal VideoFrame fallita (${errStr(e)}): passo da canvas 2D + getImageData (lento)`; log('GPU: ripiego canvas 2D'); }
+  }
+  if (!g.cv2 || g.cv2.width !== w || g.cv2.height !== h) { g.cv2 = new OffscreenCanvas(w, h); g.cx2 = g.cv2.getContext('2d'); }
+  g.cx2.drawImage(f, 0, 0, w, h); const px = g.cx2.getImageData(0, 0, w, h).data; // lento, solo per browser di prova
+  const t8 = g.dev.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST }); tmp.push(t8);
+  g.dev.queue.writeTexture({ texture: t8 }, px, { bytesPerRow: w * 4 }, [w, h]);
+  return { copy: true, res: t8.createView() };
+}
+/** Prova i percorsi di lettura sul primo frame del decoder; un import fallito può invalidare il device → se ne crea uno nuovo. */
+async function probeGpu(f) {
+  try {
+    const g = await gpu(), tmp = [];
+    try { const r = await srcEntry(g, f, tmp); if (!r.copy) R.features.gpuPath = 'importExternalTexture'; } finally { for (const t of tmp) t.destroy(); }
+    if (!EXT || COPY !== 'frame') { G = null; await gpu(); }
+    R.features.webgpu = 'ok'; R.features.waitSubmitted = WAIT; R.features.readback = READBACK || COPY !== 'frame';
+  } catch (e) { R.features.webgpu = errStr(e); }
+}
+const TM = { none: 0, eetf: 1, hable: 2 }, FILT = { none: 0, dn: 1, jnd: 2 };
+/** Convertitore WebGPU: frame (HLG) → canvas rgba8unorm w×h (SDR BT.709) → VideoFrame. Scala se w×h ≠ sorgente (campionamento bilineare, 2:1 = media 2×2). */
+function convGpu(tm, filt) {
+  let g, cv, ctx, ub, hist = null, w, h, rb = null;
+  return {
+    async prepare(W, H) {
+      g = await gpu(); w = W; h = H; ub = g.dev.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      if (filt === FILT.dn) hist = [0, 1].map(() => g.dev.createTexture({ size: [w, h], format: 'rgba16float', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING }));
+      if (READBACK || COPY !== 'frame') { // browser di prova (es. Chromium headless): VideoFrame(canvas WebGPU) non affidabile → texture + rilettura
+        const bpr = Math.ceil(w * 4 / 256) * 256;
+        rb = { bpr, tex: g.dev.createTexture({ size: [w, h], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC }), buf: g.dev.createBuffer({ size: bpr * h, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ }) };
+        return { output: 'texture rgba8unorm + rilettura (VideoFrame RGBA da buffer)', tm, filt };
+      }
+      cv = new OffscreenCanvas(w, h); ctx = cv.getContext('webgpu'); if (!ctx) throw new Error('getContext webgpu null');
+      ctx.configure({ device: g.dev, format: 'rgba8unorm', alphaMode: 'opaque', colorSpace: 'srgb' });
+      return { output: 'canvas webgpu rgba8unorm srgb → VideoFrame(canvas)', tm, filt };
+    },
+    async make(f, i) {
+      const dev = g.dev, dn = filt === FILT.dn, k = dn ? (i ? TMP.dnStrength : 0) : TMP.jndCap;
+      dev.queue.writeBuffer(ub, 0, new Float32Array([w, h, TM[tm], filt, TMP.hlgPeakNits, TMP.eetfTargetNits, k, TMP.dnSigma8bit]));
+      const tmp = [], src = await srcEntry(g, f, tmp), pipe = g.pipe(dn, src.copy);
+      const entries = [{ binding: 0, resource: src.res }, { binding: 1, resource: g.smp }, { binding: 2, resource: { buffer: ub } }];
+      if (dn) entries.push({ binding: 3, resource: hist[i % 2].createView() });
+      const ce = dev.createCommandEncoder();
+      const att = [{ view: (rb ? rb.tex : ctx.getCurrentTexture()).createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }];
+      if (dn) att.push({ view: hist[(i + 1) % 2].createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] });
+      const p = ce.beginRenderPass({ colorAttachments: att });
+      p.setPipeline(pipe); p.setBindGroup(0, dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries })); p.draw(3); p.end();
+      if (rb) ce.copyTextureToBuffer({ texture: rb.tex }, { buffer: rb.buf, bytesPerRow: rb.bpr }, [w, h]);
+      dev.queue.submit([ce.finish()]);
+      if (rb) {
+        await rb.buf.mapAsync(GPUMapMode.READ); for (const t of tmp) t.destroy();
+        try { return new VideoFrame(new Uint8Array(rb.buf.getMappedRange()), { format: 'RGBA', codedWidth: w, codedHeight: h, layout: [{ offset: 0, stride: rb.bpr }], timestamp: tsOf(i), duration: Math.round(S.frameDur), colorSpace: { primaries: 'bt709', transfer: 'bt709', matrix: 'rgb', fullRange: true } }); }
+        finally { rb.buf.unmap(); }
+      }
+      if (WAIT) await dev.queue.onSubmittedWorkDone(); for (const t of tmp) t.destroy();
+      return new VideoFrame(cv, { timestamp: tsOf(i), duration: Math.round(S.frameDur) });
+    },
+    close() { try { ub?.destroy(); rb?.tex.destroy(); rb?.buf.destroy(); for (const t of hist || []) t.destroy(); } catch {} },
+  };
+}
+/** (a) drawImage del frame su canvas 2D sRGB (come il concorrente, research/09). */
+function conv2d() {
+  let cv, ctx;
+  return {
+    prepare(w, h) { cv = new OffscreenCanvas(w, h); ctx = cv.getContext('2d', { colorSpace: 'srgb' }); if (!ctx) throw new Error('getContext 2d null'); return { contextAttributes: ctx.getContextAttributes ? ctx.getContextAttributes() : null }; },
+    make(f, i) { ctx.drawImage(f, 0, 0, cv.width, cv.height); return new VideoFrame(cv, { timestamp: tsOf(i), duration: Math.round(S.frameDur) }); },
+  };
+}
+/** (c) frame del decoder (configurato con colorSpace forzato) passato così com'è all'encoder. */
+const convPass = () => ({ make: (f, i) => new VideoFrame(f, { timestamp: tsOf(i), duration: Math.round(S.frameDur) }) });
+
+// ---------- PNG del frame centrale e file ----------
+async function toPng(vf) {
+  const w = vf.displayWidth, h = vf.displayHeight, rot = ((S.rot % 360) + 360) % 360, sw = rot === 90 || rot === 270;
+  const cv = new OffscreenCanvas(sw ? h : w, sw ? w : h), ctx = cv.getContext('2d', { colorSpace: 'srgb' });
+  ctx.translate(cv.width / 2, cv.height / 2); ctx.rotate(rot * Math.PI / 180); ctx.drawImage(vf, -w / 2, -h / 2, w, h);
+  return cv.convertToBlob({ type: 'image/png' });
+}
+function addFile(name, blob) {
+  const url = URL.createObjectURL(blob); S.files.push({ name, url, size: blob.size });
+  $('files').innerHTML = S.files.map((f) => `<a href="${f.url}" download="${f.name}">${f.name}</a> <small>${(f.size / 1048576).toFixed(2)} MB</small>`).join('<br>');
+  $('dlall').disabled = false;
+}
+async function mux(chunks, meta, kind, w, h) {
+  const out = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new MB.BufferTarget() });
+  const src = new MB.EncodedVideoPacketSource(kind); out.addVideoTrack(src, { rotation: [0, 90, 180, 270].includes(S.rot) ? S.rot : 0 }); await out.start();
+  const dc = { ...(meta || {}), codec: meta?.codec || chunks.codec, codedWidth: meta?.codedWidth || w, codedHeight: meta?.codedHeight || h, colorSpace: CS709 };
+  for (let i = 0; i < chunks.length; i++) await src.add(MB.EncodedPacket.fromEncodedChunk(chunks[i]), i === 0 ? { decoderConfig: dc } : undefined);
+  src.close(); await out.finalize();
+  return new Blob([out.target.buffer], { type: 'video/mp4' });
+}
+
+// ---------- encoder ----------
+const big = (w, h) => w * h > 2.5e6;
+const CODEC = { hevc: (w, h) => `hvc1.1.6.L${big(w, h) ? 153 : 123}.B0`, avc: () => 'avc1.640033', av1: (w, h) => `av01.0.${big(w, h) ? '12' : '08'}M.08` };
+const encCfg = (kind, w, h, mbps) => ({ codec: CODEC[kind](w, h), width: w, height: h, bitrate: mbps * 1e6, framerate: Math.round(S.fps), latencyMode: 'quality', ...(kind === 'avc' ? { avc: { format: 'avc' } } : {}) });
+async function pickKind8() {
+  try { if ((await VideoEncoder.isConfigSupported(encCfg('hevc', S.W, S.H, 8))).supported) return 'hevc'; } catch {}
+  R.notes.push('HEVC non codificabile in questo browser: uso H.264 (avc1.640033) al suo posto — solo verifica della logica (es. Chromium)');
+  return 'avc';
+}
+/** Una corsa completa: decode → conversione → encode → MP4 (+ PNG del frame centrale). */
+async function encodeRun(o) {
+  const r = { name: o.name, step: o.step, kind: o.kind, size: [o.w, o.h], targetMbps: o.mbps };
+  const cfg = encCfg(o.kind, o.w, o.h, o.mbps); r.codec = cfg.codec;
+  try { const sup = await VideoEncoder.isConfigSupported(cfg); r.isConfigSupported = sup.supported; if (!sup.supported) { r.skip = 'isConfigSupported = false'; return r; } } catch (e) { r.skip = errStr(e); return r; }
+  const chunks = []; let meta = null, encErr = null, png = null; chunks.codec = cfg.codec;
+  const enc = new VideoEncoder({ output: (c, m) => { chunks.push(c); if (m?.decoderConfig && !meta) meta = m.decoderConfig; }, error: (e) => { encErr = encErr || e; } });
+  const gop = Math.max(1, Math.round(S.fps * 2));
+  try {
+    enc.configure(cfg);
+    r.conv = (await o.conv.prepare?.(o.w, o.h)) ?? null;
+    const t0 = performance.now(); let tConv = 0;
+    const d = await decodeAll(o.decCfg || S.dcfg, async (f, i) => {
+      let inp = null;
+      try {
+        const tc = performance.now(); inp = await o.conv.make(f, i); tConv += performance.now() - tc;
+        if (i === 0) r.encoderInput = fInfo(inp);
+        if (o.png && i === S.mid) png = await toPng(inp);
+        if (encErr) throw encErr;
+        enc.encode(inp, { keyFrame: i % gop === 0 });
+      } finally { if (inp && inp !== f) inp.close(); f.close(); }
+      while (enc.encodeQueueSize > 3 && !encErr) await sleep(1);
+    });
+    await withTimeout(enc.flush(), 120000, 'flush encoder'); if (encErr) throw encErr;
+    const ms = performance.now() - t0; r.frames = d.frames; r.decodedFrame = d.first; r.fps = +(d.frames / ms * 1000).toFixed(1); r.convMsPerFrame = +(tConv / Math.max(1, d.frames)).toFixed(2);
+  } catch (e) { r.err = errStr(encErr || e); }
+  finally { try { if (enc.state !== 'closed') enc.close(); } catch {} try { o.conv.close?.(); } catch {} }
+  if (chunks.length) {
+    const bytes = chunks.reduce((a, c) => a + c.byteLength, 0), secs = chunks.length / S.fps;
+    r.chunks = chunks.length; r.bytes = bytes; r.realMbps = +(bytes * 8 / secs / 1e6).toFixed(2); r.ratioToTarget = +(r.realMbps / o.mbps).toFixed(2);
+    r.decoderConfig = meta ? { codec: meta.codec, coded: [meta.codedWidth, meta.codedHeight], colorSpace: csJ(meta.colorSpace), descLen: meta.description?.byteLength ?? null } : null;
+    try { r.file = `${o.id}_${o.kind}_${o.mbps}M.mp4`; addFile(r.file, await mux(chunks, meta, o.kind, o.w, o.h)); } catch (e) { r.muxErr = errStr(e); r.file = null; }
+  }
+  if (png) { r.png = `${o.id}_mid.png`; addFile(r.png, png); }
+  return r;
+}
+/** Solo decodifica (+ conversione opzionale, senza encoder): fps. */
+async function decodeRun(name, conv) {
+  const r = { name, step: 1 };
+  try {
+    if (conv?.prepare) r.conv = (await conv.prepare(S.W, S.H)) ?? null;
+    const t0 = performance.now();
+    const d = await decodeAll(S.dcfg, async (f, i) => { if (conv) { const v = await conv.make(f, i); v.close(); } f.close(); });
+    const ms = performance.now() - t0; r.frames = d.frames; r.fps = +(d.frames / ms * 1000).toFixed(1); r.first = d.first;
+  } catch (e) { r.err = errStr(e); } finally { try { conv?.close?.(); } catch {} }
+  return r;
+}
+
+// ---------- riepilogo ----------
+function renderSummary() {
+  const rows = Object.entries(R.runs).map(([id, r]) => {
+    const cls = r.err ? 'ko' : r.skip ? 'warn' : 'ok', st = r.err ? `ERR ${r.err}` : r.skip ? `saltato: ${r.skip}` : 'ok';
+    const fmt = r.first || r.decodedFrame; const f = fmt ? `${fmt.format ?? 'null'} ${fmt.colorSpace ? [fmt.colorSpace.primaries, fmt.colorSpace.transfer, fmt.colorSpace.matrix].join('/') : ''}` : '';
+    return `<tr><td><b>${id}</b></td><td>${r.step}</td><td class="${cls}">${st.replace(/</g, '&lt;')}</td><td>${r.codec || ''}</td><td>${r.size ? r.size.join('×') : ''}</td><td>${r.fps ?? ''}</td><td>${r.targetMbps ?? ''}</td><td>${r.realMbps ?? ''}</td><td>${f}</td><td>${r.file || ''}</td></tr>`;
+  });
+  $('sum').innerHTML = `<table><thead><tr><th>Corsa</th><th>#</th><th>Esito</th><th>Codec</th><th>Uscita</th><th>fps</th><th>Mbps chiesti</th><th>Mbps reali</th><th>Frame decodificato</th><th>File</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+}
+const outDims = (W, H) => { const s = Math.min(W, H), l = Math.max(W, H), short = s > 1080 ? 1080 : Math.max(2, Math.round(s / 4) * 2); const lo = Math.round(l * short / s / 2) * 2; return W >= H ? { w: lo, h: short } : { w: short, h: lo }; };
+
+// ---------- flusso ----------
+async function step(id, fn) { log(`${id}…`, 'state'); const r = await fn(); R.runs[id] = r; log(`${id}: ${r.err ? 'ERR ' + r.err : r.skip ? 'saltato (' + r.skip + ')' : `${r.fps ?? '?'} fps${r.realMbps ? `, ${r.realMbps} Mbps` : ''}`}`); show(); renderSummary(); return r; }
+$('file').onchange = () => { S.file = $('file').files[0] || null; if (S.url) { URL.revokeObjectURL(S.url); S.url = null; } $('go').disabled = !S.file; log(S.file ? `file: ${S.file.name} (${(S.file.size / 1048576).toFixed(1)} MB)` : 'nessun file', 'state'); };
+$('go').onclick = async () => {
+  $('go').disabled = true; R.runs = {}; R.notes = []; R.source = {};
+  const steps = new Set([...document.querySelectorAll('input[data-s]')].filter((c) => c.checked).map((c) => +c.dataset.s));
+  const rates = $('br').value.split(',').map(Number), tm = $('tm').value;
+  R.settings = { frames: +$('nf').value, bitratesMbps: rates, toneMapFor345: tm, steps: [...steps], toneMapParams: TMP };
+  try {
+    log('demux (Mediabunny)…', 'state');
+    await loadSource(+$('nf').value);
+    // dimensioni e formato reali dei frame del decoder (orientamento codificato, senza rotazione)
+    const keepN = S.n; S.n = 1; const pr = await decodeAll(S.dcfg, async (f) => { S.W = f.displayWidth; S.H = f.displayHeight; try { await probeGpu(f); } finally { f.close(); } }); S.n = keepN;
+    R.source.decodedFirst = pr.first;
+    log(`sorgente ${R.source.codec} ${S.W}×${S.H} rot ${S.rot} ${S.fps.toFixed(2)} fps, ${S.n} frame, cs ${JSON.stringify(R.source.colorSpace)}`);
+    S.kind8 = await pickKind8(); R.features.codec8 = S.kind8;
+    try { R.features.av1Supported = (await VideoEncoder.isConfigSupported(encCfg('av1', S.W, S.H, 8))).supported; } catch (e) { R.features.av1Supported = errStr(e); }
+    show();
+    const base = (mbps, t = tm) => ({ id: `b_${t}`, name: `(b) WebGPU inversa HLG → ${t === 'eetf' ? 'BT.2390 EETF' : 'Hable'} → BT.709`, step: 2, kind: S.kind8, w: S.W, h: S.H, mbps, conv: convGpu(t, FILT.none), png: mbps === rates[0] });
+    const once = async (id, fn) => R.runs[id] || step(id, fn);
+    if (steps.has(1)) {
+      await step('dec_only', () => decodeRun('VideoDecoder, solo decodifica'));
+      await step('dec_canvas2d', () => decodeRun('VideoDecoder → canvas 2D sRGB → VideoFrame', conv2d()));
+      await step('dec_webgpu', () => decodeRun(`VideoDecoder → WebGPU ${tm} → VideoFrame`, convGpu(tm, FILT.none)));
+      await step('seek_1p', () => seekRun(1));
+      await step('seek_2p', () => seekRun(2));
+    }
+    for (const mbps of rates) {
+      const png = mbps === rates[0];
+      if (steps.has(2)) {
+        await once(`a_drawimage@${mbps}`, () => encodeRun({ id: 'a_drawimage', name: '(a) drawImage su canvas 2D sRGB', step: 2, kind: S.kind8, w: S.W, h: S.H, mbps, conv: conv2d(), png }));
+        await once(`b_eetf@${mbps}`, () => encodeRun(base(mbps, 'eetf')));
+        await once(`b_hable@${mbps}`, () => encodeRun(base(mbps, 'hable')));
+        await once(`c_cs709@${mbps}`, () => encodeRun({ id: 'c_cs709', name: '(c) VideoDecoderConfig.colorSpace = BT.709 forzato, frame diretto all\'encoder', step: 2, kind: S.kind8, w: S.W, h: S.H, mbps, conv: convPass(), decCfg: { ...S.dcfg, colorSpace: CS709 }, png }));
+      }
+      if (steps.has(3)) {
+        await once(`b_${tm}@${mbps}`, () => encodeRun(base(mbps)));
+        await once(`f_dn@${mbps}`, () => encodeRun({ id: `f_dn_${tm}`, name: `pre-filtro denoise temporale (ricorsivo, adattivo al moto) su ${tm}`, step: 3, kind: S.kind8, w: S.W, h: S.H, mbps, conv: convGpu(tm, FILT.dn), png }));
+        await once(`f_jnd@${mbps}`, () => encodeRun({ id: `f_jnd_${tm}`, name: `pre-filtro JND (smoothing 3×3 limitato a ${TMP.jndCap}·JND) su ${tm}`, step: 3, kind: S.kind8, w: S.W, h: S.H, mbps, conv: convGpu(tm, FILT.jnd), png }));
+      }
+      if (steps.has(4)) {
+        await once(`b_${tm}@${mbps}`, () => encodeRun(base(mbps)));
+        await once(`av1@${mbps}`, () => encodeRun({ id: `av1_${tm}`, name: `AV1 8 bit dagli stessi frame SDR (${tm})`, step: 4, kind: 'av1', w: S.W, h: S.H, mbps, conv: convGpu(tm, FILT.none) }));
+      }
+      if (steps.has(5)) {
+        if (Math.min(S.W, S.H) > 1080) { const od = outDims(S.W, S.H); await once(`ds1080@${mbps}`, () => encodeRun({ id: `ds1080_${tm}`, name: `4K → ${od.w}×${od.h} in WebGPU (${tm})`, step: 5, kind: S.kind8, w: od.w, h: od.h, mbps, conv: convGpu(tm, FILT.none), png })); }
+        else if (!R.notes.some((n) => n.startsWith('punto 5'))) R.notes.push('punto 5 saltato: sorgente non 4K');
+      }
+    }
+    log('finito: premi «Copia risultati», incolla in chat e scarica i file', 'state');
+  } catch (e) { R.fatal = errStr(e); log('ERRORE: ' + R.fatal, 'state'); }
+  show(); renderSummary(); $('go').disabled = false;
+};
+$('dlall').onclick = async () => { for (const a of $('files').querySelectorAll('a')) { a.click(); await sleep(800); } };
+$('copy').onclick = () => {
+  const s = JSON.stringify(R);
+  const done = () => { $('copied').textContent = 'Copiato'; }, fail = () => { getSelection().selectAllChildren($('oc')); $('copied').textContent = 'Seleziona e copia a mano'; };
+  try { navigator.clipboard ? navigator.clipboard.writeText(s).then(done, fail) : fail(); } catch { fail(); }
+};
+window.__sdr8 = { ready: true, R, files: () => S.files.map((f) => ({ name: f.name, size: f.size })) };
+show();
+</script>
+</body>
+</html>
