@@ -50,7 +50,7 @@ if (ONLY.includes('nuovo')) for (let i = 1; i <= N; i++) { // scelta file → ex
 if (ONLY.includes('impostazioni')) for (let i = 1; i <= N; i++) { // dopo l'export: «Altre impostazioni» → bitrate diverso → Comprimi
   await pick(files[0]); await go(); await waitStage(['done', 'error']);
   await page.click(`input[name="fcv-br"][value="${[4, 6, 10, 8][i % 4]}"]`, { force: true }).catch(() => {});
-  await page.setInputFiles('[data-ref="qAdd2"]', files[1]); await waitFile(); await page.waitForTimeout(300);
+  await page.setInputFiles('[data-ref="qAdd2"]', files[1]); await page.waitForFunction(() => document.querySelectorAll('.fcv-q-item').length === 2 && ![...document.querySelectorAll('.fcv-q-item')].some((li) => /lettura…/.test(li.textContent)), null, { timeout: 30000 }); await page.waitForTimeout(300);
   await go(); await waitStage(['done', 'error']); await rec('impostazioni', i, await stage());
 }
 if (ONLY.includes('annulla')) for (let i = 1; i <= N; i++) { // annulla durante la fase video
