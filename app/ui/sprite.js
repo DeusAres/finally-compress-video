@@ -75,6 +75,19 @@ export const SPRITES = {
   star: [
     '...y...', '...y...', 'yyyyyyy', '.yyyyy.', '..yyy..', '.yy.yy.', 'yy...yy',
   ],
+  // v0.38: interruttore HDR/SDR (sole/luna), chiudi, bussola (Apri in Safari)
+  sun: [
+    '.....o.....', '.o...o...o.', '..o.....o..', '....yyy....', '...yyyyy...', 'oo.yyyyy.oo',
+    '...yyyyy...', '....yyy....', '..o.....o..', '.o...o...o.', '.....o.....',
+  ],
+  moon: [
+    '....wwww...', '..wwwww....', '.wwww......', '.www.......', 'wwww.......', 'wwww.......',
+    'wwww.......', '.wwww....w.', '.wwwww..ww.', '..wwwwwwww.', '....wwww...',
+  ],
+  x: ['cc...cc', '.cc.cc.', '..ccc..', '...c...', '..ccc..', '.cc.cc.', 'cc...cc'],
+  compass: [
+    '..ccccc..', '.c.....c.', 'c....c..c', 'c...ccc.c', 'c..ccc..c', 'c.ccc...c', 'c..c....c', '.c.....c.', '..ccccc..',
+  ],
   chevron: [
     'c...', 'cc..', '.cc.', '..cc', '.cc.', 'cc..', 'c...',
   ],

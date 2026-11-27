@@ -23,31 +23,28 @@
   --px-steel:  #333c57;
   --px-paper:  #f3ecdc; /* fondo chiaro "carta", unico colore extra */
 
-  /* ---- Font: 3 famiglie pixel (solo Google Fonts, con fallback) ----
-     Silkscreen: brand, titoli, cifre grandi (multipli di 8 px). Pixelify Sans: testo, etichette, bottoni, chip, note.
-     VT323 (monospazio pixel): numeri di tabelle/previsioni, contatori, nome file, log tecnico. */
-  --font-pixel: "Silkscreen", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-body: "Pixelify Sans", ui-rounded, -apple-system, system-ui, "Helvetica Neue", sans-serif;
+  /* ---- Font: 2 famiglie pixel Jersey (OFL, in locale: vendor/fonts) ----
+     Jersey 10: brand, titoli, cifre grandi. Jersey 15: testo, etichette, bottoni, chip, note E numeri (tabelle, contatori, log).
+     Scelte per le cifre ben distinte (3/5, 5/S, 8/B, 0/O) che il vecchio Pixelify Sans confondeva. */
+  --font-pixel: "Jersey 10", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-body: "Jersey 15", ui-rounded, -apple-system, system-ui, "Helvetica Neue", sans-serif;
   --font-digits: var(--font-pixel);                      /* compat: cifre grandi = font pixel */
-  --font-mono: "VT323", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-mono: "Jersey 15", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  /* ---- Scala tipografica unica (testo 16/18/20/24; 14 solo per note molto secondarie) ---- */
-  /* testo (Pixelify Sans) */
-  --fs-xs: 14px;    /* solo note molto secondarie, piè di pagina */
-  --fs-sm: 16px;    /* etichette, chip, testo secondario */
-  --fs-md: 18px;    /* testo corrente, bottoni */
-  --fs-lg: 20px;    /* bottoni grandi, titoli di fase */
-  --fs-body-xl: 24px; /* testo in evidenza */
-  /* monospazio pixel (VT323: glifi stretti, dimensioni maggiori) */
+  /* ---- Scala tipografica unica (Jersey ha x-height bassa: corpi più grandi del vecchio Pixelify) ---- */
+  --fs-xs: 16px;    /* note molto secondarie */
+  --fs-sm: 18px;    /* etichette, chip, testo secondario */
+  --fs-md: 20px;    /* testo corrente, bottoni */
+  --fs-lg: 24px;    /* bottoni grandi, titoli di fase */
+  --fs-body-xl: 28px; /* testo in evidenza */
   --fs-mono: 22px;      /* numeri di tabella, nome file */
-  --fs-mono-lg: 28px;   /* contatori */
-  --fs-log: 20px;       /* log tecnico */
-  /* font pixel: solo multipli di 8 (glifi nitidi) */
-  --fs-px: 16px;    /* titoli delle card, numeri dei passi */
-  --fs-xl: 24px;    /* brand, cifre delle statistiche */
-  --fs-2xl: 32px;   /* titolo risultato */
-  --fs-3xl: 48px;   /* percentuale di avanzamento */
-  --fs-4xl: 64px;   /* risparmio finale */
+  --fs-mono-lg: 30px;   /* contatori */
+  --fs-log: 18px;       /* log tecnico */
+  --fs-px: 20px;    /* titoli delle card, numeri dei passi */
+  --fs-xl: 30px;    /* brand, cifre delle statistiche */
+  --fs-2xl: 40px;   /* titolo risultato */
+  --fs-3xl: 56px;   /* percentuale di avanzamento */
+  --fs-4xl: 72px;   /* risparmio finale */
   --lh-tight: 1.15;
   --lh-text: 1.4;
 
@@ -60,8 +57,8 @@
   --sp-6: calc(var(--px-unit) * 6);       /* 24 */
   --px-border: var(--px-unit);            /* spessore bordo pixel */
   --px-gap: var(--sp-4);                  /* 16px */
-  --px-touch: 48px;                       /* target tocco (≥44): bottoni normali */
-  --px-touch-xl: 64px;                    /* bottoni principali */
+  --px-touch: 44px;                       /* target tocco (≥44): bottoni normali */
+  --px-touch-xl: 56px;                    /* bottoni principali */
   --px-step: steps(4, end);               /* timing per animazioni a scatti */
 
   /* ---- Ruoli semantici: CHIARO ---- */
@@ -146,7 +143,7 @@
 
 /* ================= Base ================= */
 *, *::before, *::after { box-sizing: border-box; }
-/* Pixelify Sans: la legatura "fi" sembra una "A"; !important perché la scorciatoia `font:` azzera queste proprietà */
+/* (storico, Pixelify) la legatura "fi" sembra una "A"; !important perché la scorciatoia `font:` azzera queste proprietà */
 *, *::before, *::after { font-variant-ligatures: none !important; font-feature-settings: "liga" 0, "rlig" 0, "ccmp" 0, "calt" 0 !important; }
 html { -webkit-text-size-adjust: 100%; background: var(--bg); }
 body {
@@ -178,7 +175,7 @@ img, svg { display: block; max-width: 100%; }
   background: var(--surface);
   color: var(--text);
   margin: var(--px-border);                       /* spazio per il bordo disegnato con ombre */
-  padding: var(--sp-4);
+  padding: var(--sp-3);
   box-shadow: var(--px-ring), var(--px-drop);
   min-width: 0;
 }
@@ -262,7 +259,7 @@ img, svg { display: block; max-width: 100%; }
 .px-seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
 .px-seg span {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  min-height: 56px; padding: var(--sp-1) 2px;
+  min-height: 48px; padding: var(--sp-1) 2px;
   background: var(--surface); color: var(--text);
   font: 400 var(--fs-xl)/1 var(--font-pixel); text-align: center;
 }

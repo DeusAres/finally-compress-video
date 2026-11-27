@@ -8,38 +8,42 @@ import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from '.
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
 const BR_INFO = {
-  4: { q: 2, t: 'Molto leggero: dettagli e ombre si impastano. Solo per chat.' },
-  6: { q: 3, t: 'Leggero: bene sullo schermo del telefono, qualche difetto nelle scene mosse.' },
-  8: { q: 4, t: 'Consigliato: quasi identico all\'originale (VMAF ~89). Il risparmio dipende dal video: vedi la stima qui accanto.' },
-  10: { q: 4, t: 'Più margine per scene difficili: acqua, foglie, coriandoli, movimento.' },
+  4: { q: 2, t: 'Molto leggero: solo per chat.' },
+  6: { q: 3, t: 'Leggero: bene sul telefono, scene mosse un po\' meno.' },
+  8: { q: 4, t: 'Consigliato: quasi identico (VMAF ~89).' },
+  10: { q: 4, t: 'Più margine per scene difficili.' },
   12: { q: 5, t: 'Qualità alta, risparmio moderato.' },
-  14: { q: 5, t: 'Quasi trasparente: serve solo con originali molto dettagliati.' },
+  14: { q: 5, t: 'Quasi trasparente: per originali molto dettagliati.' },
 };
 const KF_INFO = {
-  1: 'Scorrimento e montaggio precisissimi, file un po\' più pesante.',
+  1: 'Scorrimento precisissimo, file un po\' più pesante.',
   4: 'Equilibrio consigliato tra peso e scorrimento.',
   10: 'File un filo più leggero, scorrimento meno preciso.',
 };
+const MODE_INFO = {
+  hdr: '<b>HDR</b> 10 bit, Dolby Vision conservato.',
+  sdr: '<b>SDR</b> Compatibile ovunque, più veloce, niente HDR.',
+};
 const AUDIO = [
-  { v: 'copy', b: 'Copia originale', t: 'Nessuna perdita, istantaneo. Consigliato.' },
-  { v: 'v4', b: 'Ripara eco v4', t: 'Se l\'audio ha un\'eco o un rimbombo digitale (es. dopo un Comando Rapido). Analizza tutto il file.' },
-  { v: 'v3', b: 'Ripara eco v3', t: 'Versione precedente: adattiva, canali L+R.', dev: true },
-  { v: 'v2', b: 'Ripara eco v2', t: 'Versione precedente: filtro per frequenza.', dev: true },
-  { v: 'v1', b: 'Ripara eco v1', t: 'Prima versione, la più semplice.', dev: true },
-  { v: 'reenc', b: 'Solo ricodifica', t: 'Diagnostica: ricodifica AAC senza filtri.', dev: true },
+  { v: 'copy', b: 'Originale', t: 'Copia l\'audio com\'è: nessuna perdita, istantaneo. Consigliato.' },
+  { v: 'v4', b: 'Ripara eco v4', t: 'Per eco o rimbombo digitale (es. dopo un Comando Rapido). Analizza tutto il file.' },
+  { v: 'v3', b: 'Ripara eco v3', t: 'Versione precedente (confronti tecnici): adattiva, canali L+R.', dev: true },
+  { v: 'v2', b: 'Ripara eco v2', t: 'Versione precedente (confronti tecnici): filtro per frequenza.', dev: true },
+  { v: 'v1', b: 'Ripara eco v1', t: 'Prima versione (confronti tecnici), la più semplice.', dev: true },
+  { v: 'reenc', b: 'Ricodifica', t: 'Diagnostica: ricodifica AAC senza filtri.', dev: true },
 ];
-const KEEP_OPEN = 'Tieni l\'app aperta e lo schermo acceso finché finisce.';
+const KEEP_OPEN = 'Tieni l\'app aperta e lo schermo acceso.';
 const AUDIO_SHORT = { copy: 'audio originale', v4: 'eco v4', v3: 'eco v3', v2: 'eco v2', v1: 'eco v1', reenc: 'audio ricodificato' };
 const PHASES = [
   { id: 'analisi', label: 'Analisi', sub: 'Leggo tracce, colori e Dolby Vision' },
-  { id: 'video', label: 'Video', sub: 'Ricodifico i fotogrammi in HEVC 10-bit, a segmenti riprendibili' },
-  { id: 'assemblaggio', label: 'Unione', sub: 'Assemblaggio: unisco i segmenti video nel file', icon: 'film' },
+  { id: 'video', label: 'Video', sub: 'HEVC a segmenti riprendibili' },
+  { id: 'assemblaggio', label: 'Unione', sub: 'Unisco i segmenti video', icon: 'film' },
   { id: 'audio', label: 'Audio', sub: 'Preparo la traccia audio' },
-  { id: 'scrittura', label: 'File', sub: 'Assemblo il file e i metadati' },
+  { id: 'scrittura', label: 'File', sub: 'File e metadati' },
 ];
 const WEIGHT = { analisi: 0.04, video: 0.82, assemblaggio: 0.04, audio: 0.07, scrittura: 0.03 };
 const parN = (s) => (s.par2 ? (s.par3 ? 3 : 2) : 0); // player di estrazione per la stima del tempo (0 = 1 player)
-const DEFAULTS = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, par3: false, sceneQ: true, apac: true, container: 'mov' }; // par3 (v0.37, sperimentale): 3 player invece di 2 // container: 'mov' (QuickTime, come gli originali iPhone, v0.34) | 'mp4' // apac: audio spaziale + metadati iPhone (mebx) mantenuti (v0.32/v0.33, solo se la sorgente li ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
+const DEFAULTS = { mode: 'hdr', bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, par3: false, sceneQ: true, apac: true, container: 'mov' }; // par3 (v0.37, sperimentale): 3 player invece di 2 // container: 'mov' (QuickTime, come gli originali iPhone, v0.34) | 'mp4' // apac: audio spaziale + metadati iPhone (mebx) mantenuti (v0.32/v0.33, solo se la sorgente li ha) // par2 ON da v0.24 (verificato su iPhone, anche con PiP; fallback automatico)
 
 const nf1 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 const nf0 = new Intl.NumberFormat('it-IT', { maximumFractionDigits: 0 });
@@ -65,116 +69,138 @@ function ensureStyles() {
 
 function template(opts) {
   const s = (k, o) => sprite(SPRITES[k], o);
+  const chev = s('chevron', { scale: 2, className: 'chev' });
   const brSeg = BITRATES.map((b) => `<label><input type="radio" name="fcv-br" value="${b}"${b === 8 ? ' aria-label="8 Mbps, consigliato"' : ''}><span>${b === 8 ? `<i class="star">${s('star', { scale: 2 })}</i>` : ''}${b}<small>Mbps</small></span></label>`).join('');
   const kfSeg = KEYFRAMES.map((k) => `<label><input type="radio" name="fcv-kf" value="${k}"><span>${k}<small>sec</small></span></label>`).join('');
-  const audio = AUDIO.map((a) => `<label class="fcv-radio"${a.dev ? ' data-dev' : ''}><input type="radio" name="fcv-audio" value="${a.v}"><div><b>${a.b}</b><span>${a.t}</span></div></label>`).join('');
-  const chain = PHASES.map((p) => `<li data-p="${p.id}">${s(p.icon || p.id, { scale: 2 })}<span>${p.label}</span></li>`).join('');
+  const audio = AUDIO.map((a) => `<label class="fcv-radio"${a.dev ? ' data-dev' : ''}><input type="radio" name="fcv-audio" value="${a.v}" data-desc="${esc(a.t)}"><div><b>${a.b}</b></div></label>`).join('');
+  const chain = PHASES.map((p) => `<li data-p="${p.id}" title="${p.label}">${s(p.icon || p.id, { scale: 2 })}<span>${p.label}</span></li>`).join('');
+  // opzione (casella) con titolo breve, sottotitolo e spiegazione lunga dietro il tasto «i»
+  const opt = (name, b, sub, desc, extra = '') => `<label class="fcv-radio fcv-opt"><input type="checkbox" name="${name}" value="1"${extra}><div><b>${b}</b>${sub ? `<i>${sub}</i>` : ''}<span class="fcv-d" hidden>${desc}</span></div><button type="button" class="fcv-i" aria-expanded="false" aria-label="Dettagli: ${esc(b)}">i</button></label>`;
+  const ver = (String(opts.version || '').match(/v?\d[\w.]*/) || [''])[0];
   return `
 <header class="fcv-head">
-  ${s('logo', { scale: 4, className: 'fcv-logo px-bob', title: 'Logo' })}
-  <h1 class="px-title">Finally <b>Compress<span class="fcv-cursor px-blink"></span></b></h1>
-  <p>Video HDR e Dolby Vision dell'iPhone, più leggeri. Tutto resta sul telefono.${opts.version ? ` <span class="px-chip px-chip--num">${esc(opts.version)}</span>` : ''}</p>
-  <p class="fcv-open-safari" data-ref="safariBox" hidden><button type="button" class="px-btn" data-ref="safariBtn">Apri in Safari</button> <span data-ref="safariMsg" role="status" aria-live="polite">Nella scheda di Safari funziona la Picture-in-Picture.</span></p>
+  ${s('logo', { scale: 3, className: 'fcv-logo px-bob', title: 'Logo' })}
+  <h1 class="px-title">Finally <b>Compress</b> Video<span class="fcv-cursor px-blink"></span></h1>
+  ${ver ? `<button type="button" class="px-chip px-chip--num fcv-ver" data-ref="verBtn" aria-haspopup="dialog" aria-label="Informazioni sull'app, versione ${esc(ver)}">${esc(ver)}</button>` : `<button type="button" class="px-chip fcv-ver" data-ref="verBtn" aria-haspopup="dialog">Info</button>`}
+  <button type="button" class="px-chip fcv-safari" data-ref="safariBtn" hidden title="Apri in Safari: lì funziona la Picture-in-Picture" aria-label="Apri in Safari (nella scheda di Safari funziona la Picture-in-Picture)">${s('compass', { scale: 2 })}</button>
 </header>
+<p class="fcv-open-msg" data-ref="safariMsg" role="status" aria-live="polite"></p>
 
-<ol class="fcv-steps" aria-label="Passi">
-  <li data-step="1"><span class="n">1</span><span class="t">Scegli</span></li>
-  <li data-step="2"><span class="n">2</span><span class="t">Regola</span></li>
-  <li data-step="3"><span class="n">3</span><span class="t">Comprimi</span></li>
-</ol>
-
-<div class="fcv-drop" data-ref="drop" hidden aria-hidden="true">${s('film', { scale: 8, className: 'px-bob' })}<b class="px-title">Rilascia qui i video</b><span>Più video = una coda, compressi uno alla volta</span></div>
+<div class="fcv-drop" data-ref="drop" hidden aria-hidden="true">${s('film', { scale: 8, className: 'px-bob' })}<b class="px-title">Rilascia qui i video</b><span>Più video = una coda</span></div>
 
 <section class="px-panel fcv-card fcv-step-file" aria-labelledby="fcv-h1">
-  <header><span class="num">1</span><h2 class="px-title" id="fcv-h1">Scegli il video</h2></header>
+  <h2 class="px-sr" id="fcv-h1">Scegli il video</h2>
   <label class="fcv-pick" data-ref="pick">
     <input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input" aria-label="Scegli uno o più video">
-    ${s('film', { scale: 7, className: 'px-bob' })}
+    ${s('film', { scale: 5, className: 'px-bob' })}
     <span class="fcv-pick-cta">Tocca per scegliere</span>
-    <small>Uno o più video: con più video si crea una coda, compressi uno dopo l'altro.</small>
-    <small>Da «Scegli file» (app File) il video arriva intatto; da «Libreria foto» iOS può consegnare una copia ricodificata. Nessun caricamento: il video non lascia l'iPhone.</small>
+    <small>Uno o più video (più video = coda). Restano sul telefono.</small>
   </label>
+  <details class="fcv-note" data-ref="pickNote">
+    <summary>${chev}<span>Meglio «Scegli file» che «Libreria foto»</span></summary>
+    <div class="fcv-dbody"><p class="fcv-subtle">Da «Scegli file» (app File) il video arriva intatto; da «Libreria foto» iOS può consegnare una copia ricodificata. Nessun caricamento: il video non lascia l'iPhone.</p></div>
+  </details>
   <p class="fcv-drop-msg" data-ref="dropMsg" role="status" aria-live="polite" hidden></p>
   <div class="fcv-file" data-ref="fileBox" hidden>
-    <div class="fcv-file-name">${s('film', { scale: 4 })}<div><strong data-ref="fName"></strong><div class="fcv-chips" data-ref="fChips"></div></div></div>
-    <div class="fcv-stats">
-      <div class="fcv-stat"><span class="px-label">Peso</span><span class="v px-digits" data-ref="fSize">—</span></div>
-      <div class="fcv-stat"><span class="px-label">Durata</span><span class="v px-digits" data-ref="fDur">—</span></div>
-      <div class="fcv-stat"><span class="px-label">Formato</span><span class="v px-digits" data-ref="fRes">—</span></div>
+    <div class="fcv-file-name">${s('film', { scale: 3 })}<strong data-ref="fName"></strong>
+      <label class="px-btn fcv-relabel fcv-sm" title="Aggiungi altri video (coda)">Aggiungi<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAddSingle" aria-label="Aggiungi altri video (coda)"></label>
+      <label class="px-btn fcv-relabel fcv-sm" data-ref="change">Cambia<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input2" aria-label="Cambia video"></label>
     </div>
-    <p class="fcv-warn fcv-orig" data-ref="origNote" role="status" hidden></p>
-    <div class="fcv-file-actions"><label class="px-btn fcv-relabel">Aggiungi altri video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAddSingle" aria-label="Aggiungi altri video (coda)"></label><label class="px-btn fcv-relabel" data-ref="change">Cambia video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input2" aria-label="Cambia video"></label></div>
+    <div class="fcv-chips"><span class="px-chip px-chip--num" data-ref="fSize" title="Peso">—</span><span class="px-chip px-chip--num" data-ref="fDur" title="Durata">—</span><span class="px-chip px-chip--num" data-ref="fRes" title="Formato">—</span><span class="fcv-chips-more" data-ref="fChips"></span></div>
+    <details class="fcv-note fcv-warnbox" data-ref="origNote" hidden>
+      <summary>${chev}<span>Copia ricodificata da Foto, non l'originale</span></summary>
+      <div class="fcv-dbody"><p class="fcv-subtle" data-ref="origTxt" role="status"></p></div>
+    </details>
   </div>
 </section>
 
 <section class="px-panel fcv-card fcv-queue" data-ref="queue" hidden aria-labelledby="fcv-hq">
-  <header><span class="num">1</span><h2 class="px-title" id="fcv-hq">Coda di video</h2><span class="px-chip px-chip--num fcv-q-count" data-ref="qCount">0</span></header>
+  <header><h2 class="px-title" id="fcv-hq">Coda di video</h2><span class="px-chip px-chip--num fcv-q-count" data-ref="qCount">0</span></header>
   <p class="fcv-q-msg" data-ref="qMsg" role="status" aria-live="polite" hidden></p>
   <p class="fcv-q-tot" data-ref="qTot" aria-live="polite"></p>
   <ol class="fcv-q-list" data-ref="qList" aria-label="Video in coda"></ol>
   <div class="fcv-q-actions">
-    <label class="px-btn px-btn--primary fcv-relabel" data-ref="qRelinkBox" hidden><span data-ref="qRelinkTxt">Riseleziona i video</span><input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qRelink" aria-label="Riseleziona i video della coda"></label>
-    <label class="px-btn fcv-relabel">Aggiungi video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAdd" aria-label="Aggiungi video alla coda"></label>
-    <button class="px-btn" type="button" data-ref="qClear">Svuota coda</button>
+    <label class="px-btn px-btn--primary fcv-relabel fcv-sm" data-ref="qRelinkBox" hidden><span data-ref="qRelinkTxt">Riseleziona i video</span><input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qRelink" aria-label="Riseleziona i video della coda"></label>
+    <label class="px-btn fcv-relabel fcv-sm">Aggiungi video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAdd" aria-label="Aggiungi video alla coda"></label>
+    <button class="px-btn fcv-sm" type="button" data-ref="qClear">Svuota coda</button>
   </div>
-  <p class="fcv-subtle">I video si comprimono uno alla volta, nell'ordine in cui li hai aggiunti; quelli aggiunti mentre lavora vanno in fondo. Le impostazioni valgono per tutta la coda.</p>
-</section>
-
-<section class="px-panel fcv-card fcv-step-set" aria-labelledby="fcv-h2">
-  <header><span class="num">2</span><h2 class="px-title" id="fcv-h2">Regola la qualità</h2></header>
-  <fieldset class="fcv-field">
-    <legend class="px-label">Bitrate video</legend>
-    <div class="px-seg fcv-seg-br" data-ref="br">${brSeg}</div>
-    <p class="fcv-hint" data-ref="brHint" aria-live="polite"></p>
-  </fieldset>
-  <div class="fcv-meters">
-    <div class="fcv-meter fcv-meter--wide"><span class="px-label">Qualità</span><div class="fcv-hearts" data-ref="hearts"></div></div>
-  </div>
-  <table class="fcv-tbl fcv-est-tbl" aria-live="polite"><caption class="px-label">Previsione</caption><tbody>
-    <tr><th scope="row">Peso</th><td data-ref="est">—</td></tr>
-    <tr><th scope="row">Tempo</th><td data-ref="estT">—</td></tr>
-  </tbody></table>
-  <p class="fcv-subtle" data-ref="estSrc" hidden></p>
-  <p class="fcv-warn" data-ref="warn" hidden></p>
-  <details class="fcv-adv">
-    <summary>${s('chevron', { scale: 2, className: 'chev' })}<span class="fcv-sum-txt"><b>Opzioni avanzate</b><span class="fcv-adv-sum" data-ref="advSum"></span></span></summary>
-    <fieldset class="fcv-field">
-      <legend class="px-label">Fotogramma chiave ogni</legend>
-      <div class="px-seg" data-ref="kf">${kfSeg}</div>
-      <p class="fcv-hint" data-ref="kfHint"></p>
-    </fieldset>
-    <fieldset class="fcv-field">
-      <legend class="px-label">Audio</legend>
-      <div class="fcv-radios" data-ref="audio">${audio}</div>
-      <p class="fcv-subtle">Le voci "versione precedente" e "diagnostica" servono per confronti tecnici.</p>
-    </fieldset>
-    <fieldset class="fcv-field" data-ref="apacBox" hidden>
-      <legend class="px-label">Tracce iPhone</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-apac" value="1" checked><div><b>Mantieni audio spaziale e metadati iPhone</b><i>(video registrati con iPhone)</i><span>Copia invariate la traccia audio spaziale e le tracce di metadati dell'iPhone (orientamento, volti, Live Photo, luminosità della scena, «cinematic-audio»), come nell'originale: in Foto restano l'audio spaziale e «Mix audio». L'audio spaziale (e la sua traccia «cinematic-audio») solo con l'audio «copia»: con la riparazione dell'eco o la ricodifica viene tolto, i metadati video restano. Audio spaziale ~0,4 Mbps, metadati trascurabili.</span></div></label>
-    </fieldset>
-    <fieldset class="fcv-field">
-      <legend class="px-label">Contenitore</legend>
-      <div class="fcv-radios">
-        <label class="fcv-radio"><input type="radio" name="fcv-container" value="mov" checked><div><b>MOV (come iPhone, consigliato)</b><span>File QuickTime .mov come gli originali dell'iPhone: le tracce di audio spaziale e metadati vengono riconosciute da Foto.</span></div></label>
-        <label class="fcv-radio"><input type="radio" name="fcv-container" value="mp4"><div><b>MP4</b><span>File .mp4 (come fino alla v0.33), per programmi che non leggono il MOV.</span></div></label>
-      </div>
-    </fieldset>
-    <fieldset class="fcv-field" data-ref="dsBox" hidden>
-      <legend class="px-label">Risoluzione</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-ds" value="1"><div><b>Riduci a 1080p (sperimentale, oggi non funziona)</b><i>(su Safari 27 l'encoder riduce a 8 bit: HDR perso → oggi l'export si ferma)</i><span>Misurato su iPhone (Safari 27.0.1): quando è l'encoder di Safari a ridurre il 4K a 1080p l'uscita diventa 8 bit (HDR perso), quindi l'app ferma l'export con un messaggio invece di salvare un video senza HDR. Lascia l'opzione spenta: resta qui solo per riprovare dopo un aggiornamento di Safari. Se un giorno funzionasse: video a 1080×1920 (o 1920×1080) HDR a 10 bit, tempo come il 4K.</span></div></label>
-    </fieldset>
-    <fieldset class="fcv-field">
-      <legend class="px-label">Sperimentale</legend>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-sceneq" value="1"><div><b>Qualità garantita per scena</b><i>(più lento: ~1,6× il tempo)</i><span>Prova più bitrate per ogni tratto e sceglie il minimo che resta «quasi perfetto» (VMAF stimato ≥ 88); più lento. Il bitrate scelto sopra diventa il limite massimo: il file non pesa mai più della stima.</span></div></label>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-bgaudio" value="1"><div><b>Test background con audio</b><i>(sperimentale: su iOS 27 non mantiene la decodifica in background)</i><span>Riproduce un audio quasi muto per provare a far continuare la compressione con l'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.</span></div></label>
-      <label class="fcv-radio"><input type="checkbox" name="fcv-par2" value="1"><div><b>Estrazione parallela</b><i>(~1,7× più veloce; se un player sbaglia passa a 1 per pochi frame, poi torna al parallelo da solo)</i></div></label>
-      <div class="fcv-radios" role="radiogroup" aria-label="Player di estrazione"><label class="fcv-radio"><input type="radio" name="fcv-npar" value="2"><div><b>Estrazione: 2 player</b></div></label><label class="fcv-radio"><input type="radio" name="fcv-npar" value="3"><div><b>3 player (sperimentale)</b><i>(oltre ~108 fps se l'encoder regge; fallback automatico come per 2)</i></div></label></div>
-    </fieldset>
+  <details class="fcv-note">
+    <summary>${chev}<span>Come funziona la coda</span></summary>
+    <div class="fcv-dbody"><p class="fcv-subtle">I video si comprimono uno alla volta, nell'ordine in cui li hai aggiunti; quelli aggiunti mentre lavora vanno in fondo. Le impostazioni valgono per tutta la coda.</p></div>
   </details>
 </section>
 
-<section class="px-panel fcv-card fcv-step-go" aria-labelledby="fcv-h3">
-  <header><span class="num">3</span><h2 class="px-title" id="fcv-h3">Comprimi</h2></header>
+<section class="px-panel fcv-card fcv-step-set" aria-labelledby="fcv-h2">
+  <h2 class="px-sr" id="fcv-h2">Regola la qualità</h2>
+  <fieldset class="fcv-field">
+    <legend class="px-sr">Bitrate video</legend>
+    <div class="fcv-rowh"><span class="px-label" aria-hidden="true">Bitrate video</span><div class="fcv-hearts" data-ref="hearts"></div></div>
+    <div class="px-seg fcv-seg-br" data-ref="br">${brSeg}</div>
+    <p class="fcv-hint" data-ref="brHint" aria-live="polite"></p>
+  </fieldset>
+  <div class="fcv-mode">
+    <label class="fcv-switch" title="HDR o SDR">
+      <input type="checkbox" name="fcv-mode" role="switch" value="hdr" checked aria-label="Modo HDR (spento: SDR)">
+      <span class="trk" aria-hidden="true"><span class="lb l">HDR</span><span class="lb r">SDR</span>
+        <span class="knob"><i class="sun">${s('sun', { scale: 2 })}</i><i class="moon">${s('moon', { scale: 2 })}</i><b class="t-hdr">HDR</b><b class="t-sdr">SDR</b></span></span>
+    </label>
+    <p class="fcv-mode-d" data-ref="modeDesc" aria-live="polite"></p>
+  </div>
+  <details class="fcv-est">
+    <summary aria-label="Previsione di peso e tempo; tocca per i dettagli">
+      <div class="fcv-tiles" aria-live="polite">
+        <div class="fcv-tile"><span class="px-label">Peso</span><span class="tv" data-ref="est">—</span></div>
+        <div class="fcv-tile"><span class="px-label">Tempo</span><span class="tv" data-ref="estT">—</span></div>
+      </div>${chev}
+    </summary>
+    <div class="fcv-dbody"><p class="fcv-subtle" data-ref="estSrc" hidden></p></div>
+  </details>
+  <p class="fcv-warn" data-ref="warn" hidden></p>
+  <details class="fcv-adv">
+    <summary>${chev}<span class="fcv-sum-txt"><b>Opzioni avanzate</b><span class="fcv-adv-sum" data-ref="advSum"></span></span></summary>
+    <div class="fcv-dbody">
+      <fieldset class="fcv-field">
+        <legend class="px-label">Fotogramma chiave ogni</legend>
+        <div class="px-seg" data-ref="kf">${kfSeg}</div>
+        <p class="fcv-hint" data-ref="kfHint"></p>
+      </fieldset>
+      <fieldset class="fcv-field">
+        <legend class="px-label">Audio</legend>
+        <div class="fcv-radios fcv-radios--2" data-ref="audio">${audio}</div>
+        <p class="fcv-hint" data-ref="audioHint"></p>
+      </fieldset>
+      <fieldset class="fcv-field" data-ref="apacBox" hidden>
+        <legend class="px-label">Tracce iPhone</legend>
+        ${opt('fcv-apac', 'Mantieni audio spaziale e metadati', 'solo video iPhone', 'Copia invariate la traccia audio spaziale e le tracce di metadati dell\'iPhone (orientamento, volti, Live Photo, luminosità della scena, «cinematic-audio»), come nell\'originale: in Foto restano l\'audio spaziale e «Mix audio». L\'audio spaziale (e la sua traccia «cinematic-audio») solo con l\'audio «copia»: con la riparazione dell\'eco o la ricodifica viene tolto, i metadati video restano. Audio spaziale ~0,4 Mbps, metadati trascurabili.', ' checked')}
+      </fieldset>
+      <fieldset class="fcv-field">
+        <legend class="px-label">Contenitore</legend>
+        <div class="fcv-radios fcv-radios--2">
+          <label class="fcv-radio"><input type="radio" name="fcv-container" value="mov" checked data-desc="File QuickTime .mov come gli originali iPhone: Foto riconosce audio spaziale e metadati."><div><b>MOV</b><i>come iPhone</i></div></label>
+          <label class="fcv-radio"><input type="radio" name="fcv-container" value="mp4" data-desc="File .mp4 (come fino alla v0.33), per programmi che non leggono il MOV."><div><b>MP4</b></div></label>
+        </div>
+        <p class="fcv-hint" data-ref="contHint"></p>
+      </fieldset>
+      <fieldset class="fcv-field" data-ref="dsBox" hidden>
+        <legend class="px-label">Risoluzione</legend>
+        ${opt('fcv-ds', 'Riduci a 1080p', 'sperimentale: oggi non funziona', 'Misurato su iPhone (Safari 27.0.1): quando è l\'encoder di Safari a ridurre il 4K a 1080p l\'uscita diventa 8 bit (HDR perso), quindi l\'app ferma l\'export con un messaggio invece di salvare un video senza HDR. Lascia l\'opzione spenta: resta qui solo per riprovare dopo un aggiornamento di Safari. Se un giorno funzionasse: video a 1080×1920 (o 1920×1080) HDR a 10 bit, tempo come il 4K.')}
+      </fieldset>
+      <fieldset class="fcv-field">
+        <legend class="px-label">Sperimentale</legend>
+        ${opt('fcv-sceneq', 'Qualità garantita per scena', '~1,6× più lento', 'Prova più bitrate per ogni tratto e sceglie il minimo che resta «quasi perfetto» (VMAF stimato ≥ 88); più lento. Il bitrate scelto sopra diventa il limite massimo: il file non pesa mai più della stima.')}
+        ${opt('fcv-bgaudio', 'Test background con audio', 'su iOS 27 non tiene la decodifica', 'Riproduce un audio quasi muto per provare a far continuare la compressione con l\'app in background (controlli «In riproduzione»). Il log registra un battito al secondo e un riepilogo finale.')}
+        ${opt('fcv-par2', 'Estrazione parallela', '~1,7× più veloce', 'Se un player sbaglia passa a 1 per pochi frame, poi torna al parallelo da solo.')}
+        <div class="fcv-radios fcv-radios--2" role="radiogroup" aria-label="Player di estrazione">
+          <label class="fcv-radio"><input type="radio" name="fcv-npar" value="2"><div><b>2 player</b></div></label>
+          <label class="fcv-radio"><input type="radio" name="fcv-npar" value="3"><div><b>3 player</b><i>sperimentale</i></div></label>
+        </div>
+      </fieldset>
+    </div>
+  </details>
+</section>
+
+<section class="fcv-step-go" aria-labelledby="fcv-h3">
+  <h2 class="px-sr" id="fcv-h3">Comprimi</h2>
   <button class="px-btn px-btn--primary px-btn--xl px-btn--block fcv-go" data-ref="go" disabled>Comprimi ${sprite(['c...', 'cc..', 'ccc.', 'cccc', 'ccc.', 'cc..', 'c...'], { scale: 3 })}</button>
   <p class="fcv-go-note" data-ref="goNote">Scegli prima un video.</p>
   <div class="fcv-resume" data-ref="resume" hidden>
@@ -187,7 +213,7 @@ function template(opts) {
   <p class="fcv-q-now" data-ref="qNow" hidden></p>
   <div class="fcv-summary" data-ref="summary"></div>
   <div class="fcv-prog-top">
-    <div class="fcv-phase"><span data-ref="phIcon">${s('analisi', { scale: 4 })}</span><div><b id="fcv-hp" data-ref="phName">Analisi</b><span data-ref="phSub"></span></div></div>
+    <div class="fcv-phase"><span data-ref="phIcon">${s('analisi', { scale: 3 })}</span><div><b id="fcv-hp" data-ref="phName">Analisi</b><span data-ref="phSub"></span></div></div>
     <div class="fcv-pct px-digits" data-ref="pct" aria-hidden="true">0<small>%</small></div>
   </div>
   <div class="px-bar" role="progressbar" aria-label="Avanzamento" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-ref="bar"><i></i></div>
@@ -199,19 +225,22 @@ function template(opts) {
     <div class="fcv-stat"><span class="px-label">Fotogrammi</span><span class="v px-digits" data-ref="frames">—</span></div>
   </div>
   <p class="fcv-tline" data-ref="tline" hidden></p>
-  <p class="fcv-warn fcv-keep" data-ref="progNote" role="status" aria-live="polite">${KEEP_OPEN}</p>
+  <p class="fcv-keep" data-ref="progNote" role="status" aria-live="polite">${KEEP_OPEN}</p>
   <div class="fcv-pip" data-ref="pipBox" hidden>
     <button class="px-btn px-btn--block" data-ref="pipBtn" type="button">Continua in Picture-in-Picture</button>
-    <p class="fcv-pip-note" data-ref="pipNote">Puoi usare altre app: la compressione continua finché la finestrella resta aperta.</p>
+    <p class="fcv-pip-note" data-ref="pipNote">Puoi usare altre app: la compressione continua.</p>
   </div>
   <div class="fcv-cancels"><button class="px-btn px-btn--danger fcv-cancel" data-ref="cancel">Annulla</button><button class="px-btn fcv-cancel" data-ref="qStop" type="button" hidden>Ferma la coda</button></div>
-  <p class="fcv-subtle fcv-q-stopnote" data-ref="qStopNote" hidden>«Annulla questo video» lo salta e la coda prosegue; «Ferma la coda» si ferma qui e il video in corso riprenderà dai segmenti già pronti.</p>
+  <details class="fcv-note fcv-q-stopnote" data-ref="qStopNote" hidden>
+    <summary>${chev}<span>Annulla o ferma la coda?</span></summary>
+    <div class="fcv-dbody"><p class="fcv-subtle">«Annulla questo video» lo salta e la coda prosegue; «Ferma la coda» si ferma qui e il video in corso riprenderà dai segmenti già pronti.</p></div>
+  </details>
   <p class="px-sr" aria-live="polite" data-ref="live"></p>
 </section>
 
 <section class="px-panel fcv-done" data-ref="done" hidden aria-labelledby="fcv-hd">
   <div class="fcv-confetti" data-ref="confetti" aria-hidden="true"></div>
-  <div class="fcv-done-title">${s('star', { scale: 4 })}<h2 class="px-title" id="fcv-hd" data-ref="doneTitle">Fatto!</h2>${s('star', { scale: 4 })}</div>
+  <div class="fcv-done-title">${s('star', { scale: 3 })}<h2 class="px-title" id="fcv-hd" data-ref="doneTitle">Fatto!</h2>${s('star', { scale: 3 })}</div>
   <div>
     <div class="fcv-big px-digits" data-ref="big">−0%</div>
     <div class="fcv-big-sub" data-ref="bigSub">più leggero</div>
@@ -222,73 +251,103 @@ function template(opts) {
   </div>
   <p class="fcv-freed" data-ref="freed"></p>
   <p class="fcv-scene-br" data-ref="sceneBr" hidden></p>
-  <table class="fcv-tbl fcv-pred-tbl" data-ref="pred" hidden><thead><tr><th></th><th scope="col">Previsto</th><th scope="col">Reale</th><th scope="col">Scarto</th></tr></thead><tbody>
-    <tr><th scope="row">Peso <small>MB</small></th><td data-ref="pW1"></td><td data-ref="pW2"></td><td data-ref="pW3"></td></tr>
-    <tr><th scope="row">Tempo <small>m:ss</small></th><td data-ref="pT1"></td><td data-ref="pT2"></td><td data-ref="pT3"></td></tr>
-  </tbody></table>
+  <details class="fcv-note fcv-pred" data-ref="pred" hidden>
+    <summary>${chev}<span>Previsto e reale: <span data-ref="predSum"></span></span></summary>
+    <div class="fcv-dbody"><table class="fcv-tbl fcv-pred-tbl"><thead><tr><th></th><th scope="col">Previsto</th><th scope="col">Reale</th><th scope="col">Scarto</th></tr></thead><tbody>
+      <tr><th scope="row">Peso <small>MB</small></th><td data-ref="pW1"></td><td data-ref="pW2"></td><td data-ref="pW3"></td></tr>
+      <tr><th scope="row">Tempo <small>m:ss</small></th><td data-ref="pT1"></td><td data-ref="pT2"></td><td data-ref="pT3"></td></tr>
+    </tbody></table></div>
+  </details>
   <p class="fcv-pred-note" data-ref="predNote" hidden></p>
   <button class="px-btn px-btn--ok px-btn--xl px-btn--block" data-ref="save">${s('scrittura', { scale: 3 })}Salva nelle Foto</button>
   <p class="fcv-save-msg" data-ref="saveMsg" aria-live="polite"></p>
   <p class="fcv-outname" data-ref="outName"></p>
   <div class="fcv-done-more">
-    <button class="px-btn" data-ref="again">Altre impostazioni</button>
-    <label class="px-btn fcv-relabel">Nuovo video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input3" aria-label="Scegli un nuovo video"></label>
+    <button class="px-btn fcv-sm" data-ref="again">Altre impostazioni</button>
+    <label class="px-btn fcv-relabel fcv-sm">Nuovo video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input3" aria-label="Scegli un nuovo video"></label>
   </div>
 </section>
 
 <section class="px-panel fcv-done fcv-qdone" data-ref="qdone" hidden aria-labelledby="fcv-hqd">
   <div class="fcv-confetti" data-ref="qConfetti" aria-hidden="true"></div>
-  <div class="fcv-done-title">${s('star', { scale: 4 })}<h2 class="px-title" id="fcv-hqd" data-ref="qdTitle">Coda finita!</h2>${s('star', { scale: 4 })}</div>
+  <div class="fcv-done-title">${s('star', { scale: 3 })}<h2 class="px-title" id="fcv-hqd" data-ref="qdTitle">Coda finita!</h2>${s('star', { scale: 3 })}</div>
   <div>
     <div class="fcv-big px-digits" data-ref="qdBig">−0%</div>
     <div class="fcv-big-sub" data-ref="qdSub"></div>
   </div>
-  <table class="fcv-tbl fcv-qd-tbl"><caption class="fcv-subtle" data-ref="qdCap"></caption><thead><tr><th scope="col">Video</th><th scope="col">Dopo <small>MB</small></th><th scope="col">%</th><th scope="col">Tempo</th></tr></thead><tbody data-ref="qdBody"></tbody><tfoot data-ref="qdFoot"></tfoot></table>
+  <div class="fcv-dscroll"><table class="fcv-tbl fcv-qd-tbl"><caption class="fcv-subtle" data-ref="qdCap"></caption><thead><tr><th scope="col">Video</th><th scope="col">Dopo <small>MB</small></th><th scope="col">%</th><th scope="col">Tempo</th></tr></thead><tbody data-ref="qdBody"></tbody><tfoot data-ref="qdFoot"></tfoot></table></div>
   <p class="fcv-pred-note" data-ref="qdNote" hidden></p>
   <button class="px-btn px-btn--ok px-btn--xl px-btn--block" data-ref="qSaveAll">${s('scrittura', { scale: 3 })}<span data-ref="qSaveAllTxt">Salva tutti nelle Foto</span></button>
   <p class="fcv-save-msg" data-ref="qdMsg" aria-live="polite"></p>
   <div class="fcv-qd-files" data-ref="qdFiles" hidden></div>
   <div class="fcv-done-more">
-    <button class="px-btn" type="button" data-ref="qNew">Nuova coda</button>
-    <label class="px-btn fcv-relabel">Aggiungi video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAdd2" aria-label="Aggiungi video alla coda"></label>
+    <button class="px-btn fcv-sm" type="button" data-ref="qNew">Nuova coda</button>
+    <label class="px-btn fcv-relabel fcv-sm">Aggiungi video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAdd2" aria-label="Aggiungi video alla coda"></label>
   </div>
 </section>
 
 <section class="px-panel fcv-err" data-ref="err" hidden role="alert">
-  <header>${s('errore', { scale: 4 })}<h2 class="px-title">Si è inceppato!</h2></header>
+  <header>${s('errore', { scale: 3 })}<h2 class="px-title">Si è inceppato!</h2></header>
   <p class="fcv-err-msg" data-ref="errMsg"></p>
-  <ul>
-    <li>Tieni Safari in primo piano e lo schermo acceso durante la compressione.</li>
-    <li>Chiudi le altre app pesanti e riprova; per video molto lunghi prova un bitrate più basso.</li>
-    <li>Se si ripete, copia il log tecnico e mandalo.</li>
-  </ul>
+  <details class="fcv-note">
+    <summary>${chev}<span>Cosa provare</span></summary>
+    <div class="fcv-dbody"><ul>
+      <li>Tieni Safari in primo piano e lo schermo acceso durante la compressione.</li>
+      <li>Chiudi le altre app pesanti e riprova; per video molto lunghi prova un bitrate più basso.</li>
+      <li>Se si ripete, copia il log tecnico e mandalo.</li>
+    </ul></div>
+  </details>
   <div class="fcv-row">
     <button class="px-btn px-btn--primary" data-ref="retry">Riprova</button>
     <button class="px-btn" data-ref="errCopy">Copia log</button>
   </div>
 </section>
 
+<div class="fcv-tools">
 <details class="px-panel fcv-log" data-ref="logBox">
-  <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Log tecnico</b><span class="px-chip count" data-ref="logCount">0</span></summary>
-  <div class="fcv-log-view"><span data-ref="logView" aria-live="off"></span><button class="px-btn fcv-log-all" data-ref="logAll" type="button">Mostra tutto</button></div>
-  <pre data-ref="log" tabindex="0"></pre>
-  <textarea class="fcv-log-sel" data-ref="logSel" readonly hidden aria-label="Riassunto del log da copiare"></textarea>
-  <div class="fcv-log-actions"><button class="px-btn" data-ref="copy">Copia log</button><button class="px-btn" data-ref="saveLog">Salva log completo (.txt)</button><span class="fcv-copy-msg" data-ref="copyMsg" aria-live="polite"></span></div>
+  <summary>${chev}<b>Log tecnico</b><span class="px-chip count" data-ref="logCount">0</span></summary>
+  <div class="fcv-dbody">
+    <div class="fcv-log-view"><span data-ref="logView" aria-live="off"></span><button class="px-btn fcv-sm fcv-log-all" data-ref="logAll" type="button">Mostra tutto</button></div>
+    <pre data-ref="log" tabindex="0"></pre>
+    <textarea class="fcv-log-sel" data-ref="logSel" readonly hidden aria-label="Riassunto del log da copiare"></textarea>
+    <div class="fcv-log-actions"><button class="px-btn fcv-sm" data-ref="copy">Copia log</button><button class="px-btn fcv-sm" data-ref="saveLog">Salva .txt completo</button><span class="fcv-copy-msg" data-ref="copyMsg" aria-live="polite"></span></div>
+  </div>
 </details>
 
 <details class="px-panel fcv-log fcv-store" data-ref="stBox">
-  <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Spazio occupato</b><span class="px-chip count" data-ref="stCount">–</span></summary>
-  <p class="fcv-st-line" data-ref="stLine">Apri per calcolare lo spazio usato dall'app.</p>
-  <p class="fcv-st-est">Non incluse qui: le copie temporanee che Safari fa dei video scelti o trascinati (e dei file condivisi) restano fuori dal sito, in «Documenti e dati» di Safari, e la pagina non le vede né le cancella. Safari le elimina quando chiudi questa scheda (dal codice di WebKit, non verificato su iPhone); se restano (Safari chiuso a forza o riavviato), Impostazioni › Generali › Spazio iPhone › Safari mostra «Documenti e dati». Dopo una coda grande chiudi la scheda e riaprila.</p>
-  <div class="fcv-st-actions"><button class="px-btn px-btn--primary" data-ref="stFree" type="button" disabled>Libera spazio</button><span class="fcv-copy-msg" data-ref="stMsg" aria-live="polite"></span></div>
-  <details class="fcv-st-det" data-ref="stDet">
-    <summary>${s('chevron', { scale: 2, className: 'chev' })}<b>Dettagli</b></summary>
-    <p class="fcv-st-est" data-ref="stEst"></p>
-    <div data-ref="stBody"></div>
-    <div class="fcv-st-actions"><button class="px-btn" data-ref="stAll" type="button" disabled>Svuota tutto</button></div>
-  </details>
+  <summary>${chev}<b>Spazio</b><span class="px-chip count" data-ref="stCount">–</span></summary>
+  <div class="fcv-dbody">
+    <p class="fcv-st-line" data-ref="stLine">Apri per calcolare lo spazio usato dall'app.</p>
+    <div class="fcv-st-actions"><button class="px-btn px-btn--primary fcv-sm" data-ref="stFree" type="button" disabled>Libera spazio</button><span class="fcv-copy-msg" data-ref="stMsg" aria-live="polite"></span></div>
+    <details class="fcv-st-det" data-ref="stDet">
+      <summary>${chev}<b>Dettagli</b></summary>
+      <p class="fcv-st-est" data-ref="stEst"></p>
+      <div data-ref="stBody"></div>
+      <div class="fcv-st-actions"><button class="px-btn fcv-sm" data-ref="stAll" type="button" disabled>Svuota tutto</button></div>
+      <p class="fcv-st-est">Non incluse qui: le copie temporanee che Safari fa dei video scelti o trascinati (e dei file condivisi) restano fuori dal sito, in «Documenti e dati» di Safari, e la pagina non le vede né le cancella. Safari le elimina quando chiudi questa scheda (dal codice di WebKit, non verificato su iPhone); se restano (Safari chiuso a forza o riavviato), Impostazioni › Generali › Spazio iPhone › Safari mostra «Documenti e dati». Dopo una coda grande chiudi la scheda e riaprila.</p>
+    </details>
+  </div>
 </details>
-<p class="fcv-foot">HEVC 10-bit · HDR · Dolby Vision · nessun upload</p>`;
+</div>
+
+<dialog class="fcv-about" data-ref="about" aria-labelledby="fcv-ab-t">
+  <div class="fcv-about-in">
+    <header>${s('logo', { scale: 3, className: 'px-bob' })}<h2 class="px-title" id="fcv-ab-t">Finally Compress Video</h2></header>
+    <dl class="fcv-ab-dl">
+      <div><dt>Versione</dt><dd data-ref="abVer">—</dd></div>
+      <div><dt>Build</dt><dd data-ref="abBuild">—</dd></div>
+    </dl>
+    <a class="px-btn fcv-ab-gh" href="https://github.com/DeusAres/finally-compress-video" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>DeusAres/finally-compress-video</a>
+    <ul class="fcv-ab-list">
+      <li><b>Tutto sul telefono.</b> Il video non viene mai caricato. Restano nel sito solo i segmenti di lavoro e i risultati non ancora salvati: si liberano da «Spazio».</li>
+      <li><b>Serve</b> Safari su iPhone con iOS 27 o successivo (HEVC 10-bit, WebCodecs).</li>
+      <li><b>Picture-in-Picture</b> solo nella scheda di Safari, non nell'app installata.</li>
+      <li>HEVC 10-bit · HDR · Dolby Vision · nessun upload.</li>
+    </ul>
+    <div class="fcv-ab-go"><button type="button" class="px-btn fcv-sm" data-ref="abLog">Log tecnico</button><button type="button" class="px-btn fcv-sm" data-ref="abStore">Spazio occupato</button></div>
+    <button type="button" class="px-btn px-btn--primary px-btn--block" data-ref="abClose">Chiudi</button>
+  </div>
+</dialog>`;
 }
 
 /**
@@ -317,12 +376,6 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.done.hidden = stage !== 'done' || st.qMode;
     R.qdone.hidden = stage !== 'done' || !st.qMode;
     R.err.hidden = stage !== 'error';
-    const steps = { pick: ['now', '', ''], ready: ['done', 'now', ''], busy: ['done', 'done', 'now'], done: ['done', 'done', 'done'], error: ['done', 'done', 'now'] }[stage];
-    root.querySelectorAll('.fcv-steps li').forEach((li, i) => {
-      li.dataset.s = steps[i];
-      li.querySelector('.n').innerHTML = steps[i] === 'done' ? sprite(SPRITES.check, { scale: 2 }) : String(i + 1);
-      li.toggleAttribute('aria-current', steps[i] === 'now');
-    });
     syncGo();
   }
   // Pulsante «Comprimi»: singolo video o coda («Comprimi N video»: voci in attesa con il loro file).
@@ -330,14 +383,14 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (!st.qMode) {
       R.go.disabled = !st.file || st.busy;
       R.go.firstChild.textContent = 'Comprimi ';
-      R.goNote.textContent = st.file ? 'Tieni Safari aperto e lo schermo acceso: la compressione avviene sul telefono.' : 'Scegli prima un video.';
+      R.goNote.textContent = st.file ? 'Tieni Safari aperto e lo schermo acceso.' : 'Scegli prima un video.';
       return;
     }
     const items = st.queue?.items || [], n = items.filter((it) => it.status === 'attesa' && it.hasFile).length, miss = items.filter(needsFile).length;
     R.go.disabled = st.busy || !n;
-    R.go.firstChild.textContent = n ? `Comprimi ${n} ${n === 1 ? 'video' : 'video'} ` : 'Comprimi ';
-    R.goNote.textContent = n ? `Uno alla volta, nell'ordine della coda. Tieni Safari aperto e lo schermo acceso.${miss ? ` ${miss} video da riselezionare: verranno saltati finché non li riselezioni.` : ''}`
-      : miss ? 'Riseleziona i video della coda (passo 1) per continuare.' : 'Nessun video in attesa: aggiungine alla coda.';
+    R.go.firstChild.textContent = n ? `Comprimi ${n} video ` : 'Comprimi ';
+    R.goNote.textContent = n ? `Uno alla volta. Tieni Safari aperto e lo schermo acceso.${miss ? ` ${miss} da riselezionare: saltati.` : ''}`
+      : miss ? 'Riseleziona i video della coda per continuare.' : 'Nessun video in attesa: aggiungine alla coda.';
   }
   function setBusy(b) {
     st.busy = !!b; if (!b) st.pipOn = false; updatePip();
@@ -387,17 +440,17 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.fSize.innerHTML = fi.sizeMB != null ? `${fmtMB(fi.sizeMB)}<small>MB</small>` : '—';
     R.fDur.textContent = fi.durationS ? fmtTime(fi.durationS) : '—';
     R.fRes.textContent = resLabel(fi.width, fi.height) || '—';
+    R.fRes.title = fi.width && fi.height ? `${fi.width}×${fi.height}` : 'Formato';
     const chips = [];
     if (fi.hdr) chips.push('<span class="px-chip px-chip--hdr">HDR</span>');
     if (fi.dolbyVision) chips.push('<span class="px-chip px-chip--dv">Dolby Vision</span>');
+    if (fi.fps) chips.push(`<span class="px-chip px-chip--num">${Math.round(fi.fps)} fps</span>`);
     if (fi.apac) chips.push('<span class="px-chip">Audio spaziale</span>');
     if (fi.meta) chips.push('<span class="px-chip">Metadati iPhone</span>');
-    if (fi.width && fi.height) chips.push(`<span class="px-chip px-chip--num">${fi.width}×${fi.height}</span>`);
-    if (fi.fps) chips.push(`<span class="px-chip px-chip--num">${Math.round(fi.fps)} fps</span>`);
     R.fChips.innerHTML = chips.join('');
     // v0.35.5: copia ricodificata da Foto (Libreria foto / trascinamento) invece dell'originale → come ottenere l'originale
     R.origNote.hidden = !fi.exported;
-    if (fi.exported) R.origNote.innerHTML = `Questa sembra la <b>copia ricodificata</b> che iOS consegna da «Libreria foto» o dal trascinamento, non l'originale (${fi.exported[0]}): di solito è ridotta (es. 4K → 1080p) e senza audio spaziale. Per comprimere l'originale: in <b>Foto</b> › Condividi › <b>Opzioni</b> › Formato «Attuale» › <b>Salva in File</b>; poi qui «Cambia video» › <b>Scegli file</b> e prendilo da File.`;
+    if (fi.exported) R.origTxt.innerHTML = `Questa sembra la <b>copia ricodificata</b> che iOS consegna da «Libreria foto» o dal trascinamento, non l'originale (${fi.exported[0]}): di solito è ridotta (es. 4K → 1080p) e senza audio spaziale. Per comprimere l'originale: in <b>Foto</b> › Condividi › <b>Opzioni</b> › Formato «Attuale» › <b>Salva in File</b>; poi qui «Cambia video» › <b>Scegli file</b> e prendilo da File.`;
     syncDs(); // mostra/nasconde «Riduci a 1080p» e aggiorna le stime
   }
   // ---------- drag & drop (pagina intera; iPad/iPhone: trascinamento da Foto in Split View / Slide Over) ----------
@@ -443,10 +496,11 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
-    return { bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq'), downscale: !!v('fcv-ds') && dsAvailable(), apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
+    return { mode: root.querySelector('input[name="fcv-mode"]')?.checked === false ? 'sdr' : 'hdr', bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq'), downscale: !!v('fcv-ds') && dsAvailable(), apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
   }
   function writeSettings(s) {
     const set = (n, val) => { const i = root.querySelector(`input[name="${n}"][value="${val}"]`); if (i) i.checked = true; };
+    if (s.mode) { const c = root.querySelector('input[name="fcv-mode"]'); if (c) c.checked = s.mode !== 'sdr'; }
     set('fcv-br', s.bitrateMbps); set('fcv-kf', s.keyframeS); set('fcv-audio', s.audioMode);
     if (s.bgAudio != null) { const c = root.querySelector('input[name="fcv-bgaudio"]'); if (c) c.checked = !!s.bgAudio; }
     if (s.par2 != null) { const c = root.querySelector('input[name="fcv-par2"]'); if (c) c.checked = !!s.par2; }
@@ -461,11 +515,13 @@ export function mountUI(root, handlers = {}, opts = {}) {
     st.settings = readSettings();
     const { bitrateMbps: br, keyframeS: kf, audioMode: am } = st.settings;
     const info = BR_INFO[br] || BR_INFO[8];
-    R.brHint.textContent = st.settings.sceneQ ? `Qualità per scena attiva: ${br} Mbps è il limite massimo, ogni tratto riceve il minimo che resta «quasi perfetto».` : info.t;
+    R.brHint.textContent = st.settings.sceneQ ? `Per scena: ${br} Mbps è il massimo, ogni tratto riceve il minimo.` : info.t;
+    R.modeDesc.innerHTML = MODE_INFO[st.settings.mode] || MODE_INFO.hdr;
+    for (const [n, ref] of [['fcv-audio', 'audioHint'], ['fcv-container', 'contHint']]) R[ref].textContent = root.querySelector(`input[name="${n}"]:checked`)?.dataset.desc || '';
     R.hearts.innerHTML = Array.from({ length: 5 }, (_, i) => sprite(SPRITES[i < info.q ? 'heart' : 'heartEmpty'], { scale: 3 })).join('') + `<span class="px-sr">${info.q} su 5</span>`;
     R.kfHint.textContent = KF_INFO[kf] || '';
     if (st.qMode && st.queue) renderQueue();
-    R.advSum.textContent = `${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ` · ${st.settings.par3 ? 3 : 2} player` : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
+    R.advSum.textContent = `${st.settings.mode === 'sdr' ? 'SDR · ' : ''}${kf}s · ${AUDIO_SHORT[am] || am}${st.settings.bgAudio ? ' · test bg' : ''}${st.settings.par2 ? ` · ${st.settings.par3 ? 3 : 2} player` : ''}${st.settings.sceneQ ? ' · qualità per scena' : ''}${st.settings.downscale ? ' · 1080p' : ''}${st.settings.container === 'mp4' ? ' · MP4' : ' · MOV'}${st.file?.apac ? (st.settings.apac && am === 'copy' ? ' · spaziale' : ' · senza spaziale') : ''}${st.file?.meta && !st.file?.apac ? (st.settings.apac ? ' · metadati iPhone' : ' · senza metadati iPhone') : ''}`;
     updateEstimate();
   }
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js
