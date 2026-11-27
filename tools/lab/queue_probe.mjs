@@ -268,7 +268,7 @@ if (ONLY.includes('7')) { // ---- 7) seek bloccato: recupero (player ricreato, v
   let L = await logAll();
   ok((await sts()).join() === 'fatto,fatto', `7a: un player bloccato → coda completata (${await sts()})`);
   ok(/⚠️ player \d: seek timeout @[\d.]+s → ricreo il <video>/.test(L), '7a: player bloccato ricreato (log)');
-  ok(/FALLBACK a 1 player \(player (\d): seek timeout[^)]*; continua il player (?!\1)\d\)/.test(L), '7a: il fallback continua con il player SANO');
+  // (v0.38.7) il vecchio «FALLBACK a 1 player» non esiste più dal v0.37.0 (frame 0 e 3 player): basta la ricreazione del player bloccato, verificata sopra
   ok(!/riprovo questo video una volta/.test(L), '7a: nessuna ripetizione della voce (bastava ricreare il player)');
   await page.click('[data-ref="qSaveAll"]'); await page.waitForTimeout(600); await page.click('[data-ref="qNew"]'); await page.waitForTimeout(300);
 

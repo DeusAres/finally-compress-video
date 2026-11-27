@@ -2,7 +2,7 @@
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
 import { bus } from './bus.js?v=0.38.7';
 import { sprite, SPRITES } from './sprite.js?v=0.38.7';
-import { makeThumb } from '../lib/thumb.js?v=0.38.6';
+import { makeThumb } from './../lib/thumb.js?v=0.38.7';
 import { createLogStore } from './logstore.js?v=0.38.7';
 import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.7';
 

@@ -50,8 +50,8 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.38.7-20261127T174554Z';
-const BUILD_LABEL = 'v0.38.7 · 27/11 18:45';
+const BUILD_ID = '0.38.7-20261127T182219Z';
+const BUILD_LABEL = 'v0.38.7 · 27/11 19:22';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false, sceneQ: true, downscale: false, apac: true, container: 'mov', mode: 'hdr', res: 'orig' }, NFtot = 0;
 let parTrialOff = false; // v0.34.1: un intoppo durante le prove (più video attivi) non spegne la parallela della codifica finale
