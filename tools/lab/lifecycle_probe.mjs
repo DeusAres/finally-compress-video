@@ -23,7 +23,7 @@ const ONLY = arg('--only', 'nuovo,annulla,errore,impostazioni,ripresa').split(',
 const [AVC, AVC2] = makeSamples(SRC, 2);
 const server = await startServer(ROOT);
 const { browser, page, errors, snap: snap0, logTail } = await openProbe(server.base);
-const app = '#app';
+const app = '#app'; page.on('dialog', (d) => d.accept()); // «Svuota coda» con risultati non salvati chiede conferma
 const stage = () => page.$eval(app, (r) => r.dataset.stage);
 const waitStage = (list, ms = 120000) => page.waitForFunction((l) => l.includes(document.querySelector('#app').dataset.stage) && document.querySelector('#app').dataset.busy === 'false', list, { timeout: ms })
   .catch(async (e) => { console.log('TIMEOUT, ultime righe del log:\n' + (await page.evaluate(() => [...document.querySelectorAll('[data-ref="log"] div')].slice(-25).map((d) => d.textContent).join('\n')))); throw e; });
