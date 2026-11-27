@@ -415,3 +415,9 @@ dialog.fcv-about::backdrop { background: rgba(14, 15, 24, .72); }
 
 .fcv-thumb { flex: none; width: 36px; height: 36px; object-fit: cover; box-shadow: var(--px-ring); }
 .fcv-thumb[hidden] { display: none; }
+
+/* v0.38.5: fine coda con un solo video (niente tabella) */
+.fcv-qd-one { display: grid; gap: var(--sp-2); text-align: left; min-width: 0; }
+.fcv-qd-one[hidden] { display: none; }
+.fcv-qd-onename { margin: 0; font: 700 var(--fs-sm)/1.2 var(--font-body); overflow-wrap: anywhere; word-break: break-all; }
+.fcv-qd-one .fcv-cmp-row { display: flex; justify-content: space-between; gap: var(--sp-2); }

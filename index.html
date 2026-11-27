@@ -1,8 +1,8 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-<title>Compressore HDR v0.38.4</title>
+<title>Compressore HDR v0.38.5</title>
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png"><link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#f3ecdc"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Finally Compress">
-<link rel="stylesheet" href="app/ui/theme.css?v=0.38.4"><link rel="stylesheet" href="app/ui/ui.css?v=0.38.4">
+<link rel="stylesheet" href="app/ui/theme.css?v=0.38.5"><link rel="stylesheet" href="app/ui/ui.css?v=0.38.5">
 <style>
 html,body{touch-action:manipulation}
 body{margin:0;background:var(--bg)}
@@ -15,30 +15,30 @@ body{margin:0;background:var(--bg)}
 </style></head><body>
 <main id="app-wrap"><button id="update" type="button" hidden></button><div id="notice" role="status" aria-live="polite" hidden></div><div id="app"></div></main>
 <script type="module">
-import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers, isSeekTimeout, isUnverified, REJOIN_AFTER } from './app/lib/frames.js?v=0.38.4';
-import { installMediaDiag, mediaDiagLine } from './app/lib/mediadiag.js?v=0.38.4';
-import { estimateOutBytes, estimateTimeS } from './app/ui/estimate.js?v=0.38.4';
-import { createHevcEncoder } from './app/lib/encode.js?v=0.38.4';
-import { downscaleDims, avgFramerate, verifyDownscale, dsError, sdrDsError, sdrRes, resDims, resBitrateFactor } from './app/lib/downscale.js?v=0.38.4';
-import { openSdrSource, pickSdrCodec, sdrWindow, SDR, CS709, VUI709, CSHLG, VUIHLG } from './app/lib/sdrpath.js?v=0.38.4';
-import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.38.4';
-import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.38.4';
-import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.38.4';
-import { finishMoov, rewriteMoov, sourceFtypPatch } from './app/lib/mp4-post.js?v=0.38.4';
-import { readPassthrough, selectPassthrough, planPassthroughMdat, copyPassthroughData, addPassthroughTracks, describeAdded } from './app/lib/passthrough.js?v=0.38.4';
-import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.38.4';
-import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.38.4';
-import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.38.4';
-import { startKeepAlive } from './app/lib/keepalive.js?v=0.38.4';
-import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.38.4';
-import { createPip, pipSupported, pipClip } from './app/lib/pip.js?v=0.38.4';
-import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, lumaTestLine, segmentCaps, worthRecompress, sourceBitrate, SCENE } from './app/lib/scenesearch.js?v=0.38.4';
-import { inspectMovie, judgeOrigin } from './app/lib/origin.js?v=0.38.4';
-import { newQueue, addItems, removeItem, retryItem, nextItem, matchFiles, restoreQueue, uniqueOutName, readyToSave, keepNames as queueKeep, itemLabel, queueStats, summaryLines, findItem, fmtPct, ST } from './app/lib/queue.js?v=0.38.4';
-import { loadQueue, saveQueue } from './app/lib/queuestore.js?v=0.38.4';
-import { ledger, scanAll, freeSpace, clearAll, removeItem as storageRemove, lossLines, groupItems, fmtBytes } from './app/lib/storage.js?v=0.38.4';
-import { mountUI } from './app/ui/ui.js?v=0.38.4';
-import { bus, emit } from './app/ui/bus.js?v=0.38.4';
+import { openVideoElement, seekFrames, parallelFrames, newStats, releaseVideoElement, warmPlayers, isSeekTimeout, isUnverified, REJOIN_AFTER } from './app/lib/frames.js?v=0.38.5';
+import { installMediaDiag, mediaDiagLine } from './app/lib/mediadiag.js?v=0.38.5';
+import { estimateOutBytes, estimateTimeS } from './app/ui/estimate.js?v=0.38.5';
+import { createHevcEncoder } from './app/lib/encode.js?v=0.38.5';
+import { downscaleDims, avgFramerate, verifyDownscale, dsError, sdrDsError, sdrRes, resDims, resBitrateFactor } from './app/lib/downscale.js?v=0.38.5';
+import { openSdrSource, pickSdrCodec, sdrWindow, SDR, CS709, VUI709, CSHLG, VUIHLG } from './app/lib/sdrpath.js?v=0.38.5';
+import { realBitrate, createSegmentRate, BR_WINDOW, BR_MIN_FRAMES } from './app/lib/brctl.js?v=0.38.5';
+import { patchHvcC, stripParameterSets } from './app/lib/hevc-vui.js?v=0.38.5';
+import { extractNals, appendNals, extractDoviConfigBox, locateMoov } from './app/lib/dovi.js?v=0.38.5';
+import { finishMoov, rewriteMoov, sourceFtypPatch } from './app/lib/mp4-post.js?v=0.38.5';
+import { readPassthrough, selectPassthrough, planPassthroughMdat, copyPassthroughData, addPassthroughTracks, describeAdded } from './app/lib/passthrough.js?v=0.38.5';
+import { detectEcho, estimateGain, createEchoRemover, estimateEchoFilter, createEchoRemoverV2, createEchoRemoverV3, removeEchoV4 } from './app/lib/echo.js?v=0.38.5';
+import { cleanOpfs, opfsSupported, opfsSpace, openOpfsStore } from './app/lib/opfs.js?v=0.38.5';
+import { peekJob, discardJob, openJob, planSegments, segEnd, fileKey, sameFile, sameVideoSettings, bytesEqual, JOB_VERSION } from './app/lib/jobstore.js?v=0.38.5';
+import { startKeepAlive } from './app/lib/keepalive.js?v=0.38.5';
+import { unlock as chimeUnlock, askNotify, done as chimeDone, fail as chimeFail } from './app/lib/chime.js?v=0.38.5';
+import { createPip, pipSupported, pipClip } from './app/lib/pip.js?v=0.38.5';
+import { planSceneSegments, createTrialDeps, runSceneSearch, sceneLine, sceneSummary, lumaTestLine, segmentCaps, worthRecompress, sourceBitrate, SCENE } from './app/lib/scenesearch.js?v=0.38.5';
+import { inspectMovie, judgeOrigin } from './app/lib/origin.js?v=0.38.5';
+import { newQueue, addItems, removeItem, retryItem, nextItem, matchFiles, restoreQueue, uniqueOutName, readyToSave, keepNames as queueKeep, itemLabel, queueStats, summaryLines, findItem, fmtPct, ST } from './app/lib/queue.js?v=0.38.5';
+import { loadQueue, saveQueue } from './app/lib/queuestore.js?v=0.38.5';
+import { ledger, scanAll, freeSpace, clearAll, removeItem as storageRemove, lossLines, groupItems, fmtBytes } from './app/lib/storage.js?v=0.38.5';
+import { mountUI } from './app/ui/ui.js?v=0.38.5';
+import { bus, emit } from './app/ui/bus.js?v=0.38.5';
 import * as MB from './vendor/mediabunny-1.65.1.min.mjs';
 installMediaDiag(); // v0.36.2: conteggio di <video>/<audio> (anche fuori dal DOM) e codec aperti → riga «risorse:» nel log
 const $ = (id) => document.getElementById(id);
@@ -50,8 +50,8 @@ const noticeEl = $('notice');
 const notice = (t, kind = '') => { noticeEl.textContent = t || ''; noticeEl.className = kind; noticeEl.hidden = !t; };
 const VER = document.title.match(/v[\d.]+/)?.[0] || 'v?';
 // Stamped by tools/stamp-version.sh (rewritten on every run): BUILD_ID is the release id (= version.txt), BUILD_LABEL the header label.
-const BUILD_ID = '0.38.4-20261127T155527Z';
-const BUILD_LABEL = 'v0.38.4 · 27/11 16:55';
+const BUILD_ID = '0.38.5-20261127T172956Z';
+const BUILD_LABEL = 'v0.38.5 · 27/11 18:29';
 let pip = null; // Picture-in-Picture (v0.21): <video> muto separato che tiene viva la pagina fuori da Safari
 let ui = null, cfg = { bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: false, sceneQ: true, downscale: false, apac: true, container: 'mov', mode: 'hdr', res: 'orig' }, NFtot = 0;
 let parTrialOff = false; // v0.34.1: un intoppo durante le prove (più video attivi) non spegne la parallela della codifica finale
@@ -171,20 +171,6 @@ async function findSavedJob(f) {
   const pj = f ? await peekJob() : null;
   return pj && pj.done > 0 && pj.manifest.app === VER && sameFile(pj.manifest.file, fileKey(f)) ? pj : null;
 }
-// Job salvato (OPFS) per il file scelto → UI «Riprendi export di <nome> (segmenti x/y)».
-async function refreshResume() {
-  savedJob = null;
-  if (!file || running || Q) { ui.setResume(null); return; }
-  const pj = await peekJob();
-  if (pj && pj.done > 0 && pj.manifest.app === VER && sameFile(pj.manifest.file, fileKey(file))) {
-    savedJob = pj;
-    ui.setResume({ name: file.name, done: pj.done, total: pj.total, settings: pj.manifest.settings });
-    log(`export interrotto trovato per questo video: ${pj.done}/${pj.total} segmenti pronti (${pj.manifest.settings.bitrateMbps} Mbps${pj.manifest.settings.sceneQ ? ' max, qualità per scena' : ''}${pj.manifest.settings.downscale ? ', 1080p' : ''}${pj.manifest.settings.mode === 'sdr' || pj.manifest.settings.mode === 'hdr8' ? `, ${pj.manifest.settings.mode === 'sdr' ? 'SDR' : 'HDR8'}${pj.manifest.settings.res && pj.manifest.settings.res !== 'orig' ? ' ' + pj.manifest.settings.res + 'p' : ''}` : ''}, key ${pj.manifest.settings.keyframeS}s)`);
-  } else {
-    ui.setResume(null);
-    if (pj && !pj.done) await discardJob(); // v0.35.4: job senza segmenti completi (es. errore prima del 1°): niente da riprendere, niente file orfani
-  }
-}
 // v0.35.4: rilascio del risultato pronto (File OPFS su disco + eventuale Blob URL di download) quando non serve più:
 // nuovo video scelto (tasto, «Cambia video», drag & drop) o nuovo export. cleanOpfs() tiene 'jobs': i segmenti di un export
 // interrotto restano riprendibili. Ritorna il numero di voci OPFS rimosse.
@@ -195,22 +181,8 @@ async function releaseResult() {
 }
 // Voci OPFS da non cancellare mai nelle pulizie: il job riprendibile e i risultati della coda non ancora salvati (v0.36).
 const opfsKeep = () => ['jobs', ...queueKeep(Q)];
-async function onFile(f) {
-  if (Q) return onQueueAdd(f ? [f] : []); // in modalità coda ogni scelta va in coda
-  if (running) return; // la UI blocca la scelta durante l'export: difesa in più (il File del job in corso non va sostituito)
-  file = f || null; info = null; analysis = null; savedJob = null; notice('');
-  releasing = releaseResult().then((n) => { if (n) log(`risultato precedente rilasciato (${n} file OPFS rimossi)`); }, () => {}); // atteso da start(): la pulizia non tocca il nuovo file in uscita
-  if (!file) return;
-  log(`${file.name} — ${(file.size / MB_).toFixed(1)} MB`);
-  const r = await inspectFile(f); if (f !== file) return; info = r;
-  if (r.error) { log('Impossibile leggere il video: ' + r.error); notice('Impossibile leggere il video: ' + r.error, 'bad'); return; }
-  log(`${r.W}×${r.H} · ${fmtT(r.dur)} · HDR ${r.hdr ? 'sì' : 'no'} · Dolby Vision ${r.dv ? 'sì' : 'no'} · audio spaziale ${r.apac ? `sì (apac, ${(r.apacBps / 1000).toFixed(0)} kbps)` : 'no'} · metadati iPhone ${r.meta?.length ? `${r.meta.length} (${r.meta.join(', ')})` : 'no'}${r.fps ? ' · ' + r.fps.toFixed(1) + ' fps' : ''}`, 'setup');
-  if (r.origin) log(originLine(r.origin), r.origin.verdict === 'esportato' ? 'warn' : 'setup');
-  for (const e of r.ptErr || []) log(`tracce iPhone: traccia ${e.trackId ?? '?'} (${e.entry ?? '?'}) non leggibile — ${e.message} → non verrà copiata`, 'warn');
-  emit('file', { name: f.name, sizeMB: f.size / MB_, durationS: r.dur, width: r.W, height: r.H, hdr: r.hdr, dolbyVision: r.dv, fps: r.fps, aacBps: r.aacBps, apac: !!r.apac, apacBps: r.apacBps || 0, meta: r.meta?.length || 0, exported: r.origin?.verdict === 'esportato' ? r.origin.reasons : null });
-  await refreshResume(); if (f !== file) return;
-  await updateEstimate();
-}
+// v0.38.5: i video sono SEMPRE una coda (anche uno solo): ogni scelta o trascinamento va in coda (onQueueAdd).
+async function onFile(f) { return onQueueAdd(f ? [f] : []); }
 document.addEventListener('change', (e) => { if (e.target?.closest?.('.fcv-step-set') && (file || Q)) updateEstimate(); });
 
 // Avvio: coda salvata (IndexedDB) → risultati ancora in OPFS e voci da riselezionare; pulizia file OPFS di run precedenti
@@ -222,9 +194,11 @@ document.addEventListener('change', (e) => { if (e.target?.closest?.('.fcv-step-
   const n = await cleanOpfs(opfsKeep()); if (n) console.log('OPFS: rimossi', n, 'file vecchi');
   const pj = await peekJob();
   if (Q) { await annotateResume(pj); renderQueue(); }
-  else if (pj && pj.done > 0 && pj.manifest.app === VER) {
-    const m = `${killed ? 'La sessione precedente è stata interrotta (app chiusa in background o memoria esaurita). ' : ''}C'è un export interrotto di «${pj.manifest.file.name}» (${pj.done}/${pj.total} segmenti pronti): riseleziona lo stesso video per riprenderlo da dove era rimasto.`;
-    if (!file) { notice(m, 'warn'); log(m); }
+  else if (pj && pj.done > 0 && pj.manifest.app === VER) { // v0.38.5: export interrotto di un video singolo → voce della coda da riselezionare, che riprende dai segmenti
+    const m = `${killed ? 'La sessione precedente è stata interrotta (app chiusa in background o memoria esaurita). ' : ''}C'è un export interrotto di «${pj.manifest.file.name}» (${pj.done}/${pj.total} segmenti pronti): è in coda, riseleziona lo stesso video con «Riseleziona i video» per riprenderlo da dove era rimasto.`;
+    Q = newQueue({ app: VER, settings: pj.manifest.settings }); const { added } = addItems(Q, [pj.manifest.file]); added[0].interrupted = true;
+    ui.setQueueMode(true); ui.applySettings(pj.manifest.settings); await annotateResume(pj);
+    qMsg = { text: m, kind: 'warn' }; log(m, 'warn'); saveQ(); renderQueue();
   } else {
     if (pj) await discardJob();
     if (killed) { const m = 'La sessione precedente è stata interrotta (probabile memoria esaurita o app chiusa in background). Riprova tenendo l\'app in primo piano e lo schermo acceso; per video molto lunghi scegli un bitrate più basso.'; notice(m, 'bad'); log(m); }
@@ -409,35 +383,8 @@ function logFailure(e) {
   else if (e?.name === 'DownscaleError') log(`downscale: FALLITO, job interrotto senza ripiego (nessun passaggio via canvas/WebGPU: sarebbe 8 bit, HDR perso). Dettaglio tecnico: ${e.detail}`, 'error');
 }
 async function start(s) {
-  if (running) return;
-  if (Q) return startQueue(s);
-  if (!file) return;
-  beginSession(s, file); resetPerFile();
-  log(resLine('inizio'));
-  let failed = false;
-  try {
-    await releasing;
-    // «Altre impostazioni» dopo un export: il file precedente lascia OPFS (dopo il controllo dello spazio, come prima)
-    const r = await exportCurrent({ beforeRun: async () => { if (outFile || outUrl) { await releaseResult(); await cleanOpfs(opfsKeep()); } } });
-    emit('phase', { phase: 'fatto' }); emit('result', r);
-    { const n = chimeDone({ savedPct: r.savedPct, fileName: r.fileName }); log(`fine: jingle${n ? ' + notifica' : ' (notifiche disponibili solo dalla web app installata)'}`); }
-  } catch (e) {
-    failed = true;
-    if (e?.name === 'ReadError' || e?.name === 'SpaceError') { log(e.message); emit('error', { message: e.message }); }
-    else {
-      logFailure(e);
-      await cleanupRun();
-      if (e?.name === 'Cancelled') { await discardJob(); analysis = null; log('job annullato: segmenti eliminati'); }
-      else { emit('phase', { phase: 'errore' }); emit('error', { message: friendlyError(e) }); chimeFail(friendlyError(e).slice(0, 120)); }
-    }
-  } finally {
-    if (TSTART) bgSummary();
-    await endSession();
-    if (!failed) analysis = null;
-    TSTART = 0;
-    ui.setBusy(false);
-    await refreshResume().catch(() => {});
-  }
+  if (running || !Q) return; // v0.38.5: esiste solo la coda (anche con un video)
+  return startQueue(s);
 }
 
 // v0.35.4: il demuxer Mediabunny (Input + BlobSource: cache delle letture, tabelle dei campioni, decoder audio interni) è
@@ -1017,6 +964,7 @@ async function onQueueAdd(files, { includeCurrent = false } = {}) {
     const curF = includeCurrent && file ? file : null;
     releasing = releaseResult().then((n) => { if (n) log(`risultato precedente rilasciato (${n} file OPFS rimossi)`); }, () => {});
     Q = newQueue({ app: VER, settings: ui.getSettings() }); qMsg = null;
+    try { const pj = await peekJob(); if (pj && pj.done > 0 && pj.manifest.app === VER && files.some((f) => sameFile(pj.manifest.file, fileKey(f)))) { ui.applySettings(pj.manifest.settings); log(`export interrotto trovato per questo video: ${pj.done}/${pj.total} segmenti pronti: si riprende con le impostazioni di allora`); } } catch {}
     file = null; info = null; analysis = null; savedJob = null; ui.setResume(null); notice('');
     if (curF) files = [curF, ...files];
     ui.setQueueMode(true);

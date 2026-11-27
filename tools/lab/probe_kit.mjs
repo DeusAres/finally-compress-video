@@ -17,11 +17,11 @@ const req = createRequire(import.meta.url);
 export function playwright() { try { return req('playwright'); } catch { return req(join(execFileSync('npm', ['root', '-g']).toString().trim(), 'playwright')); } }
 export const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 
-/** n copie H.264 320 px del campione, con nome e peso diversi (metadato title diverso). */
+/** (v0.38.5: 40 Mbps, altrimenti «già leggero» tiene l'originale e non produce file) n copie H.264 320 px del campione, con nome e peso diversi (metadato title diverso). */
 export function makeSamples(src, n = 2, prefix = 'clip') {
   const tmp = mkdtempSync(join(tmpdir(), 'fcv-probe-')), out = [];
   const first = join(tmp, `${prefix}1_avc.mov`);
-  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=320:-2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', first]);
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=320:-2', '-c:v', 'libx264', '-b:v', '40M', '-pix_fmt', 'yuv420p', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-g', '30', '-preset', 'veryfast', '-c:a', 'copy', first]);
   out.push(first);
   for (let i = 2; i <= n; i++) { const p = join(tmp, `${prefix}${i}_avc.mov`); execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', first, '-c', 'copy', '-metadata', `title=${'b'.repeat(i)}`, p]); out.push(p); }
   return out;
@@ -50,7 +50,7 @@ export const INIT = () => {
   VF.prototype.close = function () { P.frames.delete(this); return close.call(this); };
   window.VideoFrame = new Proxy(VF, { construct(t, a, nt) { return track(Reflect.construct(t, a, nt)); } });
   // SOLO prova: Chromium non ha HEVC. Bitrate ×20 all'encoder: OpenH264 altrimenti salta fotogrammi (pacchetti < fotogrammi)
-  const mapCodec = (c, enc) => (c && /^hvc1|^hev1/.test(c.codec) ? { ...c, codec: 'avc1.640028', ...(enc && c.bitrate ? { bitrate: c.bitrate * 20 } : {}) } : c);
+  const mapCodec = (c, enc) => (c && /^hvc1|^hev1/.test(c.codec) ? { ...c, codec: 'avc1.640028', ...(enc && c.bitrate ? { bitrate: c.bitrate * 2 } : {}) } : c);
   const wrapCodec = (Base, kind) => new Proxy(Base, { construct(t, [init], nt) {
     let mapped = false; // v0.36.2: solo gli encoder configurati in HEVC (mappati) dichiarano hvc1 in uscita; un vero H.264 (clip PiP) resta avc1
     const o = init?.output; const i2 = { ...init, output: kind === 'dec' ? (f, m) => o(track(f), m) : (ch, m) => { if (mapped && m?.decoderConfig && /^avc1/.test(m.decoderConfig.codec)) m = { ...m, decoderConfig: { ...m.decoderConfig, codec: 'hvc1.2.4.L123.B0' } }; o(ch, m); } };

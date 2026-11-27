@@ -1,6 +1,6 @@
 // OPFS output store: sequential/random writes through a Worker holding a SyncAccessHandle (no RAM accumulation),
 // then getFile() gives a disk-backed File for share/download. Also: stale-file cleanup and space estimate.
-import { ledger, STATE } from './storage.js?v=0.38.4'; // v0.37.3: import mancante (ReferenceError «ledger» in openOpfsStore)
+import { ledger, STATE } from './storage.js?v=0.38.5'; // v0.37.3: import mancante (ReferenceError «ledger» in openOpfsStore)
 
 /** Remove every entry left in the OPFS root by previous runs (call at startup / before a new run), except names in `keep`
  * (default: the resumable-job directory, see jobstore.js). */
@@ -24,7 +24,7 @@ export const safeName = (s) => s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
 
 /** Worker holding SyncAccessHandles (opfs-worker.js). Returns {call(msg, transfer) -> Promise, terminate()}. */
 export function opfsWorker() {
-  const worker = new Worker(new URL('./opfs-worker.js?v=0.38.4', import.meta.url));
+  const worker = new Worker(new URL('./opfs-worker.js?v=0.38.5', import.meta.url));
   let seq = 0; const waiting = new Map(); let dead = null;
   worker.onmessage = (e) => { const w = waiting.get(e.data.id); if (!w) return; waiting.delete(e.data.id); if (e.data.ok) w.res(e.data); else { const er = new Error(e.data.message); er.name = e.data.name; w.rej(er); } };
   worker.onerror = (e) => { dead = new Error('worker OPFS: ' + (e.message || 'errore')); for (const w of waiting.values()) w.rej(dead); waiting.clear(); };

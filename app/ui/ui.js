@@ -1,9 +1,9 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.38.4';
-import { sprite, SPRITES } from './sprite.js?v=0.38.4';
-import { createLogStore } from './logstore.js?v=0.38.4';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.4';
+import { bus } from './bus.js?v=0.38.5';
+import { sprite, SPRITES } from './sprite.js?v=0.38.5';
+import { createLogStore } from './logstore.js?v=0.38.5';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.5';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -104,17 +104,6 @@ function template(opts) {
     <div class="fcv-dbody"><p class="fcv-subtle">Da «Scegli file» (app File) il video arriva intatto; da «Libreria foto» iOS può consegnare una copia ricodificata. Nessun caricamento: il video non lascia l'iPhone.</p></div>
   </details>
   <p class="fcv-drop-msg" data-ref="dropMsg" role="status" aria-live="polite" hidden></p>
-  <div class="fcv-file" data-ref="fileBox" hidden>
-    <div class="fcv-file-name">${s('film', { scale: 3 })}<img class="fcv-thumb" data-ref="fThumb" alt="" hidden><strong data-ref="fName"></strong>
-      <label class="px-btn fcv-relabel fcv-sm" title="Aggiungi altri video (coda)">Aggiungi<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAddSingle" aria-label="Aggiungi altri video (coda)"></label>
-      <label class="px-btn fcv-relabel fcv-sm" data-ref="change">Cambia<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="input2" aria-label="Cambia video"></label>
-    </div>
-    <div class="fcv-chips"><span class="px-chip px-chip--num" data-ref="fSize" title="Peso">—</span><span class="px-chip px-chip--num" data-ref="fDur" title="Durata">—</span><span class="px-chip px-chip--num" data-ref="fRes" title="Formato">—</span><span class="fcv-chips-more" data-ref="fChips"></span></div>
-    <details class="fcv-note fcv-warnbox" data-ref="origNote" hidden>
-      <summary>${chev}<span>Copia ricodificata da Foto, non l'originale</span></summary>
-      <div class="fcv-dbody"><p class="fcv-subtle" data-ref="origTxt" role="status"></p></div>
-    </details>
-  </div>
 </section>
 
 <section class="px-panel fcv-card fcv-queue" data-ref="queue" hidden aria-labelledby="fcv-hq">
@@ -286,7 +275,8 @@ function template(opts) {
     <div class="fcv-big px-digits" data-ref="qdBig">−0%</div>
     <div class="fcv-big-sub" data-ref="qdSub"></div>
   </div>
-  <div class="fcv-dscroll"><table class="fcv-tbl fcv-qd-tbl"><caption class="fcv-subtle" data-ref="qdCap"></caption><thead><tr><th scope="col">Video</th><th scope="col">Dopo <small>MB</small></th><th scope="col">%</th><th scope="col">Tempo</th></tr></thead><tbody data-ref="qdBody"></tbody><tfoot data-ref="qdFoot"></tfoot></table></div>
+  <div class="fcv-qd-one" data-ref="qdOne" hidden></div>
+  <div class="fcv-dscroll" data-ref="qdScroll"><table class="fcv-tbl fcv-qd-tbl"><caption class="fcv-subtle" data-ref="qdCap"></caption><thead><tr><th scope="col">Video</th><th scope="col">Dopo <small>MB</small></th><th scope="col">%</th><th scope="col">Tempo</th></tr></thead><tbody data-ref="qdBody"></tbody><tfoot data-ref="qdFoot"></tfoot></table></div>
   <p class="fcv-pred-note" data-ref="qdNote" hidden></p>
   <button class="px-btn px-btn--ok px-btn--xl px-btn--block" data-ref="qSaveAll">${s('scrittura', { scale: 3 })}<span data-ref="qSaveAllTxt">Salva tutti nelle Foto</span></button>
   <p class="fcv-save-msg" data-ref="qdMsg" aria-live="polite"></p>
@@ -432,47 +422,15 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (!files.length) return;
     takeFiles(files.filter(isVideo).length ? files.filter(isVideo) : files);
   }
-  // Uno o più video scelti/trascinati: un video in modalità singola = come prima; più video (o coda già aperta) = coda.
-  function takeFiles(files, { add = false, includeCurrent = false } = {}) {
-    R.dropMsg.hidden = true;
-    if (add || st.qMode || files.length > 1) { handlers.onQueueAdd?.(files, { includeCurrent }); return; }
-    acceptFile(files[0]);
-  }
-  function acceptFile(f) {
-    R.dropMsg.hidden = true; setResume(null);
-    st.file = { name: f.name, sizeMB: f.size / 1048576 };
-    showFile(st.file);
-    clearLog();
-    setStage('ready');
-    handlers.onFile?.(f);
-    thumbFor('single', f, (u) => { R.fThumb.src = u || ''; R.fThumb.hidden = !u; const ic = R.fThumb.previousElementSibling; if (ic) ic.hidden = !!u; });
-  }
-  function showFile(fi) {
-    R.pick.hidden = true; R.fileBox.hidden = false; root.dataset.picked = '1';
-    R.fName.textContent = fi.name || 'video';
-    R.fSize.innerHTML = fi.sizeMB != null ? `${fmtMB(fi.sizeMB)}<small>MB</small>` : '—';
-    R.fDur.textContent = fi.durationS ? fmtTime(fi.durationS) : '—';
-    R.fRes.textContent = resLabel(fi.width, fi.height) || '—';
-    R.fRes.title = fi.width && fi.height ? `${fi.width}×${fi.height}` : 'Formato';
-    const chips = [];
-    if (fi.hdr) chips.push('<span class="px-chip px-chip--hdr">HDR</span>');
-    if (fi.dolbyVision) chips.push('<span class="px-chip px-chip--dv" title="Dolby Vision">DV</span>');
-    if (fi.fps) chips.push(`<span class="px-chip px-chip--num">${Math.round(fi.fps)} fps</span>`);
-    if (fi.apac) chips.push('<span class="px-chip">Audio spaziale</span>');
-    if (fi.meta) chips.push('<span class="px-chip">Metadati iPhone</span>');
-    R.fChips.innerHTML = chips.join('');
-    // v0.35.5: copia ricodificata da Foto (Libreria foto / trascinamento) invece dell'originale → come ottenere l'originale
-    R.origNote.hidden = !fi.exported;
-    if (fi.exported) R.origTxt.innerHTML = `Questa sembra la <b>copia ricodificata</b> che iOS consegna da «Libreria foto» o dal trascinamento, non l'originale (${fi.exported[0]}): di solito è ridotta (es. 4K → 1080p) e senza audio spaziale. Per comprimere l'originale: in <b>Foto</b> › Condividi › <b>Opzioni</b> › Formato «Attuale» › <b>Salva in File</b>; poi qui «Cambia video» › <b>Scegli file</b> e prendilo da File.`;
-    syncDs(); // mostra/nasconde «Riduci a 1080p» e aggiorna le stime
-  }
+  // v0.38.5: uno o più video scelti/trascinati → SEMPRE in coda (anche uno solo; si possono aggiungere altri in qualsiasi momento).
+  function takeFiles(files) { R.dropMsg.hidden = true; handlers.onQueueAdd?.(files); }
   // ---------- drag & drop (pagina intera; iPad/iPhone: trascinamento da Foto in Split View / Slide Over) ----------
   const isVideo = (f) => /^video\//.test(f.type) || /\.(mov|mp4|m4v|hevc)$/i.test(f.name || '');
   const hasFiles = (e) => { const t = e.dataTransfer?.types; return !!t && [...t].includes('Files'); };
   let dragDepth = 0;
   const dropOn = (on) => { R.drop.hidden = !on; root.classList.toggle('fcv-dragging', on); };
   const dropMessage = (t) => { R.dropMsg.textContent = t; R.dropMsg.hidden = false; };
-  const canDrop = () => !st.busy || st.qMode; // durante la coda si possono aggiungere video (vanno in fondo)
+  const canDrop = () => true; // durante la coda si possono aggiungere video (vanno in fondo)
   const onDragEnter = (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (!canDrop()) return; dragDepth++; dropOn(true); };
   const onDragOver = (e) => { if (!hasFiles(e)) return; e.preventDefault(); try { e.dataTransfer.dropEffect = canDrop() ? 'copy' : 'none'; } catch {} };
   const onDragLeave = (e) => { if (!hasFiles(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) dropOn(false); };
@@ -493,10 +451,9 @@ export function mountUI(root, handlers = {}, opts = {}) {
   };
   const dndTargets = [['dragenter', onDragEnter], ['dragover', onDragOver], ['dragleave', onDragLeave], ['drop', onDrop]];
   for (const [t, h] of dndTargets) window.addEventListener(t, h);
-  for (const k of ['input', 'input2', 'input3']) R[k].addEventListener('change', onPicked);
-  const pickedTo = (o) => (e) => { const files = [...(e.target.files || [])]; e.target.value = ''; if (files.length) takeFiles(files, o); };
-  for (const k of ['qAdd', 'qAdd2', 'qRelink']) R[k].addEventListener('change', pickedTo({ add: true }));
-  R.qAddSingle.addEventListener('change', pickedTo({ add: true, includeCurrent: true }));
+  for (const k of ['input', 'input3']) R[k].addEventListener('change', onPicked);
+  const pickedTo = () => (e) => { const files = [...(e.target.files || [])]; e.target.value = ''; if (files.length) takeFiles(files); };
+  for (const k of ['qAdd', 'qAdd2', 'qRelink']) R[k].addEventListener('change', pickedTo());
 
   // ---------- passo 2: impostazioni ----------
   // Risoluzione (solo SDR, a 10 bit non si può ridurre): «Originale» + i formati standard SOTTO il lato corto della sorgente (verticale/orizzontale uguale).
@@ -732,9 +689,21 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const inMB = S.reduce((a, it) => a + it.result.inMB, 0), outMB = S.reduce((a, it) => a + it.result.outMB, 0), tS = S.reduce((a, it) => a + (it.result.timeS || 0), 0);
     const pMB = S.reduce((a, it) => a + (it.result.predMB || 0), 0), pS = S.reduce((a, it) => a + (it.result.predS || 0), 0);
     const err = items.filter((it) => it.status === 'errore').length, pct = inMB ? (1 - outMB / inMB) * 100 : 0;
-    R.qdTitle.textContent = err ? (S.length ? 'Coda finita, ma…' : 'Coda finita con errori') : 'Coda finita!';
+    const one = items.length === 1 && items[0].status === 'fatto' && !!items[0].result; // v0.38.5: coda da 1 video → risultato pulito, niente tabella
+    R.qdScroll.hidden = one; R.qdOne.hidden = !one;
+    if (one) {
+      const it = items[0], r = it.result, inf = it.info, bits = [];
+      if (inf?.hdr) bits.push(chip('HDR', 'px-chip--hdr')); if (inf?.dv) bits.push(chip('DV', 'px-chip--dv'));
+      if (inf?.W) bits.push(chip(esc(resLabel(inf.W, inf.H)), 'px-chip--num')); if (inf?.dur) bits.push(chip(fmtTime(inf.dur), 'px-chip--num')); if (inf?.fps) bits.push(chip(`${Math.round(inf.fps)} fps`, 'px-chip--num'));
+      const row = (k, v) => `<div class="fcv-cmp-row"><span class="px-label">${k}</span><span class="v">${v}</span></div>`;
+      R.qdOne.innerHTML = `<p class="fcv-qd-onename">${esc(it.name)}</p><div class="fcv-chips">${bits.join('')}</div>` + (r.kept
+        ? `<p class="fcv-subtle">${r.kept === 'light' ? 'Già leggero' : 'Non conviene ricomprimere'}: tenuto l'originale (${fmtMB(r.inMB)} MB).</p>`
+        : row('Prima', `${fmtMB(r.inMB)} MB`) + row('Dopo', `${fmtMB(r.outMB)} MB${r.predMB ? ` <small>(previsto ≈${fmtMB(r.predMB)})</small>` : ''}`) + row('Tempo', `${fmtTime(r.timeS)}${r.predS ? ` <small>(previsto ≈${fmtTime(r.predS)})</small>` : ''}`)
+          + (r.sceneBr ? `<p class="fcv-subtle">Bitrate per scena: ${nf1.format(r.sceneBr.min)}–${nf1.format(r.sceneBr.max)} Mbps, medio ${nf1.format(r.sceneBr.mean)} Mbps</p>` : '') + `<p class="fcv-outname">${esc(r.outName || '')}</p>`);
+    }
+    R.qdTitle.textContent = one ? 'Fatto!' : err ? (S.length ? 'Coda finita, ma…' : 'Coda finita con errori') : 'Coda finita!';
     R.qdBig.textContent = S.length ? `${pct >= 0 ? '−' : '+'}${nf0.format(Math.abs(pct))}%` : '—'; R.qdBig.classList.toggle('neg', pct < 0);
-    R.qdSub.textContent = S.length ? `${S.length} video · ${fmtMB(inMB)} → ${fmtMB(outMB)} MB${err ? ` · ${err} con errore` : ''}` : `${err} video con errore`;
+    R.qdSub.textContent = one ? (S[0].result.kept ? 'tenuto l\'originale' : 'più leggero') : S.length ? `${S.length} video · ${fmtMB(inMB)} → ${fmtMB(outMB)} MB${err ? ` · ${err} con errore` : ''}` : `${err} video con errore`;
     R.qdBody.innerHTML = items.map((it) => {
       const r = it.result, nm = `<th scope="row"><span class="fcv-qd-name">${esc(it.name)}</span>`;
       if (it.status === 'fatto' && r?.kept) return `<tr>${nm}<small>da ${fmtMB(r.inMB)} MB</small></th><td colspan="2" class="fcv-qd-st">${r.kept === 'light' ? 'già leggero' : 'non conviene'}: tenuto l'originale</td><td>${fmtTime(r.timeS)}</td></tr>`;
@@ -1087,7 +1056,6 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   // ---------- bus ----------
   const subs = {
-    file: (d) => { st.file = { ...st.file, ...d }; showFile(st.file); updateEstimate(); if (st.stage === 'pick') setStage('ready'); },
     phase: (d) => {
       if (d.phase === 'errore') { if (st.stage !== 'error') showError(st.lastError || 'La compressione si è interrotta.'); return; }
       if (d.phase === 'fatto') { renderPct(1); return; }
@@ -1130,8 +1098,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
     /** Coda (v0.36): true = la lista della coda sostituisce la scheda del singolo video; false = torna al passo 1 vuoto. */
     setQueueMode(on) {
       st.qMode = !!on; root.dataset.queue = String(st.qMode); st.qShareFb = false;
-      if (st.qMode) { st.file = null; setResume(null); R.pick.hidden = true; R.fileBox.hidden = true; R.queue.hidden = false; if (st.stage === 'pick' || st.stage === 'done' || st.stage === 'error') setStage('ready'); }
-      else { st.queue = null; st.qCur = null; R.queue.hidden = true; R.pick.hidden = false; R.fileBox.hidden = true; R.qNow.hidden = true; if (!st.busy) setStage('pick'); }
+      if (st.qMode) { st.file = null; setResume(null); R.pick.hidden = true; R.queue.hidden = false; if (st.stage === 'pick' || st.stage === 'done' || st.stage === 'error') setStage('ready'); }
+      else { st.queue = null; st.qCur = null; R.queue.hidden = true; R.pick.hidden = false; R.qNow.hidden = true; if (!st.busy) setStage('pick'); }
       resetCancel(); syncSettings();
     },
     /** Vista della coda dall'app: {running, curId, msg:{text,kind}|null, items:[{id,name,sizeMB,status,info,result,error,saved,hasFile,hasOut,interrupted,lost,resume}]}. */
@@ -1154,7 +1122,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     /** Applica impostazioni (es. quelle salvate con la coda). */
     applySettings(s = {}) { writeSettings({ ...readSettings(), ...s }); },
     /** Torna al passo 1 (nessun file). */
-    reset() { thumbs.clear(); thumbQ.length = 0; st.file = null; setResume(null); st.qMode = false; st.queue = null; root.dataset.queue = 'false'; R.queue.hidden = true; R.pick.hidden = false; R.fileBox.hidden = true; setBusy(false); setStage('pick'); updateEstimate(); },
+    reset() { thumbs.clear(); thumbQ.length = 0; st.file = null; setResume(null); st.qMode = false; st.queue = null; root.dataset.queue = 'false'; R.queue.hidden = true; R.pick.hidden = false; setBusy(false); setStage('pick'); updateEstimate(); },
     destroy() { for (const [t, h] of dndTargets) window.removeEventListener(t, h); listeners.forEach(([t, h]) => bus.removeEventListener(t, h)); root.innerHTML = ''; },
   };
 }
