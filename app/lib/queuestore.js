@@ -2,7 +2,7 @@
 // Solo il manifest (nomi, peso, data, stato, impostazioni, risultati): i File scelti NON sono persistenti in Safari e vanno
 // riselezionati; i risultati restano in OPFS (radice) finché salvati, i segmenti della voce interrotta in OPFS jobs/current.
 // Ogni errore (IndexedDB non disponibile, navigazione privata, quota) è assorbito: la coda funziona lo stesso, solo non si riprende.
-import { ledger, STATE } from './storage.js?v=0.38.6';
+import { ledger, STATE } from './storage.js?v=0.38.7';
 const DB = 'fcv', STORE = 'kv', KEY = 'queue';
 
 function openDb() {

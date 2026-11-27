@@ -1,9 +1,10 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.38.6';
-import { sprite, SPRITES } from './sprite.js?v=0.38.6';
-import { createLogStore } from './logstore.js?v=0.38.6';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.6';
+import { bus } from './bus.js?v=0.38.7';
+import { sprite, SPRITES } from './sprite.js?v=0.38.7';
+import { makeThumb } from '../lib/thumb.js?v=0.38.6';
+import { createLogStore } from './logstore.js?v=0.38.7';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.7';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -560,23 +561,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
   root.querySelector('.fcv-step-set').addEventListener('change', syncSettings);
 
   // ---------- miniature (v0.38.4) ----------
-  // Un <video> temporaneo alla volta: frame a ~10 % → canvas 96 px → JPEG; poi il <video> viene svuotato. Cache in memoria per id; mai durante un export.
+  // v0.38.7: nessun <video>: app/lib/thumb.js (Mediabunny + VideoDecoder, un pacchetto) → canvas 96 px → JPEG. Cache in memoria per id; mai durante un export.
   const thumbs = new Map(); let thumbBusy = false;
-  function makeThumb(blob) {
-    return new Promise((res) => {
-      const v = document.createElement('video'), url = URL.createObjectURL(blob); let done = false, t;
-      const fin = (u) => { if (done) return; done = true; clearTimeout(t); try { v.removeAttribute('src'); v.load(); } catch {} URL.revokeObjectURL(url); res(u); };
-      const grab = () => { try { const w = v.videoWidth, h = v.videoHeight; if (!w || !h) return fin(null); const k = 96 / Math.max(w, h), c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k)); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); fin(c.toDataURL('image/jpeg', 0.7)); } catch { fin(null); } };
-      v.muted = true; v.playsInline = true; v.preload = 'metadata'; t = setTimeout(() => fin(null), 8000);
-      v.addEventListener('error', () => fin(null));
-      v.addEventListener('loadedmetadata', () => {
-        let seeked = false; const go = () => { if (seeked) return; seeked = true; grab(); };
-        v.addEventListener('seeked', () => { if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(go); else go(); setTimeout(go, 600); }, { once: true });
-        try { v.requestVideoFrameCallback?.(() => {}); v.currentTime = Math.min(Math.max(0.05, (v.duration || 1) * 0.1), Math.max(0, (v.duration || 1) - 0.05)); } catch { fin(null); }
-      }, { once: true });
-      v.src = url;
-    });
-  }
   const thumbOk = () => !st.busy || (st.qMode && !st.qCur); // mai durante un export (tra una voce e l'altra sì)
   const thumbQ = [];
   async function thumbPump() {
