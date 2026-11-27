@@ -348,7 +348,7 @@ function template(opts) {
       <li>HEVC 10-bit · HDR · Dolby Vision · nessun upload.</li>
     </ul>
     <div class="fcv-ab-go"><button type="button" class="px-btn fcv-sm" data-ref="abLog">Log tecnico</button><button type="button" class="px-btn fcv-sm" data-ref="abStore">Spazio occupato</button></div>
-    <button type="button" class="px-btn px-btn--primary px-btn--block" data-ref="abClose">Chiudi</button>
+    <button type="button" class="px-btn px-btn--primary px-btn--block" data-ref="abClose" autofocus>Chiudi</button>
   </div>
 </dialog>`;
 }
@@ -540,7 +540,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   const pixRatio = (s, f) => { const r = resApplies(s.res, f), sh = shortSide(f); return r === 'orig' || !sh ? 1 : (r * r) / (sh * sh); }; // pixel scelti / pixel sorgente (stesso rapporto d'aspetto)
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, pixelRatio: pixRatio(st.settings, st.file), audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js
-  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: parN(st.settings), width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: resApplies(st.settings.res, f) !== 'orig' }) : null; };
+  const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: parN(st.settings), width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: resApplies(st.settings.res, f) !== 'orig', mode: st.settings.mode, res: resApplies(st.settings.res, f) }) : null; };
   function updateEstimate() {
     if (st.qMode) { updateQueueEstimate(); return; }
     const d = st.file?.durationS, src = st.file?.sizeMB;
@@ -567,7 +567,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   function predictItem(it) {
     const f = itemFile(it); if (!f) return null; const s = st.settings;
     const mb = estimateOutBytes({ durS: f.durationS, videoMbps: s.bitrateMbps, pixelRatio: pixRatio(s, f), audioMode: s.audioMode, aacBps: f.aacBps, apacBps: s.apac ? f.apacBps : 0 }) / 1048576;
-    const t = estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: s.audioMode, par2: parN(s), width: f.width, height: f.height, sceneQ: s.sceneQ, downscale: resApplies(s.res, f) !== 'orig' });
+    const t = estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: s.audioMode, par2: parN(s), width: f.width, height: f.height, sceneQ: s.sceneQ, downscale: resApplies(s.res, f) !== 'orig', mode: s.mode, res: resApplies(s.res, f) });
     return { mb, s: t?.s ?? null, pct: f.sizeMB ? (1 - mb / f.sizeMB) * 100 : null };
   }
   const needsFile = (it) => !it.hasFile && ['attesa', 'corso', 'errore', 'annullata'].includes(it.status);
@@ -711,7 +711,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
 
   // ---------- avanzamento ----------
   function startProgress({ keepLog = false } = {}) {
-    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = parN(st.settings); st.sceneUsed = st.settings.sceneQ; st.dsUsed = resApplies(st.settings.res, st.file) !== 'orig'; st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
+    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = parN(st.settings); st.sceneUsed = st.settings.sceneQ; st.dsUsed = resApplies(st.settings.res, st.file) !== 'orig'; st.modeUsed = st.settings.mode; st.resUsed = resApplies(st.settings.res, st.file); st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
     if (!keepLog) clearLog();
     const s = st.settings;
     R.qNow.hidden = !st.qCur;
@@ -861,7 +861,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   function learnSpeed(realT) {
     const vs = (st.vtEnd || st.vt1) - st.vt0;
     // con le prove per scena la fase video non misura la velocità di codifica: niente salvataggio
-    if (st.vFrames > 0 && vs > 1 && !st.sceneUsed) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height, downscale: st.dsUsed }, st.vFrames / vs, realT);
+    if (st.vFrames > 0 && vs > 1 && !st.sceneUsed) saveSpeed({ par2: st.par2Used, width: st.file?.width, height: st.file?.height, downscale: st.dsUsed, mode: st.modeUsed, res: st.resUsed }, st.vFrames / vs, realT);
   }
   function confetti(el = R.confetti) {
     const cols = ['--px-yellow', '--px-lime', '--px-sky', '--px-orange', '--px-red', '--px-cyan'];
