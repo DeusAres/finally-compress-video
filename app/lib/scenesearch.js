@@ -42,6 +42,19 @@ export const SCENE = Object.freeze({
   floor: 2e6,                  // bitrate minimo (ratecontrol DEFAULTS.minBitrate)
   timeFactor: 1.6,             // tempo totale ≈ 1.6× la sola codifica (v0.35, stima research/12 §12; v0.34.1 misurato ≈ 3× su IMG_3053): UI e barra
   maxFails: 2,                 // dopo N segmenti consecutivi falliti le prove si spengono per il resto del job
+  // v0.37.4 — tetto dalla sorgente: target del segmento ≤ srcCap × bitrate della sorgente nel segmento (anche a bitrate fisso).
+  // 0.85: ricodificare a ≥ il bitrate della camera non fa risparmiare nulla (stessa codifica HEVC, + perdita di generazione);
+  // il controllo a circuito chiuso VT sfora di ~3–5 % (estimate.js 1.03, brctl) e l'overhead di contenitore/audio è uguale
+  // nei due file, quindi 0.85 lascia ≥ ~10 % di risparmio garantito sul video anche nel caso peggiore. Più vicino a 1 (0.9)
+  // il guadagno è nel rumore dello sforamento; più basso (0.7) si toglie qualità a sorgenti già leggere senza motivo.
+  srcCap: 0.85,
+  // sorgente intera ≤ keepRatio × target video → non si ricomprime (tenuto l'originale): il tetto sarebbe ≤ 0.85 × sorgente,
+  // cioè ≤ ~15 % di risparmio pagato con una seconda generazione HEVC e minuti di codifica.
+  keepRatio: 1.1,
+  // v0.37.4 — prove saltate: dopo skipAfter segmenti PROVATI di fila finiti al tetto con VMAF stimato < target − skipGap
+  // (−4 ≈ servirebbe ≥ 1.3× il tetto, pendenza 10/raddoppio), i segmenti seguenti con bitrate sorgente entro ×skipSim del
+  // riferimento (e del segmento prima) usano il tetto senza prove. Sbagliare costa solo bit (tetto al posto di meno), mai qualità.
+  skipAfter: 2, skipGap: 4, skipSim: 1.25,
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -58,6 +71,24 @@ export function centerWindow(frames, startIdx, endIdx, trialSec = SCENE.trialSec
   let d = 0, e = s; while (e < endIdx && d < trialSec - 1e-6) { d += frames[e].dur; e++; }
   return win(frames, s, e);
 }
+/** Tetto del segmento: min(limite utente, srcCap × bitrate sorgente del segmento); senza dimensioni dei pacchetti, il limite. */
+export function segmentCap(srcBitrate, ceiling, factor = SCENE.srcCap) {
+  return srcBitrate > 0 ? Math.min(ceiling, factor * srcBitrate) : ceiling;
+}
+/** Tetti per segmento (bit/s) per l'encode a bitrate fisso (stessa regola del piano per scena). */
+export function segmentCaps(frames, segStarts, ceiling, factor = SCENE.srcCap) {
+  return segStarts.map((a, k) => segmentCap(win(frames, a, k + 1 < segStarts.length ? segStarts[k + 1] : frames.length).srcBitrate, ceiling, factor));
+}
+/**
+ * Conviene ricomprimere? Bitrate video della sorgente intera vs target video dell'utente. keep = true → tenere l'originale
+ * (sorgente ≤ keepRatio × target). Senza dimensioni dei pacchetti (srcBps 0) si ricomprime come prima.
+ */
+export function worthRecompress(srcBps, targetBps, keepRatio = SCENE.keepRatio) {
+  const keep = srcBps > 0 && srcBps <= keepRatio * targetBps;
+  return { keep, ratio: srcBps > 0 ? srcBps / targetBps : NaN };
+}
+/** Bitrate video medio della sorgente (bit/s) da [{dur, size}]. */
+export function sourceBitrate(frames) { return win(frames, 0, frames.length).srcBitrate; }
 function win(frames, s, e) {
   let d = 0, b = 0; for (let i = s; i < e; i++) { d += frames[i].dur; b += frames[i].size || 0; }
   return { startIdx: s, endIdx: e, duration: d, srcBitrate: d > 0 ? b * 8 / d : 0 };
@@ -73,8 +104,9 @@ export function planSceneSegments(frames, segStarts, ceiling, o = {}) {
   return segStarts.map((startIdx, k) => {
     const endIdx = k + 1 < segStarts.length ? segStarts[k + 1] : N;
     const all = win(frames, startIdx, endIdx), trialWindow = centerWindow(frames, startIdx, endIdx, trialSec);
-    const prior = hasSizes && trialWindow.srcBitrate > 0 ? predictBitrate(trialWindow.srcBitrate, { ...RC, minBitrate: floor, maxBitrate: ceiling }) : ceiling;
-    return { k, startIdx, endIdx, duration: all.duration, srcBitrate: all.srcBitrate, trialWindow, prior };
+    const cap = hasSizes ? segmentCap(all.srcBitrate, ceiling, o.srcCap ?? SCENE.srcCap) : ceiling; // v0.37.4: mai oltre 0.85 × sorgente
+    const prior = hasSizes && trialWindow.srcBitrate > 0 ? predictBitrate(trialWindow.srcBitrate, { ...RC, minBitrate: Math.min(floor, cap), maxBitrate: cap }) : cap;
+    return { k, startIdx, endIdx, duration: all.duration, srcBitrate: all.srcBitrate, trialWindow, prior, cap };
   });
 }
 
@@ -101,13 +133,16 @@ function estAtChoice(res) {
 export const fallbackRecord = (ceiling, err, ms) => ({ b: ceiling, why: 'fallback', err: String(err?.message || err).slice(0, 160), pts: [], est: null, ms: Math.round(ms || 0) });
 
 const mb = (b) => (b / 1e6).toFixed(1);
-const WHY = { 'clamped-max': ' (limite = bitrate scelto: la soglia richiederebbe di più)', 'clamped-min': ' (minimo)', searched: '', fallback: ' (prove fallite: bitrate dell\'utente)', off: ' (prove disattivate: bitrate dell\'utente)' };
+const WHY = { 'clamped-max': ' (limite = bitrate scelto: la soglia richiederebbe di più)', 'clamped-min': ' (minimo)', searched: '', fallback: ' (prove fallite: bitrate dell\'utente)', off: ' (prove disattivate: bitrate dell\'utente)',
+  skipped: ' (prove saltate: i segmenti prima, simili, erano già al limite con VMAF stimato basso)' };
+const whyOf = (rec) => (rec.cs && rec.why === 'clamped-max' ? ' (limite = 0.85 × bitrate della sorgente: la soglia richiederebbe di più)'
+  : rec.cs && (rec.why === 'fallback' || rec.why === 'off' || rec.why === 'skipped') ? (WHY[rec.why] ?? '').replace(/\)$/, ', tetto 0.85 × sorgente)') : WHY[rec.why] ?? '');
 /** Riga di log: «scena n: prove a x/y Mbps → VMAF stimato a/b → scelto z Mbps (reale w Mbps)». */
 export function sceneLine(k, rec, real) {
   const tail = real > 0 ? ` (reale ${mb(real)} Mbps)` : '';
-  if (!rec.pts?.length) return `scena ${k + 1}: nessuna prova${rec.err ? ` [${rec.err}]` : ''} → ${mb(rec.b)} Mbps${WHY[rec.why] ?? ''}${tail}`;
+  if (!rec.pts?.length) return `scena ${k + 1}: nessuna prova${rec.err ? ` [${rec.err}]` : ''} → ${mb(rec.b)} Mbps${whyOf(rec)}${tail}`;
   const pts = [...rec.pts].sort((a, b) => a.b - b.b);
-  return `scena ${k + 1}: prove a ${pts.map((p) => mb(p.b)).join('/')} Mbps → VMAF stimato ${pts.map((p) => p.q.toFixed(1)).join('/')} → scelto ${mb(rec.b)} Mbps${WHY[rec.why] ?? ''}${tail}`;
+  return `scena ${k + 1}: prove a ${pts.map((p) => mb(p.b)).join('/')} Mbps → VMAF stimato ${pts.map((p) => p.q.toFixed(1)).join('/')} → scelto ${mb(rec.b)} Mbps${whyOf(rec)}${tail}`;
 }
 
 /**
@@ -116,11 +151,11 @@ export function sceneLine(k, rec, real) {
  * segs: [{duration}], recs: record per segmento (anche null), reals: bit/s reali per segmento (facoltativo).
  */
 export function sceneSummary(segs, recs, reals = []) {
-  let bd = 0, d = 0, rd = 0, rdd = 0, min = Infinity, max = 0, ms = 0, nFb = 0, nCap = 0; const q = [], hist = new Map();
+  let bd = 0, d = 0, rd = 0, rdd = 0, min = Infinity, max = 0, ms = 0, nFb = 0, nCap = 0, nSkip = 0, nSrc = 0; const q = [], hist = new Map();
   segs.forEach((s, k) => {
     const r = recs[k]; if (!r) return;
     bd += r.b * s.duration; d += s.duration; min = Math.min(min, r.b); max = Math.max(max, r.b); ms += r.ms || 0;
-    if (r.why === 'fallback' || r.why === 'off') nFb++; if (r.why === 'clamped-max') nCap++;
+    if (r.why === 'fallback' || r.why === 'off') nFb++; if (r.why === 'clamped-max') nCap++; if (r.why === 'skipped') nSkip++; if (r.cs) nSrc++;
     if (r.est) q.push(r.est.q);
     if (reals[k] > 0) { rd += reals[k] * s.duration; rdd += s.duration; }
     const h = Math.floor(r.b / 1e6); hist.set(h, (hist.get(h) || 0) + 1);
@@ -128,7 +163,7 @@ export function sceneSummary(segs, recs, reals = []) {
   if (!d) return null;
   const dist = [...hist.entries()].sort((a, b) => a[0] - b[0]).map(([h, n]) => `${h}–${h + 1} Mbps ×${n}`).join(' · ');
   return { n: recs.filter(Boolean).length, min, max, mean: bd / d, realMean: rdd ? rd / rdd : 0, dist,
-    vmafMin: q.length ? Math.min(...q) : NaN, vmafMean: q.length ? q.reduce((a, b) => a + b, 0) / q.length : NaN, trialS: ms / 1000, fallbacks: nFb, capped: nCap };
+    vmafMin: q.length ? Math.min(...q) : NaN, vmafMean: q.length ? q.reduce((a, b) => a + b, 0) / q.length : NaN, trialS: ms / 1000, fallbacks: nFb, capped: nCap, skipped: nSkip, srcCapped: nSrc };
 }
 
 /** Luma 8-bit (range limitato 16..235, come un piano Y di decoder) da pixel RGBA di canvas, senza copia Float32. */
@@ -146,33 +181,61 @@ export function lumaU8FromRGBA(px, width, height, [kr, kg, kb] = [0.2126, 0.7152
  */
 export async function runSceneSearch({ plan, from = 0, saved = {}, deps, ceiling, opts = {}, isFatal = () => false, save = async () => {}, check = async () => {}, log = () => {}, onProgress = () => {}, now = () => Date.now() }) {
   const recs = plan.map((s, k) => saved[k] || null); let fails = 0, off = false;
+  const capOf = (seg) => Math.min(ceiling, seg.cap ?? ceiling), cs = (seg) => (capOf(seg) < ceiling ? { cs: 1 } : {});
+  const sk = skipTracker(opts);
   const todo = plan.filter((s) => s.k >= from && !saved[s.k]).length; let done = 0;
   if (from < plan.length && todo < plan.length - from) log(`ripresa: prove già fatte per ${plan.length - from - todo} segmenti (dal manifest), da fare ${todo}`);
   const tAll = now();
   for (const seg of plan) {
-    if (seg.k < from || recs[seg.k]) continue;
+    if (seg.k < from || recs[seg.k]) { if (recs[seg.k]) sk.see(seg, recs[seg.k]); continue; }
     await check();
-    const t0 = now(); let rec;
-    if (off) rec = { ...fallbackRecord(ceiling, 'prove disattivate dopo errori ripetuti', 0), why: 'off' };
+    const t0 = now(), cap = capOf(seg); let rec;
+    if (off) rec = { ...fallbackRecord(cap, 'prove disattivate dopo errori ripetuti', 0), why: 'off', ...cs(seg) };
+    else if (sk.skip(seg)) { rec = { b: cap, why: 'skipped', pts: [], est: null, ms: 0, ...cs(seg) }; if (!sk.said) { sk.said = true; log(`prove saltate da qui per i segmenti con bitrate sorgente simile (entro ×${opts.skipSim ?? SCENE.skipSim} di ${mb(sk.ref())} Mbps): ${opts.skipAfter ?? SCENE.skipAfter} segmenti di fila già al limite con VMAF stimato < ${(opts.targetVmaf ?? SCENE.targetVmaf) - (opts.skipGap ?? SCENE.skipGap)} → uso il limite`); } }
     else {
       try {
-        const wp = warmPrior(recs[seg.k - 1], ceiling, opts.minBitrate ?? SCENE.floor, seg.prior);
-        const res = await searchBitrate({ trialWindow: seg.trialWindow, prior: wp ?? seg.prior }, deps,
-          { ...opts, minBitrate: Math.min(opts.minBitrate ?? SCENE.floor, ceiling), maxBitrate: ceiling });
-        rec = toRecord(res, now() - t0, wp != null ? 'prev' : 'src'); fails = 0;
+        const wp = warmPrior(recs[seg.k - 1], cap, opts.minBitrate ?? SCENE.floor, seg.prior);
+        const res = await searchBitrate({ trialWindow: seg.trialWindow, prior: Math.min(cap, wp ?? seg.prior) }, deps,
+          { ...opts, minBitrate: Math.min(opts.minBitrate ?? SCENE.floor, cap), maxBitrate: cap });
+        rec = { ...toRecord(res, now() - t0, wp != null ? 'prev' : 'src'), ...cs(seg) }; fails = 0;
       } catch (e) {
         if (isFatal(e)) throw e;
-        rec = fallbackRecord(ceiling, e, now() - t0); fails++;
-        log(`⚠️ scena ${seg.k + 1}: prove fallite (${e?.name || 'errore'}: ${e?.message || e}) → ripiego a ${mb(ceiling)} Mbps per questo segmento`);
+        rec = { ...fallbackRecord(cap, e, now() - t0), ...cs(seg) }; fails++;
+        log(`⚠️ scena ${seg.k + 1}: prove fallite (${e?.name || 'errore'}: ${e?.message || e}) → ripiego a ${mb(cap)} Mbps per questo segmento`);
         if (fails >= (opts.maxFails ?? SCENE.maxFails)) { off = true; log(`⚠️ ${fails} segmenti di fila senza prove riuscite: per il resto del job uso il bitrate dell'utente`); }
       } finally { try { deps.release?.(); } catch {} }
     }
-    recs[seg.k] = rec; await save(seg.k, rec); done++;
+    recs[seg.k] = rec; sk.see(seg, rec); await save(seg.k, rec); done++;
     log(`${sceneLine(seg.k, rec)}${rec.ms ? ` · prove ${(rec.ms / 1000).toFixed(1)} s` : ''}${workNote(rec)}`);
     onProgress(done, todo, seg.k);
   }
   if (done && deps.timing) { try { log(timingLine(deps.timing(), now() - tAll, done)); } catch {} }
   return recs;
+}
+
+/**
+ * v0.37.4 prove saltate. see(seg, rec) in ordine di segmento; skip(seg) = true se gli ultimi skipAfter segmenti PROVATI sono finiti
+ * al tetto (clamped-max) con VMAF stimato < target − skipGap, hanno bitrate sorgente simile fra loro, e seg è entro ×skipSim sia
+ * del loro riferimento (media geometrica) sia del segmento subito prima. Un segmento diverso si prova: se non finisce al tetto
+ * basso la serie si azzera. Segmenti saltati/falliti non cambiano la serie.
+ */
+export function skipTracker(opts = {}) {
+  const K = opts.skipAfter ?? SCENE.skipAfter, gap = opts.skipGap ?? SCENE.skipGap, sim = opts.skipSim ?? SCENE.skipSim, tq = opts.targetVmaf ?? SCENE.targetVmaf;
+  let run = [], prevSrc = 0;
+  const near = (a, b) => a > 0 && b > 0 && Math.abs(Math.log(a / b)) <= Math.log(sim);
+  const ref = () => (run.length ? Math.exp(run.reduce((a, x) => a + Math.log(x), 0) / run.length) : 0);
+  return {
+    said: false, ref,
+    see(seg, rec) {
+      const src = seg.srcBitrate;
+      if (rec.why === 'clamped-max' && rec.pts?.length && rec.est && rec.est.q < tq - gap && src > 0) {
+        if (run.length && !near(src, ref())) run = []; // serie solo fra segmenti simili
+        run.push(src); if (run.length > K) run.shift();
+      } else if (rec.why !== 'skipped' && rec.why !== 'fallback' && rec.why !== 'off') run = [];
+      prevSrc = src;
+    },
+    skip(seg) { return K > 0 && run.length >= K && near(seg.srcBitrate, ref()) && near(seg.srcBitrate, prevSrc); },
+  };
 }
 
 /**

@@ -7,7 +7,8 @@
 // Item = { id, key:{name,size,lastModified}, status, info?, result?, error?, saved?, interrupted?, resume? }
 //   status: 'attesa' | 'corso' | 'fatto' | 'errore' | 'annullata'
 //   info:   metadati letti dal file {dur, W, H, hdr, dv, fps, aacBps, apacBps, apac, meta, exported}
-//   result: {outName, opfsName, inMB, outMB, pct, timeS, predMB, predS, sceneBr?}  (opfsName: file in OPFS finché non salvato)
+//   result: {outName, opfsName, inMB, outMB, pct, timeS, predMB, predS, sceneBr?, kept?}  (opfsName: file in OPFS finché non salvato;
+//            kept = 'light' | 'bigger': nessun file prodotto, tenuto l'originale → outMB = inMB, niente opfsName)
 //   saved:  true quando il risultato è stato salvato (o rilasciato): il file OPFS non c'è più
 export const QUEUE_VERSION = 1;
 export const ST = Object.freeze({ WAIT: 'attesa', RUN: 'corso', DONE: 'fatto', ERR: 'errore', CANCEL: 'annullata' });
@@ -101,7 +102,17 @@ export function uniqueOutName(taken, name) {
 }
 
 /** Risultati pronti da salvare (fatto, non ancora salvati). */
-export const readyToSave = (q) => q.items.filter((it) => it.status === ST.DONE && !it.saved && it.result);
+export const readyToSave = (q) => q.items.filter((it) => it.status === ST.DONE && !it.saved && it.result?.opfsName); // v0.37.4: «tenuto l'originale» (result.kept) non ha file da salvare
+
+/**
+ * v0.37.4: variazione di peso con segno esplicito, virgola decimale e spazio: risparmio 60 → «−60,0 %», file più pesante (−69.3) → «+69,3 %».
+ * saved = (1 − uscita/sorgente) × 100. Mai «−-69.3%».
+ */
+export function fmtPct(saved, digits = 1) {
+  if (!Number.isFinite(saved)) return '—';
+  const a = Math.abs(saved), t = a.toFixed(digits).replace('.', ',');
+  return `${Number(a.toFixed(digits)) === 0 ? '±' : saved > 0 ? '−' : '+'}${t} %`;
+}
 
 /** Nomi OPFS da NON cancellare all'avvio / nelle pulizie (risultati della coda non ancora salvati). */
 export const keepNames = (q) => (q ? readyToSave(q).map((it) => it.result.opfsName).filter(Boolean) : []);
@@ -118,7 +129,7 @@ export function queueStats(q) {
   for (const it of q.items) {
     s.inMB += it.key.size / 1048576;
     if (it.status === ST.WAIT) s.wait++; else if (it.status === ST.RUN) s.run++; else if (it.status === ST.ERR) s.err++; else if (it.status === ST.CANCEL) s.cancel++;
-    else if (it.status === ST.DONE && it.result) { s.done++; s.outMB += it.result.outMB; s.doneInMB += it.result.inMB; s.timeS += it.result.timeS || 0; if (!it.saved) s.toSave++; }
+    else if (it.status === ST.DONE && it.result) { s.done++; s.outMB += it.result.outMB; s.doneInMB += it.result.inMB; s.timeS += it.result.timeS || 0; if (!it.saved && it.result.opfsName) s.toSave++; }
   }
   s.pct = s.doneInMB > 0 ? (1 - s.outMB / s.doneInMB) * 100 : null;
   return s;
@@ -132,13 +143,13 @@ const fM = (x) => (Number.isFinite(x) ? x.toFixed(1) : '—');
 /** Riassunto finale per il log: righe di testo (tabella a colonne fisse, monospazio). */
 export function summaryLines(q) {
   const s = queueStats(q), out = [];
-  out.push(`CODA: ${s.n} video · fatti ${s.done} · errori ${s.err} · annullati ${s.cancel} · in attesa ${s.wait}${s.done ? ` · ${fM(s.doneInMB)} → ${fM(s.outMB)} MB (−${Math.round(s.pct)}%) · tempo ${fT(s.timeS)}` : ''}`);
+  out.push(`CODA: ${s.n} video · fatti ${s.done} · errori ${s.err} · annullati ${s.cancel} · in attesa ${s.wait}${s.done ? ` · ${fM(s.doneInMB)} → ${fM(s.outMB)} MB (${fmtPct(s.pct, 0)}) · tempo ${fT(s.timeS)}` : ''}`);
   const w = Math.min(28, Math.max(4, ...q.items.map((it) => it.key.name.length)));
   out.push(`CODA | ${p2('file', w)} | ${l2('prima → dopo MB', 18)} | ${l2('%', 5)} | ${l2('tempo', 6)} | previsto/reale`);
   q.items.forEach((it) => {
     const nm = it.key.name.length > w ? it.key.name.slice(0, w - 1) + '…' : it.key.name, r = it.result;
     if (it.status === ST.DONE && r) {
-      out.push(`CODA | ${p2(nm, w)} | ${l2(`${fM(r.inMB)} → ${fM(r.outMB)}`, 18)} | ${l2(`−${Math.round(r.pct)}`, 5)} | ${l2(fT(r.timeS), 6)} | peso ${fM(r.predMB)}/${fM(r.outMB)} MB · tempo ${fT(r.predS)}/${fT(r.timeS)}`);
+      out.push(`CODA | ${p2(nm, w)} | ${l2(`${fM(r.inMB)} → ${fM(r.outMB)}`, 18)} | ${l2(r.kept ? 'orig.' : fmtPct(r.pct, 0).replace(' %', ''), 5)} | ${l2(fT(r.timeS), 6)} | peso ${fM(r.predMB)}/${fM(r.outMB)} MB · tempo ${fT(r.predS)}/${fT(r.timeS)}`);
     } else {
       out.push(`CODA | ${p2(nm, w)} | ${l2(`${fM(it.key.size / 1048576)} → —`, 18)} | ${l2('', 5)} | ${l2('', 6)} | ${STATUS_LABEL[it.status] || it.status}${it.error ? ': ' + String(it.error).slice(0, 80) : ''}`);
     }

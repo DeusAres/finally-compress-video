@@ -2,8 +2,8 @@
 // Usata dall'app (avviso «versione compatibile») e da tools/diag/import.html. Pura ES2020, funziona in Safari e Node.
 // Indizi misurati su file reali (docs/research/17-import-originale.md §4): la copia che iOS consegna dalla Libreria Foto
 // (o da un trascinamento) è RICODIFICATA da Foto: chiave com.apple.quicktime.displayname aggiunta, traccia AAC spostata
-// prima del video, apac (audio spaziale) tolto, 4K ridotto a 1080p, mvhd con l'ora dell'esportazione. L'originale della
-// fotocamera ha il video come prima traccia e nessuna displayname.
+// prima del video, apac (audio spaziale) tolto, 4K ridotto a 1080p, mvhd con l'ora dell'esportazione. Questi indizi da soli NON bastano (originali recenti hanno audio
+// prima del video e displayname): vedi judgeOrigin.
 import { parseBoxes, childBoxes, trakHandler } from './dovi.js?v=0.37.3';
 
 const u16 = (b, o) => (b[o] << 8) | b[o + 1];
@@ -106,11 +106,15 @@ export function judgeOrigin(info, name = '') {
   const apple = k['com.apple.quicktime.make'] === 'Apple' || /^IMG_\d+/i.test(name);
   const reasons = [], notes = [];
   if (!v || !apple) return { verdict: 'sconosciuto', reasons, notes: v ? ['nessuna marca Apple nei metadati e nome non IMG_xxxx'] : ['nessuna traccia video'] };
-  if ('com.apple.quicktime.displayname' in k) reasons.push('ha la chiave «displayname» che Foto aggiunge quando esporta');
+  // Solo prove forti producono 'esportato' (avviso in UI). displayname e ordine delle tracce NON bastano: compaiono anche
+  // negli originali recenti (es. audio cinematic: «mappa ID 2→2 1→1 3→3», audio prima del video).
+  const imgName = /^IMG_\d+/i.test(name);
   const first = tr.find((t) => t.handler === 'vide' || t.handler === 'soun');
-  if (first && first.handler === 'soun') reasons.push('la traccia audio precede il video (la fotocamera scrive il video per primo)');
   const mebx = tr.filter((t) => t.entry === 'mebx').length;
-  if (v.codec === 'H.264' && !mebx) reasons.push('video H.264 senza tracce metadati iPhone');
+  if (imgName && v.codec === 'H.264' && !mebx) reasons.push('video H.264 (avc1) senza tracce metadati iPhone in un file IMG_xxxx');
+  if (imgName && v.codec === 'HEVC' && v.bitDepth === 8 && !mebx) reasons.push('HEVC a 8 bit senza tracce metadati iPhone in un file IMG_xxxx');
+  if ('com.apple.quicktime.displayname' in k) notes.push('chiave «displayname» presente (indizio debole: compare anche in alcuni originali)');
+  if (first && first.handler === 'soun') notes.push('traccia audio prima del video (indizio debole: normale anche negli originali recenti)');
   if (!mebx) notes.push('nessuna traccia metadati iPhone (mebx)');
   if (!tr.some((t) => t.entry === 'apac')) notes.push('nessun audio spaziale (apac): normale se registrato senza, ma l\'esportazione lo toglie');
   if (v.codec === 'HEVC' && v.bitDepth === 8) notes.push('HEVC 8 bit (SDR): normale se l\'HDR era spento, tipico di «Più compatibile»');
