@@ -160,15 +160,41 @@ fn eetf(n:f32)->f32{let mi=pq(u.lw);let e1=pq(n)/mi;let ml=pq(u.tgt)/mi;let ks=1
  return pqi(e2*mi);}
 fn hb(x:f32)->f32{return ((x*(0.15*x+0.05)+0.004)/(x*(0.15*x+0.5)+0.06))-0.02/0.3;}
 fn hlgi(e:vec3f)->vec3f{let a=0.17883277;let b=0.28466892;let c=0.55991073;let x=clamp(e,vec3f(0),vec3f(1));return select((exp((x-c)/a)+b)/12.0,x*x/3.0,x<=vec3f(0.5));}
+// Varianti HLG → SDR (?tm=, research/19 §Tone map; misure: tools/lab/sdr8_tm_metrics.py, stessa matematica):
+//  bt2446c: ITU-R BT.2446-1 metodo C (crosstalk α=0.05, curva lineare k1 fino a 69.8 nit poi logaritmica, cromaticità invariata,
+//           crosstalk inverso) + eccesso del canale massimo riscalato (non tagliato) + gamut morbido;
+//  mobius:  BT.2408 (bianco di riferimento 203 nit = 100 % SDR), curva mobius di ffmpeg/libplacebo/mpv (lineare fino a j=MJ,
+//           poi spalla fino al picco 1000 nit) sulla norma max(R,G,B) → rapporti RGB invariati, + gamut morbido;
+//  hlgsdr:  HLG letto come SDR (BT.2100: compatibilità con display BT.1886 γ 2.4), 2020→709 lineare, saturazione ×SAT3,
+//           curva a S sulla luma (smoothstep al CON3), gamut morbido;
+//  hable:   attuale (Hable su max-RGB, nominale 100 nit, normalizzato al picco). eetf: BT.2390 EETF max-RGB verso 203 nit.
+const K20=vec3f(0.2627,0.678,0.0593);const K7=vec3f(0.2126,0.7152,0.0722);const GT=0.8;const XA=0.05;const MJ=${MJ};const SAT3=1.15;const CON3=0.25;
+fn m709(d:vec3f)->vec3f{return vec3f(dot(vec3f(1.6605,-0.5876,-0.0728),d),dot(vec3f(-0.1246,1.1329,-0.0083),d),dot(vec3f(-0.0182,-0.1006,1.1187),d));}
+fn mx3(v:vec3f)->f32{return max(v.r,max(v.g,v.b));}
+fn oetf(x:vec3f)->vec3f{let v=clamp(x,vec3f(0),vec3f(1));return select(1.099*pow(v,vec3f(0.45))-0.099,4.5*v,v<vec3f(0.018));}
+fn gam(l:vec3f)->vec3f{let y=clamp(dot(l,K7),0.0,1.0);let c=l-vec3f(y);
+ let lim=select(select(vec3f(1e9),(1.0-y)/max(c,vec3f(1e-9)),c>vec3f(0)),y/max(-c,vec3f(1e-9)),c<vec3f(0));
+ let s=1.0/max(min(lim.x,min(lim.y,lim.z)),1e-9);var f=1.0;if(s>GT){f=(GT+(s-GT)/(1.0+(s-GT)/(1.0-GT)))/s;}
+ return clamp(vec3f(y)+c*f,vec3f(0),vec3f(1));}
+fn c2446(d:vec3f)->vec3f{let c=(1.0-3.0*XA)*d+vec3f(XA*(d.r+d.g+d.b));let y=max(dot(c,K20),1e-6);
+ let k1=0.83802;let k2=15.09968;let k3=0.74204;let k4=78.99439;let yi=58.5/k1;
+ var ys=k1*y;if(y>=yi){ys=k2*log(max(y/yi-k3,1e-6))+k4;}
+ let x=c*(ys/y);let l=m709((x-vec3f(XA*(x.r+x.g+x.b)))/(1.0-3.0*XA))/100.0;return gam(l/max(mx3(l),1.0));}
+fn mob(x:f32,j:f32,pk:f32)->f32{if(x<=j){return x;}let a=-j*j*(pk-1.0)/(j*j-2.0*j+pk);let b=(j*j-2.0*j*pk+pk)/max(1e-6,pk-1.0);return (b*b+2.0*b*j+j*j)/(b-a)*(x+a)/(x+b);}
+fn i709(v:f32)->f32{if(v<0.081){return v/4.5;}return pow((v+0.099)/1.099,1.0/0.45);}
+fn hlgsdr(e:vec3f)->vec3f{let l=m709(pow(clamp(e,vec3f(0),vec3f(1)),vec3f(2.4)));let y=clamp(dot(l,K7),1e-6,1.0);let ls=vec3f(y)+(l-vec3f(y))*SAT3;
+ let ye=oetf(vec3f(y)).x;let y2=i709(ye+(ye*ye*(3.0-2.0*ye)-ye)*CON3);return oetf(gam(ls*(y2/y)));}
 fn sdr(c:vec3f)->vec3f{
  if(u.tm<0.5){return c;}
- let sc=hlgi(c);let ys=dot(sc,vec3f(0.2627,0.678,0.0593));
+ if(u.tm>4.5){return hlgsdr(c);}
+ let sc=hlgi(c);let ys=dot(sc,K20);
  let d=u.lw*pow(max(ys,1e-6),0.2)*sc;
- let l=max(vec3f(dot(vec3f(1.6605,-0.5876,-0.0728),d),dot(vec3f(-0.1246,1.1329,-0.0083),d),dot(vec3f(-0.0182,-0.1006,1.1187),d)),vec3f(0));
- let sg=max(max(l.r,l.g),max(l.b,1e-6));
+ if(u.tm>3.5){let l=m709(d);let n=max(max(mx3(l),dot(d,K20)),1e-6);return oetf(gam(l*(mob(n/u.tgt,MJ,u.lw/u.tgt)/n)));}
+ if(u.tm>2.5){return oetf(c2446(d));}
+ let l=max(m709(d),vec3f(0));
+ let sg=max(mx3(l),1e-6);
  var o:f32;if(u.tm<1.5){o=eetf(sg)/u.tgt;}else{o=hb(sg/100.0)/hb(u.lw/100.0);}
- let v=clamp(l*(o/sg),vec3f(0),vec3f(1));
- return select(1.099*pow(v,vec3f(0.45))-0.099,4.5*v,v<vec3f(0.018));}
+ return oetf(l*(o/sg));}
 fn luma(c:vec3f)->f32{return dot(c,vec3f(0.2126,0.7152,0.0722));}
 fn jnd(uv:vec2f)->vec3f{
  let px=1.0/u.size;var cs:array<vec3f,9>;var ls:array<f32,9>;
@@ -232,7 +258,7 @@ async function probeGpu(f) {
     R.features.webgpu = 'ok'; R.features.waitSubmitted = WAIT; R.features.readback = READBACK || COPY !== 'frame';
   } catch (e) { R.features.webgpu = errStr(e); }
 }
-const TM = { none: 0, eetf: 1, hable: 2 }, FILT = { none: 0, dn: 1, jnd: 2 };
+const TM = { none: 0, eetf: 1, hable: 2, bt2446c: 3, mobius: 4, hlgsdr: 5 }, FILT = { none: 0, dn: 1, jnd: 2 };
 /** Convertitore WebGPU: frame (HLG) → canvas rgba8unorm w×h (SDR BT.709) → VideoFrame. Scala se w×h ≠ sorgente (campionamento bilineare, 2:1 = media 2×2). */
 function convGpu(tm, filt) {
   let g, cv, ctx, ub, hist = null, w, h, rb = null;
