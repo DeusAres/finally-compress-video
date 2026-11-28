@@ -31,8 +31,8 @@
 // Memoria: la cache della luma sorgente è Uint8 a ½ risoluzione e solo frame pari (1080×1920 → 0.5 MB × 30 =
 // 15 MB per finestra), liberata a fine segmento; chunk di prova ≈ 1–3 MB; encoder/decoder di prova sempre chiusi
 // (finally) PRIMA dell'encode finale, che non coesiste mai con loro (research/12 §7.9, research/03).
-import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.38.8';
-import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.38.8';
+import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.38.9';
+import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.38.9';
 
 export const SCENE = Object.freeze({
   targetVmaf: RC.targetVmaf,   // 88 (BIBBIA §12)
@@ -51,6 +51,9 @@ export const SCENE = Object.freeze({
   // sorgente intera ≤ keepRatio × target video → non si ricomprime (tenuto l'originale): il tetto sarebbe ≤ 0.85 × sorgente,
   // cioè ≤ ~15 % di risparmio pagato con una seconda generazione HEVC e minuti di codifica.
   keepRatio: 1.1,
+  // v0.38.9 — con la qualità per scena il limite è un tetto (le prove scelgono spesso 2–5 Mbps con limite 8): l'originale si tiene
+  // solo DOPO le prove, se il bitrate medio scelto (pesato sulla durata) è ≥ trialKeepRatio × sorgente (risparmio video < 10 %).
+  trialKeepRatio: 0.9,
   // v0.37.4 — prove saltate: dopo skipAfter segmenti PROVATI di fila finiti al tetto con VMAF stimato < target − skipGap
   // (−4 ≈ servirebbe ≥ 1.3× il tetto, pendenza 10/raddoppio), i segmenti seguenti con bitrate sorgente entro ×skipSim del
   // riferimento (e del segmento prima) usano il tetto senza prove. Sbagliare costa solo bit (tetto al posto di meno), mai qualità.
@@ -86,6 +89,16 @@ export function segmentCaps(frames, segStarts, ceiling, factor = SCENE.srcCap) {
 export function worthRecompress(srcBps, targetBps, keepRatio = SCENE.keepRatio) {
   const keep = srcBps > 0 && srcBps <= keepRatio * targetBps;
   return { keep, ratio: srcBps > 0 ? srcBps / targetBps : NaN };
+}
+/**
+ * v0.38.9 — decisione «già leggero» con la qualità per scena, DOPO le prove. recs: record per segmento ({b} in bit/s),
+ * segs: [{duration}]. keep = true → tenere l'originale (media scelta ≥ ratio × sorgente). Record mancanti o sorgente ignota → si comprime.
+ */
+export function worthAfterTrials(recs, segs, srcBps, ratio = SCENE.trialKeepRatio) {
+  let bd = 0, d = 0;
+  for (let k = 0; k < segs.length; k++) { const r = recs[k]; if (!(r?.b > 0)) return { keep: false, mean: NaN, ratio: NaN }; bd += r.b * segs[k].duration; d += segs[k].duration; }
+  const mean = d > 0 ? bd / d : NaN, q = srcBps > 0 ? mean / srcBps : NaN;
+  return { keep: q >= ratio, mean, ratio: q };
 }
 /** Bitrate video medio della sorgente (bit/s) da [{dur, size}]. */
 export function sourceBitrate(frames) { return win(frames, 0, frames.length).srcBitrate; }

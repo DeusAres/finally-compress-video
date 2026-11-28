@@ -3,7 +3,7 @@
 // from saved records, fallback on trial errors, per-segment closed-loop controller, summary/log lines.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planSceneSegments, centerWindow, runSceneSearch, sceneSummary, sceneLine, lumaU8FromRGBA, warmPrior, timingLine, createTrialDeps, toRecord, lumaTestLine, segmentCap, segmentCaps, worthRecompress, sourceBitrate } from './scenesearch.js';
+import { planSceneSegments, centerWindow, runSceneSearch, sceneSummary, sceneLine, lumaU8FromRGBA, warmPrior, timingLine, createTrialDeps, toRecord, lumaTestLine, segmentCap, segmentCaps, worthRecompress, worthAfterTrials, sourceBitrate } from './scenesearch.js';
 import { searchBitrate } from './ratecontrol.js';
 import { planSegments } from './jobstore.js';
 import { nextBitrate, createSegmentRate } from './brctl.js';
@@ -399,4 +399,17 @@ test('v0.37.4 prove NON saltate quando il VMAF al limite è vicino alla soglia',
   const deps = { ...stubDeps({ calls }), async measure(w, enc) { const q = 88 + CAL.sd + 10 * Math.log2(enc.b / 9e6); return Array.from({ length: 30 }, () => dbFor(q)); } };
   const recs = await runSceneSearch({ plan, deps, ceiling: 8e6 });
   assert.ok(recs.every((r) => r.why !== 'skipped'));
+});
+
+test('v0.38.9 worthAfterTrials: con la qualità per scena si decide dopo le prove', () => {
+  const segs = [{ duration: 4 }, { duration: 4 }, { duration: 5.4 }], src = 8.59e6;
+  assert.equal(worthRecompress(src, 8e6).keep, true, 'il vecchio controllo (limite 8) teneva IMG_1631');
+  const w = worthAfterTrials([{ b: 3e6 }, { b: 4e6 }, { b: 3.5e6 }], segs, src); // IMG_1631: prove a 3–4 Mbps → comprime
+  assert.equal(w.keep, false); assert.ok(w.ratio < 0.5);
+  assert.equal(worthAfterTrials(segs.map(() => ({ b: 0.85 * src })), segs, src).keep, false, 'tutte al tetto 0.85 × sorgente: risparmio ≥ 10 %');
+  assert.equal(worthAfterTrials(segs.map(() => ({ b: 0.92 * src })), segs, src).keep, true, '≥ 0.9 × sorgente: tieni');
+  const m = worthAfterTrials([{ b: 9e6 }, { b: 9e6 }, { b: 6e6 }], segs, 8e6); // media pesata (9·8 + 6·5.4) / 13.4
+  assert.ok(Math.abs(m.mean - (9e6 * 8 + 6e6 * 5.4) / 13.4) < 1); assert.equal(m.keep, true);
+  assert.equal(worthAfterTrials([{ b: 9e6 }, null, { b: 9e6 }], segs, 8e6).keep, false, 'record mancante: si comprime');
+  assert.equal(worthAfterTrials(segs.map(() => ({ b: 9e6 })), segs, 0).keep, false, 'sorgente ignota: si comprime');
 });

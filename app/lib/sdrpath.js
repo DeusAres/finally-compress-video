@@ -4,7 +4,7 @@
 // frame del decoder FUORI ORDINE (135/271) → riordino per pts sorgente prima dell'encoder (causa degli scatti); compute + mapAsync con
 // 4 frame in volo: 250 fps, gpu 1.8 ms, collo di bottiglia l'encoder. A 8 bit la scalatura su GPU è lecita (in HDR no: research/14).
 // Interfaccia come parallelFrames (frames.js): async iterable di VideoFrame per un intervallo di frame [{ts, dur}] in µs, in ordine.
-import { interruptError } from './frames.js?v=0.38.8';
+import { interruptError } from './frames.js?v=0.38.9';
 
 export const SDR = { inFlight: 4, decodeAhead: 8, r0: 1.25, minWin: 30, hlgPeakNits: 1000, tolUs: 500 };
 export const CS709 = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };

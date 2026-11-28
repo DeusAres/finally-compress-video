@@ -1,11 +1,11 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.38.8';
-import { sprite, SPRITES } from './sprite.js?v=0.38.8';
-import { makeThumb } from './../lib/thumb.js?v=0.38.8';
-import { createLogStore } from './logstore.js?v=0.38.8';
-import { worthRecompress, SCENE } from './../lib/scenesearch.js?v=0.38.8';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.8';
+import { bus } from './bus.js?v=0.38.9';
+import { sprite, SPRITES } from './sprite.js?v=0.38.9';
+import { makeThumb } from './../lib/thumb.js?v=0.38.9';
+import { createLogStore } from './logstore.js?v=0.38.9';
+import { worthRecompress, SCENE } from './../lib/scenesearch.js?v=0.38.9';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.9';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -582,7 +582,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
   const itemFile = (it) => (it?.info?.dur ? { durationS: it.info.dur, width: it.info.W, height: it.info.H, fps: it.info.fps, aacBps: it.info.aacBps, apacBps: it.info.apacBps, sizeMB: it.sizeMB } : null);
   // v0.38.8: «già leggero» previsto PRIMA di comprimere: stessa regola del backend (worthRecompress, SCENE.keepRatio), con riduzione di risoluzione si comprime comunque.
   function lightInfo(it, f = itemFile(it)) {
-    const s = st.settings; if (!f?.sizeMB || !f.durationS || resApplies(s.res, f) !== 'orig') return null;
+    // v0.38.9: con la qualità per scena il limite è un tetto (prove spesso 2–5 Mbps): «già leggero» si decide solo dopo le prove (worthAfterTrials)
+    const s = st.settings; if (s.sceneQ || !f?.sizeMB || !f.durationS || resApplies(s.res, f) !== 'orig') return null;
     const aud = f.aacBps === 0 ? 0 : (f.aacBps > 0 ? f.aacBps : 256000) + (s.apac && f.apacBps > 0 ? f.apacBps : 0);
     const src = f.sizeMB * 1048576 * 8 / f.durationS - aud; if (!(src > 0)) return null;
     const w = worthRecompress(src, s.bitrateMbps * 1e6); if (!w.keep) return { keep: false };
