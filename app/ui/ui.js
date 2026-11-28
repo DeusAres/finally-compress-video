@@ -1,11 +1,11 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.38.9';
-import { sprite, SPRITES } from './sprite.js?v=0.38.9';
-import { makeThumb } from './../lib/thumb.js?v=0.38.9';
-import { createLogStore } from './logstore.js?v=0.38.9';
-import { worthRecompress, SCENE } from './../lib/scenesearch.js?v=0.38.9';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.9';
+import { bus } from './bus.js?v=0.39.0';
+import { sprite, SPRITES } from './sprite.js?v=0.39.0';
+import { makeThumb } from './../lib/thumb.js?v=0.39.0';
+import { createLogStore } from './logstore.js?v=0.39.0';
+import { worthRecompress, SCENE } from './../lib/scenesearch.js?v=0.39.0';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.39.0';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
