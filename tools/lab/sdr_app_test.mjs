@@ -23,12 +23,15 @@ for (const sc of SCEN) {
   page.on('pageerror', (e) => errors.push(e.message)); page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   await page.goto(server.base); await page.waitForSelector('[data-ref="go"]');
   await page.setInputFiles('[data-ref="input"]', clip);
-  await page.waitForFunction(() => { const t = document.querySelector('[data-ref="fDur"]')?.textContent; return t && t !== '—'; }, null, { timeout: 30000 });
+  await page.waitForFunction(() => document.querySelector('[data-ref="go"]')?.disabled === false, null, { timeout: 30000 }); // v0.39: fDur non c'è più
   await page.evaluate(({ mode, res }) => {
     const set = (sel, v) => { const e = document.querySelector(sel); if (!e) return false; e.checked = v; e.dispatchEvent(new Event('change', { bubbles: true })); return true; };
     set('input[name="fcv-mode"]', mode !== 'sdr'); if (mode === 'hdr8') set('input[name="fcv-bits"]', false);
-    if (res !== 'orig' && !set(`input[name="fcv-res"][value="${res}"]`, true)) { const g = document.querySelector('[data-ref="resGrid"]'); g.insertAdjacentHTML('beforeend', `<label><input type="radio" name="fcv-res" value="${res}" checked></label>`); }
   }, sc);
+  if (sc.res !== 'orig') { // v0.39: la risoluzione è un cursore (fcv-resrail): si sceglie con le frecce, i radio sono solo lo stato
+    await page.waitForTimeout(200); await page.focus('.fcv-resrail');
+    for (let i = 0; i < 9 && (await page.evaluate(() => document.querySelector('input[name="fcv-res"]:checked')?.value)) !== String(sc.res); i++) await page.keyboard.press('ArrowRight');
+  }
   await page.waitForTimeout(300); await page.click('[data-ref="go"]');
   const t0 = Date.now();
   await page.waitForFunction(() => ['done', 'error'].includes(document.querySelector('#app').dataset.stage) && document.querySelector('#app').dataset.busy === 'false', null, { timeout: 300000 }).catch(() => {});
