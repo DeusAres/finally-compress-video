@@ -31,8 +31,8 @@
 // Memoria: la cache della luma sorgente è Uint8 a ½ risoluzione e solo frame pari (1080×1920 → 0.5 MB × 30 =
 // 15 MB per finestra), liberata a fine segmento; chunk di prova ≈ 1–3 MB; encoder/decoder di prova sempre chiusi
 // (finally) PRIMA dell'encode finale, che non coesiste mai con loro (research/12 §7.9, research/03).
-import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.39.0';
-import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.39.0';
+import { searchBitrate, predictBitrate, DEFAULTS as RC } from './ratecontrol.js?v=0.39.1';
+import { frameScore, decodeChunks, pool, estimateVmaf } from './quality.js?v=0.39.1';
 
 export const SCENE = Object.freeze({
   targetVmaf: RC.targetVmaf,   // 88 (BIBBIA §12)
@@ -305,6 +305,31 @@ export function makeCanvasLuma(W, H, factor = SCENE.factor, { gpu = false } = {}
   return (frame) => { ctx.drawImage(frame, 0, 0, w, h); return lumaU8FromRGBA(ctx.getImageData(0, 0, w, h).data, w, h); };
 }
 
+// v0.39.1 — ripieghi del decoder DI PROVA (VideoDecoder sui chunk dell'encoder di prova). La prima strategia che decodifica resta per il job.
+export const DEC_STRATS = [
+  { id: 'base', why: 'config dell\'encoder + colorSpace forzato' },
+  { id: 'nocs', why: 'senza colorSpace forzato' },
+  { id: 'codec', why: 'codec string ricavata dall\'hvcC, senza colorSpace' },
+];
+const u8 = (d) => (!d ? null : d instanceof Uint8Array ? d : ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d));
+/** Codec string RFC 6381 / ISO 14496-15 Annex E dall'hvcC (es. hvc1.1.6.L123.B0); null se non è un hvcC. */
+export function hevcCodecFromHvcC(desc, prefix = 'hvc1') {
+  const d = u8(desc); if (!d || d.length < 23 || d[0] !== 1) return null;
+  const space = ['', 'A', 'B', 'C'][d[1] >> 6], tier = (d[1] >> 5) & 1 ? 'H' : 'L', prof = d[1] & 31;
+  let compat = ((d[2] << 24) | (d[3] << 16) | (d[4] << 8) | d[5]) >>> 0, rev = 0;
+  for (let i = 0; i < 32; i++) { rev = ((rev << 1) | (compat & 1)) >>> 0; compat >>>= 1; }
+  const cons = Array.from(d.subarray(6, 12)); while (cons.length && !cons[cons.length - 1]) cons.pop();
+  return `${prefix}.${space}${prof}.${rev.toString(16).toUpperCase()}.${tier}${d[12]}${cons.map((b) => '.' + b.toString(16).toUpperCase()).join('')}`;
+}
+const hexOf = (d, n = 24) => Array.from(d.subarray(0, n), (b) => b.toString(16).padStart(2, '0')).join('');
+/** Riga diagnostica del primo fallimento del decoder di prova: config passata, primo chunk, risorse aperte. */
+export function trialDecFailLine({ e, where, st, cfg, chunk, extra = '' }) {
+  const d = u8(cfg?.description);
+  let nal = '?'; try { if (chunk?.copyTo) { const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b); const t = []; for (let o = 0; o + 4 < b.length && t.length < 8;) { const l = (b[o] << 24 | b[o + 1] << 16 | b[o + 2] << 8 | b[o + 3]) >>> 0; if (!l) break; t.push((b[o + 4] >> 1) & 63); o += 4 + l; } nal = t.join(',') || '?'; } } catch {}
+  return `⚠️ decoder di prova: ${e?.name || 'Error'}: ${e?.message || e} (${where}, strategia «${st.id}») · config codec ${cfg?.codec || '?'}, description ${d ? `${d.length} B [${hexOf(d)}]` : 'assente'}, colorSpace ${cfg?.colorSpace ? JSON.stringify(cfg.colorSpace) : 'nessuno'}, coded ${cfg?.codedWidth ?? '?'}×${cfg?.codedHeight ?? '?'}`
+    + ` · primo chunk ${chunk ? `${chunk.type ?? '?'} ${chunk.byteLength ?? '?'} B NAL ${nal}` : 'assente'}${extra ? ' · ' + extra : ''}`;
+}
+
 /**
  * Implementazioni browser di encodeTrial/measure per ratecontrol.searchBitrate.
  *  W,H: dimensioni dei frame nativi; frames: [{ts,dur}] in secondi (index.html);
@@ -324,7 +349,8 @@ export function makeCanvasLuma(W, H, factor = SCENE.factor, { gpu = false } = {}
  * la diretta si spegne per il resto del job.
  */
 export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => false, makeEncoder, colorSpace, stride = SCENE.stride, factor = SCENE.factor, onStat = () => {}, encW = W, encH = H, framerate, verifyOutput,
-  makeDecoder = (init) => new VideoDecoder(init), live = true, now = () => performance.now(), players = () => 0, lumaFn = null, gpuLumaFn = null, decodeFn = decodeChunks }) {
+  makeDecoder = (init) => new VideoDecoder(init), live = true, now = () => performance.now(), players = () => 0, lumaFn = null, gpuLumaFn = null, decodeFn = decodeChunks,
+  log = () => {}, diag = () => '' }) {
   // «Riduci a 1080p»: W×H = frame nativi (4K), encW×encH = dimensioni dell'encoder. La luma si prende SEMPRE a 1/factor di encW×encH:
   // sorgente 4K (drawImage ridimensiona) e frame decodificato 1080p finiscono nella stessa griglia → confronto a risoluzione comune.
   let luma = lumaFn ?? makeCanvasLuma(encW, encH, factor); // lumaFn/decodeFn/makeDecoder: solo per i test in Node
@@ -334,9 +360,40 @@ export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => f
   const T = { extract: 0, frames: 0, players: 0, lumaSrc: 0, nSrc: 0, encWait: 0, setup: 0, decWait: 0, lumaDec: 0, nDec: 0, ssim: 0, lumaLive: 0, nLive: 0, ssimLive: 0, liveTail: 0, liveOff: '' };
   let liveOn = !!live;
   const decConfig = (c) => { const config = { ...c, codedWidth: c.codedWidth || encW, codedHeight: c.codedHeight || encH }; if (colorSpace) config.colorSpace = colorSpace; return config; };
+  // v0.39.1 ripieghi del decoder di prova (DEC_STRATS) + misura «dopo» se la diretta fallisce anche con la strategia giusta
+  let si = 0, failSaid = false, liveFailSi = -1, liveRetried = false;
+  const cfgFor = (c, st) => {
+    if (st.id === 'base') return decConfig(c);
+    const { colorSpace: _cs, ...rest } = c, config = { ...rest, codedWidth: c.codedWidth || encW, codedHeight: c.codedHeight || encH };
+    if (st.id === 'codec') config.codec = hevcCodecFromHvcC(c.description, /^hev1/.test(c.codec || '') ? 'hev1' : 'hvc1') || c.codec;
+    return config;
+  };
+  const isFatalDec = (e) => ['DownscaleError', 'Cancelled', 'BackgroundInterrupt'].includes(e?.name);
+  const noteFail = (e, where, k, c, chunk) => {
+    const st = DEC_STRATS[k], next = DEC_STRATS[k + 1];
+    if (!failSaid) { failSaid = true; let x = ''; try { x = diag() || ''; } catch {} log(trialDecFailLine({ e, where, st, cfg: cfgFor(c, st), chunk, extra: x })); }
+    log(`decoder di prova: strategia «${st.id}» non riuscita (${where}: ${String(e?.message || e).slice(0, 60)})${next ? ` → provo «${next.id}» (${next.why})` : ' → strategie esaurite'}`);
+  };
+  const adopt = (k, where) => {
+    if (liveFailSi >= 0) { // la diretta era fallita con la strategia liveFailSi
+      if (k === liveFailSi) log(`decoder di prova: la misura «dopo» (decoder sorgente ed encoder di prova chiusi) riesce con la strategia «${DEC_STRATS[k].id}» che in diretta fallisce → misura dopo per il resto del job`);
+      else if (!liveRetried && live) { liveRetried = true; liveOn = true; T.liveOff = ''; log(`decoder di prova: riprovo la misura in diretta con la strategia «${DEC_STRATS[k].id}»`); }
+      liveFailSi = -1;
+    }
+    if (k !== si) log(`decoder di prova: strategia «${DEC_STRATS[k].id}» (${DEC_STRATS[k].why}) riuscita in ${where} → la uso per il resto del job`);
+    si = k;
+  };
+  /** Prova fn(config, k) con le strategie da si in poi; la prima che riesce viene adottata. */
+  const withStrats = async (where, c, chunk, fn) => {
+    let last;
+    for (let k = si; k < DEC_STRATS.length; k++) {
+      try { const r = await fn(cfgFor(c, DEC_STRATS[k]), k); adopt(k, where); return r; } catch (e) { if (isFatalDec(e)) throw e; last = e; noteFail(e, where, k, c, chunk); }
+    }
+    throw last;
+  };
   // misura in diretta di un'uscita di prova: decoder creato al primo chunk (serve il decoderConfig), frame → luma → SSIM
   const startLive = (src) => {
-    const L = { dec: null, dbs: [], idx: 0, chain: Promise.resolve(), err: null };
+    const L = { dec: null, dbs: [], idx: 0, chain: Promise.resolve(), err: null, si };
     L.feed = (chunk, config) => {
       if (L.err) return;
       try {
@@ -349,13 +406,13 @@ export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => f
               t0 = now(); L.dbs[i / stride] = frameScore(src[i], d).db; T.ssimLive += now() - t0;
             }).catch((e) => { L.err ||= e; }).finally(() => f.close()); },
             error: (e) => { L.err ||= e; } });
-          L.dec.configure(decConfig(config));
+          L.dec.configure(cfgFor(config, DEC_STRATS[L.si]));
           T.setup += now() - t;
         }
         L.dec.decode(chunk);
       } catch (e) {
         L.err ||= e;
-        if (!L.dec || L.dec.state === 'unconfigured') { liveOn = false; T.liveOff ||= String(e?.message || e).slice(0, 80); } // decoder non creabile insieme agli encoder: diretta spenta
+        if (!L.dec || L.dec.state === 'unconfigured') { liveOn = false; liveFailSi = L.si; T.liveOff ||= String(e?.message || e).slice(0, 80); } // decoder non creabile insieme agli encoder: diretta spenta
       }
     };
     L.finish = async (n) => { // dopo il flush degli encoder: ritorna dbs o null (→ misura dopo)
@@ -364,7 +421,10 @@ export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => f
       await L.chain;
       T.liveTail += now() - t;
       L.close();
-      if (L.err && L.idx === 0 && liveOn) { liveOn = false; T.liveOff ||= String(L.err?.message || L.err).slice(0, 80); } // il decoder non ha mai dato frame: diretta spenta per il job
+      if (L.err && L.idx === 0 && liveOn) { // il decoder non ha mai dato frame: diretta spenta (la misura dopo prova le strategie, adopt decide se riprovarla)
+        liveOn = false; liveFailSi = L.si; T.liveOff ||= String(L.err?.message || L.err).slice(0, 80);
+        log(`decoder di prova in diretta: nessun frame (${String(L.err?.message || L.err).slice(0, 60)}, strategia «${DEC_STRATS[L.si].id}») → misura dopo`);
+      }
       const dbs = L.dbs.filter((x) => Number.isFinite(x));
       return !L.err && L.idx === n && dbs.length >= 2 ? dbs : null;
     };
@@ -416,7 +476,7 @@ export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => f
           verifyOutput?.(o.config); // downscale: dimensioni/10 bit dell'uscita (errore fatale, mai assorbito dalle prove)
           const dbs = o.live ? await o.live.finish(o.chunks.length) : null;
           onStat({ requested: o.r, bytes: o.bytes, real: o.bytes * 8 / durS, live: !!dbs });
-          const encoded = { chunks: dbs ? [] : o.chunks, config: decConfig(o.config), n: o.chunks.length }; // misurata in diretta: chunk liberati subito
+          const encoded = { chunks: dbs ? [] : o.chunks, config: { ...o.config }, n: o.chunks.length }; // config dell'encoder (strategia applicata in measure); misurata in diretta: chunk liberati subito
           res.push({ bitrate: o.bytes * 8 / durS, requested: o.r, bytes: o.bytes, encoded, ...(dbs ? { dbs } : {}) });
         }
       } finally { for (const o of outs) o.live?.close(); } // nessun decoder di prova sopravvive alla chiamata
@@ -424,13 +484,13 @@ export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => f
     },
     async measure(w, encoded) {
       const src = cache.get(keyOf(w)); if (!src) throw new Error('misura: luma sorgente assente');
-      const dbs = []; let tIn = 0;
+      let dbs = [], tIn = 0;
       const t = now();
-      const n = await decodeFn(encoded.config, encoded.chunks, (f, i) => {
+      const n = await withStrats('misura dopo', encoded.config, encoded.chunks[0], (cfg) => { dbs = []; return decodeFn(cfg, encoded.chunks, (f, i) => {
         if (i % stride !== 0 || !src[i]) return;
         let t0 = now(); const d = luma(f); const t1 = now(); T.lumaDec += t1 - t0; T.nDec++;
         dbs.push(frameScore(src[i], d).db); const t2 = now(); T.ssim += t2 - t1; tIn += t2 - t0;
-      });
+      }); });
       T.decWait += now() - t - tIn;
       encoded.chunks.length = 0; // i chunk di prova non servono più
       if (n !== encoded.n) throw new Error(`misura: decodificati ${n} frame su ${encoded.n}`);
@@ -487,17 +547,21 @@ export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => f
           if (!config || !chunks.length) throw new Error('nessun pacchetto o decoderConfig');
           verifyOutput?.(config); // downscale errato: fatale come nelle prove
           // 2) decodifica + luma CPU e GPU dello stesso frame decodificato
-          let dec = null, derr = null, n = 0, chain = Promise.resolve(), dbC = NaN, dbG = NaN;
-          try {
-            dec = makeDecoder({ output: (f) => { const i = n++; chain = chain.then(() => { if (i > 0) return; dbC = frameScore(c.r, luma(f)).db; dbG = frameScore(g.r, gpu(f)).db; }).catch((e) => { derr ||= e; }).finally(() => f.close()); },
-              error: (e) => { derr ||= e; } });
-            dec.configure(decConfig(config));
-            for (const ch of chunks) dec.decode(ch);
-            await dec.flush();
-            await chain;
-          } finally { try { if (dec && dec.state !== 'closed') dec.close(); } catch {} }
-          if (derr) throw derr;
-          if (!Number.isFinite(dbC) || !Number.isFinite(dbG)) throw new Error('nessun frame decodificato');
+          const one = async (cfg) => {
+            let dec = null, derr = null, n = 0, chain = Promise.resolve(), dbC = NaN, dbG = NaN;
+            try {
+              dec = makeDecoder({ output: (f) => { const i = n++; chain = chain.then(() => { if (i > 0) return; dbC = frameScore(c.r, luma(f)).db; dbG = frameScore(g.r, gpu(f)).db; }).catch((e) => { derr ||= e; }).finally(() => f.close()); },
+                error: (e) => { derr ||= e; } });
+              dec.configure(cfg);
+              for (const ch of chunks) dec.decode(ch);
+              await dec.flush();
+              await chain;
+            } catch (e) { derr ||= e; } finally { try { if (dec && dec.state !== 'closed') dec.close(); } catch {} }
+            if (derr) throw derr;
+            if (!Number.isFinite(dbC) || !Number.isFinite(dbG)) throw new Error('nessun frame decodificato');
+            return [dbC, dbG];
+          };
+          const [dbC, dbG] = await withStrats('autotest', config, chunks[0], one); // v0.39.1: stesse strategie delle prove
           out.cpu.push(dbC); out.gpu.push(dbG);
         }
         out.delta = Math.max(...out.cpu.map((x, i) => Math.abs(x - out.gpu[i])));
@@ -510,6 +574,8 @@ export function createTrialDeps({ W, H, frames, frameSource, skipFrame = () => f
       return { ...out, path: lumaPath, reason: ok ? 'SSIM coerente e più veloce' : !(out.delta <= maxDelta) ? `Δ SSIM > ${maxDelta} dB` : 'GPU non più veloce' };
     },
     timing: () => ({ ...T }),
+    /** Strategia del decoder di prova in uso (DEC_STRATS) e stato della diretta: per i test e il log. */
+    decStrategy: () => ({ id: DEC_STRATS[si].id, live: liveOn }),
     release() { cache.clear(); },
   };
 }

@@ -4,7 +4,7 @@
 // frame del decoder FUORI ORDINE (135/271) → riordino per pts sorgente prima dell'encoder (causa degli scatti); compute + mapAsync con
 // 4 frame in volo: 250 fps, gpu 1.8 ms, collo di bottiglia l'encoder. A 8 bit la scalatura su GPU è lecita (in HDR no: research/14).
 // Interfaccia come parallelFrames (frames.js): async iterable di VideoFrame per un intervallo di frame [{ts, dur}] in µs, in ordine.
-import { interruptError } from './frames.js?v=0.39.0';
+import { interruptError } from './frames.js?v=0.39.1';
 
 export const SDR = { inFlight: 4, decodeAhead: 8, r0: 1.25, minWin: 30, hlgPeakNits: 1000, tolUs: 500 };
 export const CS709 = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
@@ -272,24 +272,75 @@ export async function* convertOrdered(dec, conv, frames, stats = null, signal = 
  * Apre la sorgente SDR sul track Mediabunny `track` (MB = modulo Mediabunny): decoder config, colore, dimensioni dal primo frame,
  * percorso GPU provato. Ritorna {width, height, hlg, transfer, gpuPath, frames(list, stats, signal, {width, height}) → async gen, close}.
  */
+/**
+ * v0.39.1 avvio del decoder sorgente a metà file (prove per scena: finestre al centro dei segmenti). La codifica finale parte dal
+ * primo pacchetto (IDR) e funziona; le prove partono dal keyframe che precede la finestra e su iPhone (v0.39.0, IMG_1631) falliscono
+ * subito con «EncodingError: Decoder failure» (anche l'autotest, quando nessun decoder di prova esiste ancora). Ipotesi principale:
+ * keyframe CRA a GOP aperto → i RASL che lo seguono in ordine di decodifica citano il GOP precedente, VideoToolbox li rifiuta e
+ * WebKit chiude il codec al primo errore. Strategie in ordine (la prima che dà un frame resta per il job, scritta nel log):
+ * i frame scartati hanno pts < keyframe, cioè prima della finestra (mai richiesti); in HEVC i frame «trailing» non citano i leading.
+ */
+export const SRC_START = [
+  { id: 'lead', why: 'dal keyframe, senza i frame leading (pts < keyframe: RASL/RADL di un CRA a GOP aperto)' },
+  { id: 'key', why: 'dal keyframe che precede la finestra, tutti i pacchetti (come v0.39.0)' },
+  { id: 'prev', why: 'dal keyframe precedente (un GOP in più: i RASL hanno i loro riferimenti)' },
+  { id: 'first', why: 'dal primo pacchetto del file (IDR; più lento)' },
+];
+// HEVC: 'lead' per primo (in HEVC i frame trailing non citano mai i leading: scartarli è sempre lecito). Altri codec (H.264 in
+// Chromium, solo prova): nessuna garanzia equivalente → prima 'key' (comportamento v0.39.0), 'lead' solo come ripiego.
+export const srcStartOrder = (codec) => (/^(hev1|hvc1)/.test(codec || '') ? SRC_START : [SRC_START[1], SRC_START[0], SRC_START[2], SRC_START[3]]);
+/** Tipi NAL (HEVC: (b0>>1)&63; H.264: b0&31) di un campione a lunghezza prefissata (lenSize byte). */
+export function nalTypes(data, { hevc = true, lenSize = 4, max = 8 } = {}) {
+  const t = []; if (!data) return t;
+  for (let o = 0; o + lenSize < data.length && t.length < max;) {
+    let l = 0; for (let k = 0; k < lenSize; k++) l = l * 256 + data[o + k];
+    if (!l) break; t.push(hevc ? (data[o + lenSize] >> 1) & 63 : data[o + lenSize] & 31); o += lenSize + l;
+  }
+  return t;
+}
+const hex = (u8, n = 24) => Array.from(u8.subarray(0, n), (b) => b.toString(16).padStart(2, '0')).join('');
+const u8of = (d) => (!d ? null : d instanceof Uint8Array ? d : ArrayBuffer.isView(d) ? new Uint8Array(d.buffer, d.byteOffset, d.byteLength) : new Uint8Array(d));
+/** Riga diagnostica (una per job) del primo fallimento del decoder sorgente: config, keyframe di partenza, NAL dei primi pacchetti. */
+export function srcFailLine({ e, st, config, info, extra = '' }) {
+  const d = u8of(config?.description), hevc = /^(hev1|hvc1)/.test(config?.codec || ''), lenSize = d && hevc && d.length > 21 ? (d[21] & 3) + 1 : 4;
+  const pk = (info?.pk || []).map((p) => `${p.ts.toFixed(3)}s ${p.type} ${p.bytes} B NAL ${nalTypes(p.data, { hevc, lenSize, max: 6 }).join(',') || '?'}`);
+  return `decoder sorgente: ${errStr(e)} all'avvio della finestra (strategia «${st.id}») · config ${config?.codec || '?'}, description ${d ? d.length : 0} B [${d ? hex(d) : '-'}], coded ${config?.codedWidth ?? '?'}×${config?.codedHeight ?? '?'}`
+    + `${config?.colorSpace ? `, colorSpace ${JSON.stringify(config.colorSpace)}` : ''} · finestra da ${info?.want != null ? (info.want / 1e6).toFixed(3) : '?'} s, keyframe ${info?.key != null ? info.key.toFixed(3) : '?'} s · pacchetti: ${pk.join(' | ') || 'nessuno'}${extra ? ' · ' + extra : ''}`;
+}
+
+/**
+ * Apre la sorgente SDR sul track Mediabunny `track` (MB = modulo Mediabunny): decoder config, colore, dimensioni dal primo frame,
+ * percorso GPU provato. Ritorna {width, height, hlg, transfer, gpuPath, frames(list, stats, signal, {width, height}) → async gen, close}.
+ * diag(): testo aggiunto alla riga del primo fallimento (index.html: VideoDecoder aperti da mediadiag); Decoder: iniettabile nei test.
+ */
 // tonemap: true = modalità 'sdr' (Hable → BT.709); false = 'hdr8' (HLG così com'è; GPU solo se si scala).
-export async function openSdrSource({ MB, track, log = () => {}, tonemap = true }) {
+export async function openSdrSource({ MB, track, log = () => {}, tonemap = true, diag = () => '', Decoder = globalThis.VideoDecoder }) {
   const config = await track.getDecoderConfig(); if (!config) throw new Error('SDR: codec non decodificabile (decoder config assente)');
   let transfer = null; try { transfer = (await track.getColorSpace())?.transfer || null; } catch {}
   const hlg = transfer === 'hlg';
   if (transfer === 'pq') log('SDR: sorgente PQ, tone mapping non previsto (solo HLG): colori non convertiti', 'warn');
   const sink = new MB.EncodedPacketSink(track);
   const notes = [], note = (t) => { notes.push(t); log('GPU: ' + t, 'warn'); };
-  // dal keyframe che precede startS (decodifica in avanti), chunk in ordine di decodifica
-  async function* chunksFrom(startS) {
-    const key = await sink.getKeyPacket(startS, { verifyKeyPackets: true }) || await sink.getFirstPacket();
+  const ORDER = srcStartOrder(config.codec); let startK = 0, failSaid = false; const said = new Set(); // strategia d'avvio memorizzata per il job (SRC_START)
+  // dal keyframe che precede startS (decodifica in avanti), chunk in ordine di decodifica; info: pacchetti di partenza per la diagnostica
+  async function* chunksFrom(startS, st = SRC_START[1], info = null) {
+    let key = await sink.getKeyPacket(startS, { verifyKeyPackets: true }) || await sink.getFirstPacket();
     if (!key) return;
-    for await (const p of sink.packets(key)) yield p.toEncodedVideoChunk();
+    const winKey = key.timestamp;
+    if (st.id === 'prev' && key.timestamp > 0) key = await sink.getKeyPacket(key.timestamp - 1e-6, { verifyKeyPackets: true }) || key;
+    if (st.id === 'first') key = await sink.getFirstPacket() || key;
+    const drop = st.id !== 'key', ref = key.timestamp, want = startS - 1e-6; // si scartano solo i leading del keyframe di partenza
+    if (info) { info.key = winKey; info.want = Math.round(want * 1e6); info.pk = []; }
+    for await (const p of sink.packets(key)) {
+      if (info && info.pk.length < 6) info.pk.push({ ts: p.timestamp, type: p.type, bytes: p.data?.byteLength ?? p.byteLength ?? 0, data: p.data });
+      if (drop && p.timestamp < ref - 1e-6 && p.timestamp < want - 1e-4) continue; // leading del keyframe: prima della finestra, mai richiesti
+      yield p.toEncodedVideoChunk();
+    }
   }
   // primo frame: dimensioni reali (orientamento codificato: la rotazione va nella traccia)
   const first = await sink.getFirstPacket(); if (!first) throw new Error('SDR: nessun pacchetto video');
   async function firstFrame(use) {
-    const d = decodeOrdered({ chunks: chunksFrom(first.timestamp + 1e-6), config, wantUs: [first.microsecondTimestamp ?? Math.round(first.timestamp * 1e6)] });
+    const d = decodeOrdered({ chunks: chunksFrom(first.timestamp + 1e-6), config, wantUs: [first.microsecondTimestamp ?? Math.round(first.timestamp * 1e6)], Decoder });
     let f = null;
     try { f = await d.next(); } catch (e) { d.close(); throw Object.assign(new Error(`VideoDecoder non riuscito (${errStr(e)})`), { name: e?.name || 'Error' }); }
     try { return await use(f); } finally { f?.close(); d.close(); }
@@ -315,11 +366,30 @@ export async function openSdrSource({ MB, track, log = () => {}, tonemap = true 
       const dw = out.width || width, dh = out.height || height, direct = !tonemap && dw === width && dh === height;
       if (!direct && gpuPath.startsWith('nessuno')) await probeGpu();
       const conv = direct ? createDirectConverter() : await createNv12Converter({ sw: width, sh: height, dw, dh, hlg, keep2020: !tonemap, note, log });
-      let dec;
+      // v0.39.1: errore prima del primo frame → strategia d'avvio successiva (SRC_START), la prima riuscita resta per il job
       try {
-        dec = decodeOrdered({ chunks: chunksFrom(list[0].ts / 1e6 + 1e-6), config, wantUs: list.map((f) => f.ts), signal, stats: T });
-        yield* convertOrdered(dec, conv, list, T, signal);
-      } finally { dec?.close(); conv.close(); }
+        for (let k = startK; ; k++) {
+          const st = ORDER[k], info = {};
+          const dec = decodeOrdered({ chunks: chunksFrom(list[0].ts / 1e6 + 1e-6, st, info), config, wantUs: list.map((f) => f.ts), signal, stats: T, Decoder });
+          const it = convertOrdered(dec, conv, list, T, signal); // chiude il decoder quando finisce o fallisce
+          let r;
+          try { r = await it.next(); } catch (e) {
+            if (signal?.aborted || e?.name === 'BackgroundInterrupt' || k + 1 >= ORDER.length) {
+              if (!failSaid && !signal?.aborted) { failSaid = true; try { log(srcFailLine({ e, st, config, info, extra: diag() }), 'warn'); } catch {} }
+              throw e;
+            }
+            if (!failSaid) { failSaid = true; try { log(srcFailLine({ e, st, config, info, extra: diag() }), 'warn'); } catch {} }
+            else log(`decoder sorgente: strategia «${st.id}» non riuscita (${errStr(e)}) → provo «${ORDER[k + 1].id}»`, 'warn');
+            continue;
+          }
+          if (k > 0 && !said.has(k)) { said.add(k); log(`decoder sorgente: avvio a metà file riuscito con la strategia «${st.id}» (${st.why}) → la uso per il resto del job`); }
+          else if (k === 0 && !said.has(0) && list[0].ts > 0) { said.add(0); log(`decoder sorgente: avvio a metà file con la strategia «${st.id}» (${st.why})`); }
+          startK = k;
+          if (r.done) return;
+          try { yield r.value; yield* it; } finally { await it.return(); } // consumatore che si ferma prima: decoder chiuso comunque
+          return;
+        }
+      } finally { conv.close(); }
     },
     close() {},
   };

@@ -1,7 +1,7 @@
 // Test Node della modalità SDR (v0.38): riordino per pts, timestamp, pipeline decoder → convertitore, risoluzioni, manifest con mode/res.
 // Uso: node app/lib/sdrpath.test.mjs
 import assert from 'node:assert/strict';
-const { createDirectConverter, nearestIndex, createReorder, frameTiming, sdrWindow, scaleTaps, nv12Stride, sdrCodec, decodeOrdered, convertOrdered, _wgsl, lutToHalf, loadLutData, LUT } = await import('./sdrpath.js');
+const { openSdrSource, srcStartOrder, nalTypes, createDirectConverter, nearestIndex, createReorder, frameTiming, sdrWindow, scaleTaps, nv12Stride, sdrCodec, decodeOrdered, convertOrdered, _wgsl, lutToHalf, loadLutData, LUT } = await import('./sdrpath.js');
 const { resDims, sdrRes, verifyDownscale, sdrDsError, SDR_DS_MESSAGE } = await import('./downscale.js');
 const { sameVideoSettings, videoMode, videoRes } = await import('./jobstore.js');
 const { estimateTimeS, speedKey } = await import('../ui/estimate.js');
@@ -139,5 +139,40 @@ const conv = { depth: 4, submit: (f, fr) => new Promise((r) => setTimeout(() => 
   const good = await loadLutData(async () => ({ ok: true, arrayBuffer: async () => bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength) }), 'x'); assert.ok(good instanceof Uint16Array);
   assert.equal(LUT.n, 33);
   console.log('ok 10 LUT Apple + ripiego Hable');
+}
+// 11) v0.39.1 avvio a metà file: keyframe CRA con RASL (citano il GOP precedente) → il decoder «WebKit» si chiude al primo errore.
+//     HEVC: strategia «lead» (scarta i leading) subito; H.264: «key» fallisce, diagnostica nel log, «lead» adottata e memorizzata.
+{
+  const fps = 30, G = 30, NG = 3, order = [];
+  for (let g = 0; g < NG; g++) { order.push({ pts: g * G, key: true, g }); if (g) order.push({ pts: g * G - 2, g, rasl: true }, { pts: g * G - 1, g, rasl: true }); for (let p = g * G + 1; p < Math.min(NG * G, (g + 1) * G - 2) || (g === NG - 1 && p < NG * G); p++) order.push({ pts: p, g }); }
+  const pk = order.map((o) => ({ timestamp: o.pts / fps, type: o.key ? 'key' : 'delta', data: new Uint8Array([0, 0, 0, 2, (o.key ? 21 : o.rasl ? 9 : 1) << 1, 1]), toEncodedVideoChunk: () => ({ timestamp: Math.round(o.pts / fps * 1e6), type: o.key ? 'key' : 'delta', o }) }));
+  class Sink { async getFirstPacket() { return pk[0]; } async getKeyPacket(t) { let b = null; for (const p of pk) if (p.type === 'key' && p.timestamp <= t + 1e-9) b = p; return b; } async *packets(k) { for (let i = pk.indexOf(k); i < pk.length; i++) yield pk[i]; } }
+  const opened = []; class Dec { constructor({ output, error }) { this.o = output; this.e = error; this.state = 'unconfigured'; this.decodeQueueSize = 0; this.keys = new Set(); opened.push(this); }
+    configure() { this.state = 'configured'; }
+    decode(c) { if (this.state !== 'configured') throw new Error('chiuso'); if (this.bad) return; const { o } = c; if (o.key) this.keys.add(o.g); if (o.rasl && !this.keys.has(o.g - 1)) { queueMicrotask(() => { this.state = 'closed'; this.e(Object.assign(new Error('Decoder failure'), { name: 'EncodingError' })); }); this.bad = true; return; }
+      queueMicrotask(() => this.o({ timestamp: c.timestamp, displayWidth: 64, displayHeight: 36, format: 'NV12', close() {} })); }
+    async flush() { await new Promise((r) => setTimeout(r, 2)); } close() { this.state = 'closed'; } }
+  globalThis.VideoFrame ??= class { constructor(f, t) { this.timestamp = t.timestamp; this.duration = t.duration; } close() {} };
+  const list = (a, b) => Array.from({ length: b - a }, (_, i) => ({ ts: Math.round((a + i) / fps * 1e6), dur: Math.round(1e6 / fps) }));
+  const run = async (codec) => {
+    const logs = [], src = await openSdrSource({ MB: { EncodedPacketSink: Sink }, track: { getDecoderConfig: async () => ({ codec, description: new Uint8Array(23) }), getColorSpace: async () => ({ transfer: 'hlg' }) }, tonemap: false, log: (t) => logs.push(t), diag: () => 'VideoDecoder aperti 0', Decoder: Dec });
+    const take = async (a, b) => { const got = []; for await (const vf of src.frames(list(a, b))) got.push(vf.timestamp); return got; };
+    return { logs, take };
+  };
+  const H = await run('hvc1.1.6.L123.B0');
+  assert.deepEqual(await H.take(35, 45), list(35, 45).map((f) => f.ts));
+  assert.ok(!H.logs.some((l) => /fallit|non riuscit|Decoder failure/.test(l)), H.logs.join('\n'));
+  assert.ok(H.logs.some((l) => /avvio a metà file con la strategia «lead»/.test(l)));
+  const A = await run('avc1.640033');
+  assert.deepEqual(await A.take(35, 45), list(35, 45).map((f) => f.ts));
+  const diag = A.logs.find((l) => /^decoder sorgente: EncodingError: Decoder failure all'avvio della finestra \(strategia «key»\)/.test(l));
+  assert.ok(diag && /keyframe 1\.000 s/.test(diag) && /VideoDecoder aperti 0/.test(diag), A.logs.join('\n'));
+  assert.ok(A.logs.some((l) => /strategia «lead».*la uso per il resto del job/.test(l)));
+  const n0 = A.logs.length; assert.deepEqual(await A.take(65, 70), list(65, 70).map((f) => f.ts)); assert.equal(A.logs.length, n0, 'strategia memorizzata: nessun nuovo tentativo');
+  assert.deepEqual(await A.take(0, 5), list(0, 5).map((f) => f.ts));
+  await new Promise((r) => setTimeout(r, 10)); assert.ok(opened.every((d) => d.state === 'closed'), 'decoder sorgente sempre chiuso');
+  assert.deepEqual(srcStartOrder('hev1.2.4').map((s) => s.id), ['lead', 'key', 'prev', 'first']); assert.equal(srcStartOrder('avc1.64').map((s) => s.id)[0], 'key');
+  assert.deepEqual(nalTypes(new Uint8Array([0, 0, 0, 2, 40, 1, 0, 0, 0, 1, 2])), [20, 1]);
+  console.log('ok 11 avvio a metà file: leading scartati, strategia memorizzata, diagnostica');
 }
 console.log('sdrpath: tutti ok');

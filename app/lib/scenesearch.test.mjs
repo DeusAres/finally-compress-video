@@ -3,7 +3,7 @@
 // from saved records, fallback on trial errors, per-segment closed-loop controller, summary/log lines.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { planSceneSegments, centerWindow, runSceneSearch, sceneSummary, sceneLine, lumaU8FromRGBA, warmPrior, timingLine, createTrialDeps, toRecord, lumaTestLine, segmentCap, segmentCaps, worthRecompress, worthAfterTrials, sourceBitrate } from './scenesearch.js';
+import { planSceneSegments, centerWindow, runSceneSearch, sceneSummary, sceneLine, lumaU8FromRGBA, warmPrior, timingLine, createTrialDeps, toRecord, lumaTestLine, segmentCap, segmentCaps, worthRecompress, worthAfterTrials, sourceBitrate, hevcCodecFromHvcC, DEC_STRATS } from './scenesearch.js';
 import { searchBitrate } from './ratecontrol.js';
 import { planSegments } from './jobstore.js';
 import { nextBitrate, createSegmentRate } from './brctl.js';
@@ -233,20 +233,22 @@ test('timingLine: compact per-job breakdown', () => {
 });
 
 // createTrialDeps con encoder/decoder/canvas finti: la misura in diretta dà gli stessi ssimDb della misura dopo
-function fakeWorld({ decFail = false } = {}) {
+function fakeWorld({ decFail = false, decCheck = null, desc } = {}) {
+  const W0 = { srcOpen: 0 };
   const lumaOf = (id, noise) => { const d = new Float32Array(16 * 16); for (let i = 0; i < d.length; i++) d[i] = 100 + ((i * 7 + id * 13) % 50) + (noise ? ((i * 31 + id) % 5) - 2 : 0); return { data: d, width: 16, height: 16 }; };
   const mkFrame = (id, noise) => ({ id, noise, closed: false, close() { this.closed = true; } });
   const made = []; const decoders = [];
   const makeEncoder = ({ bitrate, onChunk }) => { let first = true; const q = []; return {
-    encode(vf) { const c = { byteLength: Math.round(bitrate / 8 / 60), id: vf.id, noise: bitrate < 6e6 }; const meta = first ? { decoderConfig: { codec: 'fake' } } : undefined; first = false; q.push(Promise.resolve().then(() => onChunk(c, meta))); },
+    encode(vf) { const c = { byteLength: Math.round(bitrate / 8 / 60), id: vf.id, noise: bitrate < 6e6 }; const meta = first ? { decoderConfig: { codec: desc ? 'hvc1.2.4.L123.B0' : 'fake', ...(desc ? { description: desc } : {}) } } : undefined; first = false; q.push(Promise.resolve().then(() => onChunk(c, meta))); },
     async drain() { await Promise.all(q); }, async flush() { await Promise.all(q); }, close() {} }; };
-  const makeDecoder = ({ output, error }) => { if (decFail) throw new Error('decoder non disponibile'); const d = { state: 'unconfigured', q: [], configure() { d.state = 'configured'; },
-    decode(c) { d.q.push(Promise.resolve().then(() => output(mkFrame(c.id, c.noise)))); }, async flush() { await Promise.all(d.q); }, close() { d.state = 'closed'; } }; decoders.push(d); return d; };
-  const decodeFn = async (config, chunks, onFrame) => { let i = 0; for (const c of chunks) { const f = mkFrame(c.id, c.noise); await onFrame(f, i++); f.close(); } return i; };
-  const frameSource = async function* (a, b) { for (let i = a; i < b; i++) { const f = mkFrame(i, false); made.push(f); yield f; } };
+  const fail = () => Object.assign(new Error('Decoder failure'), { name: 'EncodingError' });
+  const makeDecoder = ({ output, error }) => { if (decFail) throw new Error('decoder non disponibile'); const d = { state: 'unconfigured', q: [], configure(cfg) { d.state = 'configured'; d.cfg = cfg; },
+    decode(c) { if (decCheck && !decCheck(d.cfg, W0)) { d.q.push(Promise.resolve().then(() => { if (d.state !== 'closed') { d.state = 'closed'; error(fail()); } })); return; } d.q.push(Promise.resolve().then(() => output(mkFrame(c.id, c.noise)))); }, async flush() { await Promise.all(d.q); }, close() { d.state = 'closed'; } }; decoders.push(d); return d; };
+  const decodeFn = async (config, chunks, onFrame) => { if (decCheck && !decCheck(config, W0)) throw fail(); let i = 0; for (const c of chunks) { const f = mkFrame(c.id, c.noise); await onFrame(f, i++); f.close(); } return i; };
+  const frameSource = async function* (a, b) { W0.srcOpen++; try { for (let i = a; i < b; i++) { const f = mkFrame(i, false); made.push(f); yield f; } } finally { W0.srcOpen--; } };
   const fr = Array.from({ length: 120 }, (_, i) => ({ ts: i / 60, dur: 1 / 60 }));
   const common = { W: 32, H: 32, frames: fr, frameSource, makeEncoder, makeDecoder, decodeFn, lumaFn: (f) => lumaOf(f.id, f.noise), framerate: 60 };
-  return { common, made, decoders };
+  return { common, made, decoders, W0 };
 }
 
 test('createTrialDeps: live measurement = after-the-fact measurement, frames closed, chunks freed, timing filled', async () => {
@@ -431,4 +433,52 @@ test('createTrialDeps: sorgente 8 bit simulata (frames già scalati, codec dell\
   assert.ok(seen.every((p) => p.codec === vc.codec && p.width === 16 && p.height === 16), 'codec e dimensioni dell\'export a 8 bit');
   const res = await searchBitrate({ trialWindow: { startIdx: 0, endIdx: 60, srcBitrate: 8.59e6 }, prior: 4e6 }, d, { maxBitrate: 0.85 * 8.59e6 });
   assert.ok(res.bitrate > 0 && res.bitrate <= 0.85 * 8.59e6, `bitrate ${res.bitrate}`);
+});
+
+// v0.39.1 ripieghi del decoder di prova: la prima strategia che decodifica resta per il job, il log dice quale e perché
+const HVCC = new Uint8Array([1, 0x01, 0x60, 0, 0, 0, 0xB0, 0, 0, 0, 0, 0, 123, 0xF0, 0, 0xFC, 0xFD, 0xF8, 0xF8, 0, 0, 0x0F, 3]);
+test('hevcCodecFromHvcC: codec string RFC 6381 from the hvcC', () => {
+  assert.equal(hevcCodecFromHvcC(HVCC), 'hvc1.1.6.L123.B0');
+  const m10 = HVCC.slice(); m10[1] = 0x02; m10[2] = 0x20; m10[12] = 153; assert.equal(hevcCodecFromHvcC(m10, 'hev1'), 'hev1.2.4.L153.B0');
+  assert.equal(hevcCodecFromHvcC(new Uint8Array(5)), null);
+  assert.deepEqual(DEC_STRATS.map((s) => s.id), ['base', 'nocs', 'codec']);
+});
+async function stratRun(decCheck, { desc, colorSpace = { primaries: 'bt709' } } = {}) {
+  const A = fakeWorld({ decCheck, desc }), logs = [];
+  const d = createTrialDeps({ ...A.common, colorSpace, log: (t) => logs.push(t), diag: () => 'VideoDecoder aperti 9' });
+  const w = { startIdx: 0, endIdx: 60 };
+  const r1 = await searchBitrate({ trialWindow: { ...w, srcBitrate: 20e6 }, prior: 6e6 }, d, { maxBitrate: 8e6 });
+  const r2 = await searchBitrate({ trialWindow: { startIdx: 60, endIdx: 120, srcBitrate: 20e6 }, prior: 6e6 }, d, { maxBitrate: 8e6 });
+  return { d, logs, r1, r2, A };
+}
+test('trial decoder fallback: forced colorSpace rejected → «nocs» found, memorised, live measurement kept', async () => {
+  const { d, logs, r1, r2 } = await stratRun((cfg) => !cfg.colorSpace);
+  assert.ok(r1.stats.measures + r1.stats.streamed >= 1 && r2.stats.streamed >= 1, 'second segment measured live with the new strategy');
+  assert.deepEqual(d.decStrategy(), { id: 'nocs', live: true });
+  const diag = logs.find((l) => l.startsWith('⚠️ decoder di prova: EncodingError: Decoder failure'));
+  assert.match(diag, /strategia «base».*colorSpace \{"primaries":"bt709"\}.*coded 32×32.*primo chunk .* · VideoDecoder aperti 9$/);
+  assert.equal(logs.filter((l) => l.startsWith('⚠️ decoder di prova')).length, 1, 'full diagnostic once per job');
+  assert.ok(logs.some((l) => /strategia «nocs» .* riuscita in misura dopo → la uso per il resto del job/.test(l)));
+  assert.ok(logs.some((l) => /riprovo la misura in diretta con la strategia «nocs»/.test(l)));
+});
+test('trial decoder fallback: codec string ≠ hvcC → «codec» (hvc1.1.6.L123.B0 from the description)', async () => {
+  const { d, logs } = await stratRun((cfg) => cfg.codec === 'hvc1.1.6.L123.B0' && !cfg.colorSpace, { desc: HVCC });
+  assert.equal(d.decStrategy().id, 'codec');
+  assert.match(logs.find((l) => l.startsWith('⚠️')), /description 23 B \[0101600000/);
+});
+test('trial decoder fallback: fails only while the source decoder is open → measurement «after» for the job', async () => {
+  const { d, logs, r1, r2 } = await stratRun((cfg, W0) => W0.srcOpen === 0);
+  assert.deepEqual(d.decStrategy(), { id: 'base', live: false });
+  assert.equal(r2.stats.streamed, 0); assert.ok(r2.stats.measures >= 1 && r1.stats.measures >= 1);
+  assert.ok(logs.some((l) => /misura «dopo» .* riesce con la strategia «base» che in diretta fallisce → misura dopo per il resto del job/.test(l)), logs.join('\n'));
+  assert.ok(!logs.some((l) => /strategie esaurite/.test(l)));
+});
+test('autotestLuma uses the same fallbacks (first decoder of the job) and the trials inherit the strategy', async () => {
+  const A = fakeWorld({ decCheck: (cfg) => !cfg.colorSpace }), logs = [];
+  const deps = createTrialDeps({ ...A.common, colorSpace: { transfer: 'hlg' }, gpuLumaFn: A.common.lumaFn, log: (t) => logs.push(t) });
+  const lc = await deps.autotestLuma({ id: 5, noise: false, close() {} }, [8e6]);
+  assert.equal(lc.cpu.length, 1, lc.reason); assert.equal(deps.decStrategy().id, 'nocs');
+  assert.ok(logs.some((l) => /riuscita in autotest/.test(l)));
+  const out = await deps.encodeTrial({ startIdx: 0, endIdx: 60 }, [4e6], { stream: [true] });
+  assert.equal(out[0].dbs.length, 30, 'live measurement works straight away with the inherited strategy');
 });
