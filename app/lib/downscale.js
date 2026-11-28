@@ -1,6 +1,6 @@
 // «Riduci a 1080p» (v0.31, default OFF): logica PURA (Node: app/lib/downscale.test.mjs). Nessun ripiego: se l'encoder non scala
 // mantenendo i 10 bit il job si ferma (DownscaleError). Il passaggio via canvas/WebGPU darebbe 8 bit = niente HDR: vietato (research/02 §10 run 4).
-import { parseSps } from './hevc-vui.js?v=0.38.7';
+import { parseSps } from './hevc-vui.js?v=0.38.8';
 
 export const DS_SHORT = 1080;
 export const DS_MESSAGE = 'Safari non riesce a ridurre la risoluzione mantenendo l\'HDR a 10 bit: riprova senza «Riduci a 1080p».';
