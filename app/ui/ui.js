@@ -230,13 +230,9 @@ function template(opts) {
   <p class="fcv-keep" data-ref="progNote" role="status" aria-live="polite">${KEEP_OPEN}</p>
   <div class="fcv-pip" data-ref="pipBox" hidden>
     <button class="px-btn px-btn--block" data-ref="pipBtn" type="button">Continua in Picture-in-Picture</button>
-    <p class="fcv-pip-note" data-ref="pipNote">Puoi usare altre app: la compressione continua.</p>
+    <p class="fcv-pip-note" data-ref="pipNote" hidden></p>
   </div>
-  <div class="fcv-cancels"><button class="px-btn px-btn--danger fcv-cancel" data-ref="cancel">Annulla</button><button class="px-btn fcv-cancel" data-ref="qStop" type="button" hidden>Ferma la coda</button></div>
-  <details class="fcv-note fcv-q-stopnote" data-ref="qStopNote" hidden>
-    <summary>${chev}<span>Annulla o ferma la coda?</span></summary>
-    <div class="fcv-dbody"><p class="fcv-subtle">«Annulla questo video» lo salta e la coda prosegue; «Ferma la coda» si ferma qui e il video in corso riprenderà dai segmenti già pronti.</p></div>
-  </details>
+  <div class="fcv-cancels"><button class="px-btn px-btn--danger fcv-cancel" data-ref="cancel" title="Annulla questo video: lo salta e la coda prosegue.">Annulla</button><button class="px-btn fcv-cancel" data-ref="qStop" type="button" hidden title="Ferma coda: si ferma qui e il video in corso riprenderà dai segmenti già pronti." aria-label="Ferma coda: si ferma qui e il video in corso riprenderà dai segmenti già pronti.">Ferma coda</button></div>
   <p class="px-sr" aria-live="polite" data-ref="live"></p>
 </section>
 
@@ -415,8 +411,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
     resetCancel();
   }
   function resetCancel() {
-    R.cancel.disabled = false; R.cancel.textContent = st.qMode ? 'Annulla questo video' : 'Annulla';
-    R.qStop.hidden = R.qStopNote.hidden = !st.qMode; R.qStop.disabled = false; R.qStop.textContent = 'Ferma la coda';
+    R.cancel.disabled = false; R.cancel.textContent = st.qMode ? 'Annulla video' : 'Annulla'; R.cancel.title = st.qMode ? 'Annulla questo video: lo salta e la coda prosegue.' : 'Annulla la compressione.';
+    R.qStop.hidden = !st.qMode; R.qStop.disabled = false; R.qStop.textContent = 'Ferma coda';
   }
 
   // ---------- passo 1: file ----------
@@ -661,7 +657,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.qClear.hidden = !!q.running;
     if (st.qCur) { // video aggiunti o rimossi durante il lavoro: «Video n di N» aggiornato
       const i = items.findIndex((x) => x.id === st.qCur.id);
-      if (i >= 0) { st.qCur.idx = i + 1; st.qCur.n = items.length; R.qNow.innerHTML = `Video <b>${st.qCur.idx}</b> di <b>${st.qCur.n}</b>`; const c = R.summary.querySelector('[data-qchip]'); if (c) c.textContent = `${st.qCur.idx}/${st.qCur.n}`; }
+      if (i >= 0) { st.qCur.idx = i + 1; st.qCur.n = items.length; const c = R.summary.querySelector('[data-qchip]'); if (c) c.textContent = `${st.qCur.idx}/${st.qCur.n}`; }
     }
     // nuovo lavoro dopo la fine della coda (Riprova, video aggiunti o riselezionati) → di nuovo «Comprimi N video»
     if (st.stage === 'done' && !st.busy && items.some((it) => it.status === 'attesa' && it.hasFile)) setStage('ready');
@@ -757,16 +753,18 @@ export function mountUI(root, handlers = {}, opts = {}) {
   });
 
   // ---------- avanzamento ----------
+  let keepShown = false; // avviso «schermo acceso» una sola volta per sessione
   function startProgress({ keepLog = false } = {}) {
     st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = parN(st.settings); st.sceneUsed = st.settings.sceneQ; st.dsUsed = resApplies(st.settings.res, st.file) !== 'orig'; st.modeUsed = st.settings.mode; st.resUsed = resApplies(st.settings.res, st.file); st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
     if (!keepLog) clearLog();
     const s = st.settings;
-    R.qNow.hidden = !st.qCur;
-    if (st.qCur) R.qNow.innerHTML = `Video <b>${st.qCur.idx}</b> di <b>${st.qCur.n}</b>`;
-    R.summary.innerHTML = `<span class="px-chip px-chip--num">${esc(st.file?.name || 'video')}</span><span class="px-chip px-chip--num">${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps</span><span class="px-chip px-chip--num">key ${s.keyframeS}s</span>${s.res && s.res !== 'orig' ? `<span class="px-chip px-chip--num">${s.res}p</span>` : ''}${s.mode === 'sdr' ? '<span class="px-chip">SDR</span>' : s.mode === 'hdr8' ? '<span class="px-chip">HDR 8 bit</span>' : ''}<span class="px-chip">${esc(AUDIO_SHORT[s.audioMode] || s.audioMode)}</span>`;
+    R.qNow.hidden = true;
+    const full = `${st.file?.name || 'video'} · ${s.sceneQ ? `per scena ≤ ${s.bitrateMbps}` : s.bitrateMbps} Mbps · key ${s.keyframeS}s${s.res && s.res !== 'orig' ? ` · ${s.res}p` : ''}${s.mode === 'sdr' ? ' · SDR' : s.mode === 'hdr8' ? ' · HDR 8 bit' : ''} · ${AUDIO_SHORT[s.audioMode] || s.audioMode}`;
+    const short = [s.mode === 'sdr' ? 'SDR' : s.mode === 'hdr8' ? 'HDR8' : 'HDR10', `${s.sceneQ ? '≤' : ''}${s.bitrateMbps}M`, s.sceneQ ? 'scena' : '', s.res && s.res !== 'orig' ? `${s.res}p` : ''].filter(Boolean).join(' · ');
+    R.summary.title = full; R.summary.innerHTML = `<span class="fcv-sum-name">${esc(st.file?.name || 'video')}</span><span class="fcv-sum-set">${esc(short)}</span>`;
     ['eta', 'fps', 'frames'].forEach((k) => { R[k].textContent = '—'; });
     R.elapsed.textContent = '0:00';
-    R.progNote.textContent = KEEP_OPEN; R.progNote.dataset.kind = ''; st.pipOn = false; R.pipBox.hidden = true;
+    R.progNote.textContent = keepShown ? '' : KEEP_OPEN; keepShown = true; R.progNote.hidden = !R.progNote.textContent; R.progNote.dataset.kind = ''; st.pipOn = false; R.pipBox.hidden = true;
     renderPct(0);
     setPhase('analisi');
     setStage('busy');
@@ -780,8 +778,9 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const show = !!(late && st.busy && document.pictureInPictureEnabled);
     const sa = standalone();
     R.pipBox.hidden = !show; R.pipBtn.hidden = sa;
-    if (show && sa) R.pipNote.textContent = 'Per il background apri il sito in Safari (nell\'app installata la PiP non funziona).';
-    else R.pipNote.textContent = st.pipOn ? 'Finestrella aperta: puoi usare altre app.' : 'Puoi usare altre app finché la finestrella resta aperta.';
+    R.pipNote.hidden = !(show && sa);
+    R.pipNote.textContent = 'Per il background apri il sito in Safari (la PiP qui non funziona).';
+    R.pipBtn.title = st.pipOn ? 'Finestrella aperta: puoi usare altre app.' : 'Puoi usare altre app finché la finestrella resta aperta.';
     R.pipBtn.textContent = st.pipOn ? 'Chiudi Picture-in-Picture' : 'Continua in Picture-in-Picture';
   }
   // v0.35.3: dall'app installata, tasto «Apri in Safari» (lì funziona la PiP). iOS: schema x-safari-https:// (apre Safari);
@@ -1091,7 +1090,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     /** Offerta di ripresa per il file scelto: {name, done, total, settings} oppure null (nasconde). */
     setResume,
     /** Messaggio nel pannello di avanzamento (default «Tieni l'app aperta…»); kind '' | 'warn' | 'bad'. Testo vuoto = default. */
-    setProgNote(text, kind = '') { R.progNote.textContent = text || KEEP_OPEN; R.progNote.dataset.kind = text ? kind : ''; },
+    setProgNote(text, kind = '') { R.progNote.textContent = text || ''; R.progNote.hidden = !text; R.progNote.dataset.kind = text ? kind : ''; },
     /** Messaggio sotto "Salva nelle Foto" (es. esito della share sheet). */
     setSaveMessage(text) { R.saveMsg.textContent = text || ''; },
     /** Messaggio accanto a "Copia log" (utile se onCopyLog è gestito dall'app). */
@@ -1116,7 +1115,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       if (st.qFirstIdx == null) st.qFirstIdx = m.idx;
       st.qCur = m; st.file = { ...m }; st.cancelling = false; resetCancel();
       st.settings = readSettings(); startProgress({ keepLog: true });
-      R.summary.insertAdjacentHTML('afterbegin', `<span class="px-chip px-chip--num" data-qchip>${m.idx}/${m.n}</span>`);
+      R.summary.insertAdjacentHTML('afterbegin', `<span class="fcv-sum-q px-digits" data-qchip>${m.idx}/${m.n}</span>`);
     },
     /** Voce finita: impara la velocità per le previsioni successive. */
     queueItemDone(id, r) { if (pendingProg) { const x = pendingProg; pendingProg = null; applyProgress(x); } learnSpeed(r?.timeS || st.lastElapsed); st.qCur = null; thumbPump(); },
