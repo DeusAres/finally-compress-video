@@ -4,6 +4,7 @@ import { bus } from './bus.js?v=0.38.7';
 import { sprite, SPRITES } from './sprite.js?v=0.38.7';
 import { makeThumb } from './../lib/thumb.js?v=0.38.7';
 import { createLogStore } from './logstore.js?v=0.38.7';
+import { worthRecompress, SCENE } from './../lib/scenesearch.js?v=0.38.7';
 import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.38.7';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
@@ -578,11 +579,22 @@ export function mountUI(root, handlers = {}, opts = {}) {
   // ---------- coda (v0.36) ----------
   // Previsione di una voce con le impostazioni correnti (stesse formule del singolo: estimate.js).
   const itemFile = (it) => (it?.info?.dur ? { durationS: it.info.dur, width: it.info.W, height: it.info.H, fps: it.info.fps, aacBps: it.info.aacBps, apacBps: it.info.apacBps, sizeMB: it.sizeMB } : null);
+  // v0.38.8: «già leggero» previsto PRIMA di comprimere: stessa regola del backend (worthRecompress, SCENE.keepRatio), con riduzione di risoluzione si comprime comunque.
+  function lightInfo(it, f = itemFile(it)) {
+    const s = st.settings; if (!f?.sizeMB || !f.durationS || resApplies(s.res, f) !== 'orig') return null;
+    const aud = f.aacBps === 0 ? 0 : (f.aacBps > 0 ? f.aacBps : 256000) + (s.apac && f.apacBps > 0 ? f.apacBps : 0);
+    const src = f.sizeMB * 1048576 * 8 / f.durationS - aud; if (!(src > 0)) return null;
+    const w = worthRecompress(src, s.bitrateMbps * 1e6); if (!w.keep) return { keep: false };
+    const hint = [...BITRATES].reverse().find((b) => b < s.bitrateMbps && !worthRecompress(src, b * 1e6).keep);
+    const pct = hint ? (1 - estimateOutBytes({ durS: f.durationS, videoMbps: hint, audioMode: s.audioMode, aacBps: f.aacBps, apacBps: s.apac ? f.apacBps : 0 }) / 1048576 / f.sizeMB) * 100 : null;
+    return { keep: true, srcMbps: src / 1e6, hint, pct };
+  }
   function predictItem(it) {
     const f = itemFile(it); if (!f) return null; const s = st.settings;
-    const mb = estimateOutBytes({ durS: f.durationS, videoMbps: s.bitrateMbps, pixelRatio: pixRatio(s, f), audioMode: s.audioMode, aacBps: f.aacBps, apacBps: s.apac ? f.apacBps : 0 }) / 1048576;
+    const L = lightInfo(it, f);
+    const mb = L?.keep ? f.sizeMB : estimateOutBytes({ durS: f.durationS, videoMbps: s.bitrateMbps, pixelRatio: pixRatio(s, f), audioMode: s.audioMode, aacBps: f.aacBps, apacBps: s.apac ? f.apacBps : 0 }) / 1048576;
     const t = estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: s.audioMode, par2: parN(s), width: f.width, height: f.height, sceneQ: s.sceneQ, downscale: resApplies(s.res, f) !== 'orig', mode: s.mode, res: resApplies(s.res, f) });
-    return { mb, s: t?.s ?? null, pct: f.sizeMB ? (1 - mb / f.sizeMB) * 100 : null };
+    return { mb, s: L?.keep ? 0 : (t?.s ?? null), pct: f.sizeMB ? (1 - mb / f.sizeMB) * 100 : null, light: L };
   }
   const needsFile = (it) => !it.hasFile && ['attesa', 'corso', 'errore', 'annullata'].includes(it.status);
   const isPending = (it) => it.status === 'attesa' || it.status === 'corso';
@@ -621,7 +633,8 @@ export function mountUI(root, handlers = {}, opts = {}) {
     else if (it.status === 'annullata') stTxt = '<b class="fcv-q-badge" data-k="off">Annullata</b>';
     if (it.status === 'fatto' && it.hasOut && !it.saved) act += `<button class="px-btn px-btn--ok" type="button" data-act="save" data-id="${it.id}">Salva nelle Foto</button>`;
     if ((it.status === 'errore' || it.status === 'annullata')) act += `<button class="px-btn" type="button" data-act="retry" data-id="${it.id}">Riprova</button>`;
-    const est = p ? `<p class="fcv-q-est">→ ${vary ? '≤' : '≈'} ${fmtMB(p.mb)} MB${p.pct != null ? ` (${p.pct > 0 ? '−' : '+'}${nf0.format(Math.abs(p.pct))} %)` : ''} · ≈ ${fmtTime(p.s)}</p>` : isPending(it) && !inf && it.hasFile ? '<p class="fcv-q-est">lettura…</p>' : '';
+    const L = p?.light, light = L?.keep ? `<p class="fcv-q-st"><b class="fcv-q-badge" data-k="off">Già leggero</b> <span class="fcv-q-res">verrà tenuto l'originale (${nf1.format(L.srcMbps)} Mbps ≤ ${SCENE.keepRatio}× ${st.settings.bitrateMbps})${L.hint && L.pct > 0 ? ` · a ${L.hint} Mbps: ≈ −${nf0.format(L.pct)} %` : ''}</span></p>` : '';
+    const est = L?.keep ? `<p class="fcv-q-est">→ = originale · ${fmtMB(p.mb)} MB</p>${light}` : p ? `<p class="fcv-q-est">→ ${vary ? '≤' : '≈'} ${fmtMB(p.mb)} MB${p.pct != null ? ` (${p.pct > 0 ? '−' : '+'}${nf0.format(Math.abs(p.pct))} %)` : ''} · ≈ ${fmtTime(p.s)}</p>` : isPending(it) && !inf && it.hasFile ? '<p class="fcv-q-est">lettura…</p>' : '';
     const orig = inf?.exported ? `<p class="fcv-q-orig">Copia ricodificata da Foto (${esc(inf.exported[0] || '')}). Meglio l'originale: Foto › Condividi › Opzioni › «Attuale» › Salva in File.</p>` : '';
     const bad = inf?.error && isPending(it) ? `<p class="fcv-q-orig">Non leggibile: ${esc(inf.error)}</p>` : '';
     const tu = thumbs.get(it.id), th = `<span class="fcv-q-thumb"${tu === 'err' ? ' data-err="1"' : ''}>${tu && tu !== 'wait' && tu !== 'err' ? `<img src="${tu}" alt="">` : sprite(SPRITES.film, { scale: 3 })}</span>`;
