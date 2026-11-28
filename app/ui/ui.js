@@ -1,11 +1,11 @@
 // UI pixel art di finally-compress-video. Contratto: app/ui/README.md.
 // mountUI(root, handlers) → { setBusy, setDefaults, getSettings, setSaveMessage, reset } (+ coda v0.36: setQueueMode, setQueue, …)
-import { bus } from './bus.js?v=0.39.1';
-import { sprite, SPRITES } from './sprite.js?v=0.39.1';
-import { makeThumb } from './../lib/thumb.js?v=0.39.1';
-import { createLogStore } from './logstore.js?v=0.39.1';
-import { worthRecompress, SCENE } from './../lib/scenesearch.js?v=0.39.1';
-import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed } from './estimate.js?v=0.39.1';
+import { bus } from './bus.js?v=0.39.2';
+import { sprite, SPRITES } from './sprite.js?v=0.39.2';
+import { makeThumb } from './../lib/thumb.js?v=0.39.2';
+import { createLogStore } from './logstore.js?v=0.39.2';
+import { worthRecompress, SCENE } from './../lib/scenesearch.js?v=0.39.2';
+import { estimateOutBytes, SCENE_TIME_FACTOR, estimateTimeS, saveSpeed, estimateLikelyMB, learnBitrate } from './estimate.js?v=0.39.2';
 
 const BITRATES = [4, 6, 8, 10, 12, 14];
 const KEYFRAMES = [1, 4, 10];
@@ -537,6 +537,13 @@ export function mountUI(root, handlers = {}, opts = {}) {
   }
   const pixRatio = (s, f) => { const r = resApplies(s.res, f), sh = shortSide(f); if (r === 'orig' || !sh) return 1; const k = r / sh, w = (f.width || 0) * k, h = (f.height || 0) * k; return w && h ? Math.min(1, Math.pow((w * h) / (1920 * 1080), 0.75)) : 1; }; // v0.38: stessa regola dell'encoder (downscale.js resBitrateFactor): bitrate valido per il 1080p, scalato sotto
   const predictMB = (br = st.settings.bitrateMbps, d = st.file?.durationS) => (d ? estimateOutBytes({ durS: d, videoMbps: br, pixelRatio: pixRatio(st.settings, st.file), audioMode: st.settings.audioMode, aacBps: st.file?.aacBps, apacBps: st.settings.apac ? st.file?.apacBps : 0 }) / 1048576 : null); // formula in estimate.js
+  // v0.39.2: con la qualità per scena, peso PROBABILE (mediana appresa o prior) limitato dal tetto; predictMB() resta il tetto
+  const predictLikelyMB = (f = st.file, s = st.settings) => (f?.durationS ? estimateLikelyMB({ mode: s.mode, width: f.width, height: f.height, res: resApplies(s.res, f), downscale: resApplies(s.res, f) !== 'orig' }, { sizeMB: f.sizeMB, durS: f.durationS, audioMode: s.audioMode, aacBps: f.aacBps, apacBps: f.apacBps, apac: s.apac }, s.bitrateMbps * pixRatio(s, f)).mb : null);
+  const learnBr = (r, f, inf) => { // da una voce finita con qualità per scena: rapporto scelto/sorgente → storia
+    if (!st.sceneUsed || !r || r.kept || !(r.outMB > 0)) return;
+    const d = inf?.dur || f?.durationS, S = st.settings;
+    learnBitrate({ mode: st.modeUsed, width: inf?.W || f?.width, height: inf?.H || f?.height, res: st.resUsed, downscale: st.dsUsed }, { outMB: r.outMB, sizeMB: r.inMB, durS: d, audioMode: S.audioMode, aacBps: inf ? inf.aacBps : f?.aacBps, apacBps: inf ? inf.apacBps : f?.apacBps, apac: S.apac });
+  };
   const predictTime = () => { const f = st.file; return f?.durationS ? estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: st.settings.audioMode, par2: parN(st.settings), width: f.width, height: f.height, sceneQ: st.settings.sceneQ, downscale: resApplies(st.settings.res, f) !== 'orig', mode: st.settings.mode, res: resApplies(st.settings.res, f) }) : null; };
   function updateEstimate() {
     if (st.qMode) { updateQueueEstimate(); return; }
@@ -546,7 +553,9 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const est = predictMB();
     const pct = src ? (1 - est / src) * 100 : null;
     const vary = st.settings.sceneQ; // qualità per scena: peso variabile (al massimo quello a bitrate fisso), tempo ≈ ×1.6
-    R.est.innerHTML = `${vary ? '<small class="vary">variabile, al massimo</small>' : ''}<span class="v">${vary ? '≤' : '≈'} ${fmtMB(est)} <small>MB</small></span>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${vary ? 'almeno ' : ''}${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
+    const lk = vary ? Math.min(est, predictLikelyMB() ?? est) : est, pctL = src ? (1 - lk / src) * 100 : null;
+    R.est.innerHTML = vary ? `<small class="vary">probabile (tetto ≤ ${fmtMB(est)} MB)</small><span class="v">≈ ${fmtMB(lk)} <small>MB</small> <small>(≤ ${fmtMB(est)} MB)</small></span>` + (pctL != null ? ` <span class="save ${pctL <= 0 ? 'bad' : ''}">(${pctL > 0 ? '−' : '+'}${nf0.format(Math.abs(pctL))} %)</span>` : '')
+      : `<span class="v">≈ ${fmtMB(est)} <small>MB</small></span>` + (pct != null ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
     const tt = predictTime();
     R.estT.innerHTML = `${vary ? '<small class="vary">variabile, circa</small>' : ''}<span class="v">≈ ${fmtTime(tt.s)} <small>m:ss</small></span>`;
     R.estSrc.textContent = `Tempo: velocità ${tt.measured ? 'dalla tua ultima compressione' : 'stima'} (~${nf0.format(tt.fps)} fps${st.settings.par2 ? `, ${st.settings.par3 ? 3 : 2} player` : ', 1 player'})${vary ? `, ×${nf1.format(SCENE_TIME_FACTOR)} per le prove per scena` : ''}${resApplies(st.settings.res, st.file) !== 'orig' ? ` · uscita ${st.settings.res}p (estrazione dalla sorgente, peso in proporzione ai pixel)` : ''}.`;
@@ -592,23 +601,24 @@ export function mountUI(root, handlers = {}, opts = {}) {
     const L = lightInfo(it, f);
     const mb = L?.keep ? f.sizeMB : estimateOutBytes({ durS: f.durationS, videoMbps: s.bitrateMbps, pixelRatio: pixRatio(s, f), audioMode: s.audioMode, aacBps: f.aacBps, apacBps: s.apac ? f.apacBps : 0 }) / 1048576;
     const t = estimateTimeS({ durS: f.durationS, fps: f.fps, audioMode: s.audioMode, par2: parN(s), width: f.width, height: f.height, sceneQ: s.sceneQ, downscale: resApplies(s.res, f) !== 'orig', mode: s.mode, res: resApplies(s.res, f) });
-    return { mb, s: L?.keep ? 0 : (t?.s ?? null), pct: f.sizeMB ? (1 - mb / f.sizeMB) * 100 : null, light: L };
+    const mbL = !L?.keep && s.sceneQ ? Math.min(mb, predictLikelyMB(f, s) ?? mb) : mb;
+    return { mb, mbL, s: L?.keep ? 0 : (t?.s ?? null), pct: f.sizeMB ? (1 - mb / f.sizeMB) * 100 : null, light: L };
   }
   const needsFile = (it) => !it.hasFile && ['attesa', 'corso', 'errore', 'annullata'].includes(it.status);
   const isPending = (it) => it.status === 'attesa' || it.status === 'corso';
   function queueTotals() {
     const items = st.queue?.items || [], pend = items.filter(isPending);
-    let inMB = 0, mb = 0, t = 0, unknown = 0;
-    for (const it of pend) { const p = predictItem(it); inMB += it.sizeMB; if (p) { mb += p.mb; t += p.s || 0; } else unknown++; }
-    return { n: items.length, pend: pend.length, inMB, mb, t, unknown };
+    let inMB = 0, mb = 0, mbL = 0, t = 0, unknown = 0;
+    for (const it of pend) { const p = predictItem(it); inMB += it.sizeMB; if (p) { mb += p.mb; mbL += p.mbL; t += p.s || 0; } else unknown++; }
+    return { n: items.length, pend: pend.length, inMB, mb, mbL, t, unknown };
   }
   function updateQueueEstimate() {
     R.warn.hidden = true;
     const T = queueTotals(), vary = st.settings.sceneQ;
     if (!T.pend) { R.est.innerHTML = R.estT.innerHTML = '—'; R.estSrc.textContent = 'Nessun video in attesa.'; R.estSrc.hidden = false; return; }
     if (T.unknown === T.pend) { R.est.innerHTML = R.estT.innerHTML = '…'; R.estSrc.hidden = true; return; }
-    const pct = T.inMB ? (1 - T.mb / T.inMB) * 100 : null;
-    R.est.innerHTML = `<small class="qv">${T.pend} video${vary ? ', al massimo' : ''}${T.unknown ? ` (${T.pend - T.unknown} letti)` : ''}</small><span class="v">${vary ? '≤' : '≈'} ${fmtMB(T.mb)} <small>MB</small></span>` + (pct != null && !T.unknown ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
+    const pct = T.inMB ? (1 - (vary ? T.mbL : T.mb) / T.inMB) * 100 : null;
+    R.est.innerHTML = `<small class="qv">${T.pend} video${vary ? ', probabile' : ''}${T.unknown ? ` (${T.pend - T.unknown} letti)` : ''}</small><span class="v">≈ ${fmtMB(vary ? T.mbL : T.mb)} <small>MB</small>${vary ? ` <small>(≤ ${fmtMB(T.mb)} MB)</small>` : ''}</span>` + (pct != null && !T.unknown ? ` <span class="save ${pct <= 0 ? 'bad' : ''}">(${pct > 0 ? '−' : '+'}${nf0.format(Math.abs(pct))} %)</span>` : '');
     R.estT.innerHTML = `<small class="qv">in totale${vary ? ', variabile' : ''}</small><span class="v">≈ ${fmtTime(T.t)} <small>m:ss</small></span>`;
     R.estSrc.textContent = `Previsione per tutta la coda (${T.pend} video in attesa), uno dopo l'altro. Le stime per video sono nella lista.`; R.estSrc.hidden = false;
   }
@@ -632,7 +642,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     if (it.status === 'fatto' && it.hasOut && !it.saved) act += `<button class="px-btn px-btn--ok" type="button" data-act="save" data-id="${it.id}">Salva nelle Foto</button>`;
     if ((it.status === 'errore' || it.status === 'annullata')) act += `<button class="px-btn" type="button" data-act="retry" data-id="${it.id}">Riprova</button>`;
     const L = p?.light, light = L?.keep ? `<p class="fcv-q-st"><b class="fcv-q-badge" data-k="off">Già leggero</b> <span class="fcv-q-res">verrà tenuto l'originale (${nf1.format(L.srcMbps)} Mbps ≤ ${SCENE.keepRatio}× ${st.settings.bitrateMbps})${L.hint && L.pct > 0 ? ` · a ${L.hint} Mbps: ≈ −${nf0.format(L.pct)} %` : ''}</span></p>` : '';
-    const est = L?.keep ? `<p class="fcv-q-est">→ = originale · ${fmtMB(p.mb)} MB</p>${light}` : p ? `<p class="fcv-q-est">→ ${vary ? '≤' : '≈'} ${fmtMB(p.mb)} MB${p.pct != null ? ` (${p.pct > 0 ? '−' : '+'}${nf0.format(Math.abs(p.pct))} %)` : ''} · ≈ ${fmtTime(p.s)}</p>` : isPending(it) && !inf && it.hasFile ? '<p class="fcv-q-est">lettura…</p>' : '';
+    const est = L?.keep ? `<p class="fcv-q-est">→ = originale · ${fmtMB(p.mb)} MB</p>${light}` : p ? `<p class="fcv-q-est">→ ≈ ${fmtMB(vary ? p.mbL : p.mb)} MB${vary ? ` (≤ ${fmtMB(p.mb)} MB)` : ''}${p.pct != null ? ` (${p.pct > 0 ? '−' : '+'}${nf0.format(Math.abs(vary ? (1 - p.mbL / (p.mb / (1 - p.pct / 100))) * 100 : p.pct))} %)` : ''} · ≈ ${fmtTime(p.s)}</p>` : isPending(it) && !inf && it.hasFile ? '<p class="fcv-q-est">lettura…</p>' : '';
     const orig = inf?.exported ? `<p class="fcv-q-orig">Copia ricodificata da Foto (${esc(inf.exported[0] || '')}). Meglio l'originale: Foto › Condividi › Opzioni › «Attuale» › Salva in File.</p>` : '';
     const bad = inf?.error && isPending(it) ? `<p class="fcv-q-orig">Non leggibile: ${esc(inf.error)}</p>` : '';
     const tu = thumbs.get(it.id), th = `<span class="fcv-q-thumb"${tu === 'err' ? ' data-err="1"' : ''}>${tu && tu !== 'wait' && tu !== 'err' ? `<img src="${tu}" alt="">` : sprite(SPRITES.film, { scale: 3 })}</span>`;
@@ -651,7 +661,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
     R.qList.innerHTML = items.map(itemHTML).join('');
     R.qMsg.hidden = !q.msg; if (q.msg) { R.qMsg.textContent = q.msg.text; R.qMsg.dataset.kind = q.msg.kind || ''; }
     const doneIn = S.reduce((a, it) => a + it.result.inMB, 0), doneOut = S.reduce((a, it) => a + it.result.outMB, 0);
-    R.qTot.innerHTML = `<b>${items.length} video</b>` + (T.pend ? ` · in attesa ${T.pend}: ${fmtMB(T.inMB)} → ${st.settings.sceneQ ? '≤' : '≈'} ${T.unknown === T.pend ? '…' : fmtMB(T.mb)} MB · ≈ ${fmtTime(T.t)}` : '') + (S.length ? ` · fatti ${S.length}: ${fmtMB(doneIn)} → ${fmtMB(doneOut)} MB` : '');
+    R.qTot.innerHTML = `<b>${items.length} video</b>` + (T.pend ? ` · in attesa ${T.pend}: ${fmtMB(T.inMB)} → ≈ ${T.unknown === T.pend ? '…' : fmtMB(st.settings.sceneQ ? T.mbL : T.mb)}${st.settings.sceneQ && T.unknown !== T.pend ? ` (≤ ${fmtMB(T.mb)})` : ''} MB · ≈ ${fmtTime(T.t)}` : '') + (S.length ? ` · fatti ${S.length}: ${fmtMB(doneIn)} → ${fmtMB(doneOut)} MB` : '');
     const miss = items.filter(needsFile).length;
     R.qRelinkBox.hidden = !miss; R.qRelinkTxt.textContent = `Riseleziona i video (${miss})`;
     R.qClear.hidden = !!q.running;
@@ -755,7 +765,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   // ---------- avanzamento ----------
   let keepShown = false; // avviso «schermo acceso» una sola volta per sessione
   function startProgress({ keepLog = false } = {}) {
-    st.predMB = predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = parN(st.settings); st.sceneUsed = st.settings.sceneQ; st.dsUsed = resApplies(st.settings.res, st.file) !== 'orig'; st.modeUsed = st.settings.mode; st.resUsed = resApplies(st.settings.res, st.file); st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
+    st.predMB = st.settings.sceneQ ? Math.min(predictMB() ?? 0, predictLikelyMB() ?? Infinity) : predictMB(); st.predT = predictTime()?.s; st.vt0 = st.vt1 = st.vtEnd = 0; st.lastElapsed = 0; R.tline.hidden = true; st.par2Used = parN(st.settings); st.sceneUsed = st.settings.sceneQ; st.dsUsed = resApplies(st.settings.res, st.file) !== 'orig'; st.modeUsed = st.settings.mode; st.resUsed = resApplies(st.settings.res, st.file); st.phase = null; st.overall = 0; st.lastPct = -1; st.result = null; st.t0 = performance.now();
     if (!keepLog) clearLog();
     const s = st.settings;
     R.qNow.hidden = true;
@@ -864,6 +874,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       R.pred.hidden = R.predNote.hidden = R.sceneBr.hidden = true; R.outName.textContent = ''; R.saveMsg.textContent = '';
       setStage('done'); R.done.scrollIntoView?.({ block: 'start' }); return;
     }
+    learnBr(r, st.file);
     const saved = Number.isFinite(r.savedPct) ? r.savedPct : (1 - r.outMB / r.inMB) * 100;
     R.big.textContent = `${saved >= 0 ? '−' : '+'}${nf0.format(Math.abs(saved))}%`;
     R.big.classList.toggle('neg', saved < 0);
@@ -892,7 +903,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       } else { R.pT1.textContent = R.pT2.textContent = R.pT3.textContent = '—'; R.pT3.className = ''; }
       R.pred.hidden = false;
       R.predSum.textContent = `peso ${fmtDev(dev)}${devT != null ? `, tempo ${fmtDev(devT)}` : ''}`;
-      if (st.sceneUsed) { R.predNote.textContent = 'Qualità per scena: la previsione del peso è il massimo (bitrate scelto come limite); ogni tratto ha ricevuto solo il bitrate che gli serviva.'; R.predNote.hidden = false; }
+      if (st.sceneUsed) { R.predNote.textContent = 'Qualità per scena: la previsione è il peso probabile (dalle esportazioni precedenti, entro il tetto del bitrate scelto); ogni tratto riceve solo il bitrate che gli serve.'; R.predNote.hidden = false; }
       else if (Math.abs(dev) > 15) { R.predNote.textContent = 'Scarto peso oltre il 15%: la previsione usa un bitrate medio fisso, ma scene molto semplici o molto movimentate pesano diversamente.'; R.predNote.hidden = false; }
       appendLog(`PREVISIONE: peso ${st.predMB.toFixed(2)} MB previsto · ${r.outMB.toFixed(2)} MB reale · scarto ${dev > 0 ? '+' : ''}${dev.toFixed(1)} %${tl}`, 'summary');
     }
@@ -1118,7 +1129,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
       R.summary.insertAdjacentHTML('afterbegin', `<span class="fcv-sum-q px-digits" data-qchip>${m.idx}/${m.n}</span>`);
     },
     /** Voce finita: impara la velocità per le previsioni successive. */
-    queueItemDone(id, r) { if (pendingProg) { const x = pendingProg; pendingProg = null; applyProgress(x); } learnSpeed(r?.timeS || st.lastElapsed); st.qCur = null; thumbPump(); },
+    queueItemDone(id, r, inf) { if (pendingProg) { const x = pendingProg; pendingProg = null; applyProgress(x); } learnSpeed(r?.timeS || st.lastElapsed); learnBr(r, st.file, inf); st.qCur = null; thumbPump(); },
     /** Fine coda: schermata «Coda finita!» con tabella e «Salva tutti nelle Foto». */
     showQueueDone() { st.qCur = null; setStage('done'); renderQueueDone(); R.qdone.removeAttribute('data-pop'); void R.qdone.offsetWidth; R.qdone.setAttribute('data-pop', ''); if (!matchMedia('(prefers-reduced-motion: reduce)').matches && /^−/.test(R.qdBig.textContent)) confetti(R.qConfetti); R.qdone.scrollIntoView?.({ block: 'start' }); },
     /** «Salva tutti» non riuscito: un tasto per file nella schermata finale. */
