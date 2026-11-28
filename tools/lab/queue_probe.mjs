@@ -28,7 +28,7 @@ import { mkdirSync } from 'node:fs';
 import { arg, makeSamples, startServer, openProbe, SNAP_COLS } from './probe_kit.mjs';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const SRC = resolve(REPO, arg('--sample', 'samples/IMG_7440.mov')), SHOTS = arg('--shots', ''), ONLY = arg('--only', '1,2,3,4,5,6,7,8,9').split(',');
+const SRC = resolve(REPO, arg('--sample', 'samples/IMG_7440.mov')), SHOTS = arg('--shots', ''), ONLY = arg('--only', '1,2,3,4,5,6,7,8,9,10').split(',');
 const [A, B, C, D, E] = makeSamples(SRC, 5, 'coda');
 const server = await startServer(REPO);
 const PIP = () => { // Chromium headless: PiP «disponibile» (la richiesta vera non serve: conta il <video> preparato)
@@ -283,6 +283,30 @@ if (ONLY.includes('7')) { // ---- 7) seek bloccato: recupero (player ricreato, v
   ok(/riprovo questo video una volta/.test(L), '7b: voce riprovata una volta con player nuovi prima dell\'errore');
   ok(/\[1\/2 [^\]]+\] ERRORE: SeekTimeout: seek timeout/.test(L), '7b: errore finale = SeekTimeout (guasto reale non mascherato)');
   const hung = await page.evaluate(() => window.__hang.n); console.log(`     7b: <video> bloccati in tutto: ${hung}`);
+  await page.click('[data-ref="qNew"]'); await page.waitForTimeout(300);
+}
+
+if (ONLY.includes('10')) { // ---- 10) (v0.38.8) coda finita → «Rifai» → cambio bitrate → Comprimi: OPFS e Blob URL stabili ----
+  await page.setInputFiles('[data-ref="input"]', [A, B]);
+  await page.waitForFunction(() => document.querySelectorAll('.fcv-q-item').length === 2); await waitInfo(); await sceneOff();
+  await page.click('[data-ref="go"]'); await waitIdle();
+  ok((await sts()).join() === 'fatto,fatto' && (await stage()) === 'done/false', `10: coda finita (${await sts()})`);
+  const r10a = await rec('10: fine coda');
+  ok(r10a.opfs === 2, `10: 2 risultati in OPFS (${r10a.opfs})`);
+  const tri = await page.$$eval('.fcv-qdone .fcv-done-more > *', (els) => els.map((e) => e.textContent.trim() + ':' + Math.round(e.getBoundingClientRect().top) + ':' + Math.round(e.getBoundingClientRect().width)));
+  ok(tri.length === 3 && new Set(tri.map((x) => x.split(':')[1])).size === 1 && /^Aggiungi/.test(tri[0]) && /^Rifai/.test(tri[1]) && /^Svuota/.test(tri[2]), `10: tre tasti sulla stessa riga (${tri})`);
+  await shots('done3');
+  await page.click('[data-ref="qRedo"]'); await page.waitForTimeout(500);
+  const r10b = await rec('10: dopo «Rifai»');
+  ok((await stage()).startsWith('ready'), `10: «Rifai» → impostazioni (${await stage()})`);
+  ok(r10b.opfs === 0 && r10b.blobUrls <= r10a.blobUrls, `10: risultati rilasciati (opfs ${r10b.opfs}, url ${r10b.blobUrls})`);
+  ok((await sts()).join() === 'attesa*,attesa*', `10: voci in attesa, da riselezionare (${await sts()})`);
+  await page.setInputFiles('[data-ref="qRelink"]', [A, B]); await page.waitForTimeout(500);
+  await page.evaluate(() => { const r = document.querySelector('input[name="fcv-br"][value="6"]') || document.querySelectorAll('input[name="fcv-br"]')[0]; r.click(); });
+  await page.click('[data-ref="go"]'); await waitIdle();
+  ok((await sts()).join() === 'fatto,fatto', `10: rifatta con altro bitrate (${await sts()})`);
+  const r10c = await rec('10: rifatta');
+  ok(r10c.opfs === 2 && r10c.blobUrls <= r10a.blobUrls + 1, `10: OPFS e Blob URL stabili (opfs ${r10c.opfs}, url ${r10c.blobUrls} vs ${r10a.blobUrls})`);
   await page.click('[data-ref="qNew"]'); await page.waitForTimeout(300);
 }
 

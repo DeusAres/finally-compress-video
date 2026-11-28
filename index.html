@@ -1021,6 +1021,16 @@ async function releaseQueueOut(id) {
   const it = Q && findItem(Q, id), had = qOuts.delete(id);
   if (it?.result?.opfsName && had) { try { await (await navigator.storage.getDirectory()).removeEntry(it.result.opfsName); } catch {} }
 }
+// v0.38.8 «Rifai»: tutte le voci tornano in attesa (file tenuti), risultati non salvati rilasciati (OPFS, registro, Blob URL).
+async function onQueueRedo() {
+  if (!Q || qRun || running) return;
+  for (const it of Q.items) {
+    await releaseQueueOut(it.id); if (it.result?.opfsName) ledger.drop('opfs', it.result.opfsName);
+    it.status = ST.WAIT; delete it.result; delete it.error; delete it.saved; delete it.interrupted; delete it.resume; delete it.lost;
+  }
+  qMsg = null; log('coda: rifatta (tutte le voci in attesa, risultati rilasciati)');
+  await annotateResume().catch(() => {}); saveQ(); renderQueue(); updateEstimate();
+}
 function clearQueueAll() {
   if (qRun || running) return;
   for (const id of [...qOuts.keys()]) releaseQueueOut(id);
@@ -1211,7 +1221,7 @@ async function startQueue(s) {
 ui = mountUI(document.getElementById('app'), {
   onFile, onStart: start, onPip, onCancel() { cancelled = true; log(qRun ? 'Annullamento richiesto per questo video (la coda prosegue)' : 'Annullamento richiesto'); }, onSave,
   onStorageOpen: stRefresh, onStorageAct,
-  onQueueAdd, onQueueRemove, onQueueRetry, onQueueStop, onQueueSave, onQueueSaveAll, onQueueClear: clearQueueAll,
+  onQueueAdd, onQueueRemove, onQueueRetry, onQueueRedo, onQueueStop, onQueueSave, onQueueSaveAll, onQueueClear: clearQueueAll,
 }, { version: BUILD_LABEL.startsWith('__') ? VER : BUILD_LABEL, buildId: BUILD_ID });
 ui.setDefaults({ bitrateMbps: 8, keyframeS: 4, audioMode: 'copy', bgAudio: false, par2: true, par3: false, apac: true, container: 'mov' });
 // Niente zoom (iOS ignora user-scalable): blocco doppio tocco e pinch.

@@ -284,8 +284,9 @@ function template(opts) {
   <p class="fcv-save-msg" data-ref="qdMsg" aria-live="polite"></p>
   <div class="fcv-qd-files" data-ref="qdFiles" hidden></div>
   <div class="fcv-done-more">
-    <button class="px-btn fcv-sm" type="button" data-ref="qNew">Nuova coda</button>
-    <label class="px-btn fcv-relabel fcv-sm">Aggiungi video<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAdd2" aria-label="Aggiungi video alla coda"></label>
+    <label class="px-btn fcv-relabel fcv-sm">Aggiungi<input type="file" accept="video/*,.mov,.mp4" multiple data-ref="qAdd2" aria-label="Aggiungi video alla coda"></label>
+    <button class="px-btn fcv-sm" type="button" data-ref="qRedo" title="Riprova con impostazioni diverse">Rifai</button>
+    <button class="px-btn fcv-sm" type="button" data-ref="qNew">Svuota</button>
   </div>
 </section>
 
@@ -681,6 +682,10 @@ export function mountUI(root, handlers = {}, opts = {}) {
   const clearAsk = () => { const n = unsaved(); if (n && !confirm(`${n === 1 ? 'Un video compresso non è ancora salvato' : `${n} video compressi non sono ancora salvati`} nelle Foto: svuotare la coda e perderli?`)) return; handlers.onQueueClear?.(); };
   R.qClear.addEventListener('click', clearAsk);
   R.qNew.addEventListener('click', clearAsk);
+  R.qRedo.addEventListener('click', () => {
+    const n = unsaved(); if (n && !confirm(`${n === 1 ? 'Un video compresso non è ancora salvato' : `${n} video compressi non sono ancora salvati`} nelle Foto: rifare la coda con altre impostazioni e perderli?`)) return;
+    handlers.onQueueRedo?.(); setStage('ready'); root.querySelector('.fcv-step-set')?.scrollIntoView?.({ block: 'start' });
+  });
   R.qStop.addEventListener('click', () => { R.qStop.disabled = true; R.qStop.textContent = 'Mi fermo…'; R.cancel.disabled = true; handlers.onQueueStop?.(); });
   R.qSaveAll.addEventListener('click', () => handlers.onQueueSaveAll?.()); // sincrono: share sheet con tutti i file
   function renderQueueDone() {

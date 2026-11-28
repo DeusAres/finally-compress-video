@@ -243,6 +243,7 @@
 .fcv-save-msg { font-size: var(--fs-sm); }
 .fcv-save-msg:empty { display: none; }
 .fcv-done-more { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); }
+.fcv-qdone .fcv-done-more { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .fcv-done-more .px-btn { padding-inline: var(--sp-2); width: auto; justify-content: center; text-align: center; }
 .fcv-done[data-pop] .fcv-big { animation: px-pop 360ms steps(3) both; }
 .fcv-confetti { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
