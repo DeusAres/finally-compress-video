@@ -36,7 +36,7 @@ for (const sc of SCEN) {
   const file = (log.match(/file: (\S+)/) || [])[1] || '', pick = (re) => (log.match(re) || [])[0] || '';
   const ok = stage === 'done' && !errors.length && file.includes(sc.tag);
   console.log(`${ok ? 'OK ' : 'KO '} ${sc.mode} res ${sc.res}: stage ${stage}, ${((Date.now() - t0) / 1000).toFixed(1)} s, ${file}`);
-  for (const re of [/(SDR|HDR8): \d+ frame all'encoder[^\n]*/, /riduzione (SDR|HDR8): [^\n]*/, /encoder (SDR|HDR8): [^\n]*/, /segmento \d+: reale[^\n]*/, /COMPRESSIONE[^\n]*/]) { const l = pick(re); if (l) console.log('     ' + l.slice(0, 220)); }
+  for (const re of [/(SDR|HDR8): \d+ frame all'encoder[^\n]*/, /riduzione (SDR|HDR8): [^\n]*/, /encoder (SDR|HDR8): [^\n]*/, /segmento \d+: reale[^\n]*/, /prove per scena completate[^\n]*/, /prove: bitrate medio[^\n]*/, /già leggero[^\n]*/, /luma[^\n]*autotest[^\n]*|autotest[^\n]*/, /COMPRESSIONE[^\n]*/]) { const l = pick(re); if (l) console.log('     ' + l.slice(0, 220)); }
   if (!ok) { fail++; console.log('     errori JS:', errors, '\n' + log.split('\n').slice(-25).join('\n')); }
   await page.context().close();
 }

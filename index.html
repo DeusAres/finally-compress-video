@@ -399,9 +399,10 @@ async function runWith(input, { forceFresh = false } = {}) {
   // v0.38 modalità SDR (app/lib/sdrpath.js): VideoDecoder → WebGPU (LUT Apple → BT.709, scalatura; ripiego Hable) → HEVC 8 bit; niente <video> di seek né RPU.
   // sdr = percorso veloce VideoDecoder (modalità 'sdr' e 'hdr8'); hdr8 = HLG a 8 bit senza conversione dei colori (VUI/colr BT.2020 HLG)
   const hdr8 = cfg.mode === 'hdr8', sdr = cfg.mode === 'sdr' || hdr8, sdrShort = sdr ? sdrRes(cfg) : null, MODE = hdr8 ? 'HDR8' : 'SDR';
-  // «Qualità garantita per scena» (v0.28): bitrate = limite superiore, target scelto per segmento dalle prove. In SDR disattivata (per ora).
-  const sceneQ = !!cfg.sceneQ && !sdr;
-  if (sdr) log(`modalità ${MODE}: ${hdr8 ? 'VideoDecoder → frame HLG a 8 bit invariati (WebGPU solo per ridurre la risoluzione)' : 'VideoDecoder → WebGPU (inversa HLG → conversione Apple (LUT 33³) → BT.709)'} → HEVC 8 bit, niente Dolby Vision${cfg.sceneQ ? ` · qualità per scena DISATTIVATA in ${MODE} (per ora): bitrate fisso, prove saltate` : ''}`, 'setup');
+  // «Qualità garantita per scena» (v0.28): bitrate = limite superiore, target scelto per segmento dalle prove. v0.39: anche a 8 bit (SDR/HDR8),
+  // con le prove sulla stessa sorgente VideoDecoder (+ WebGPU) della codifica finale: stessi pixel, stessa risoluzione, stesso codec a 8 bit.
+  const sceneQ = !!cfg.sceneQ;
+  if (sdr) log(`modalità ${MODE}: ${hdr8 ? 'VideoDecoder → frame HLG a 8 bit invariati (WebGPU solo per ridurre la risoluzione)' : 'VideoDecoder → WebGPU (inversa HLG → conversione Apple (LUT 33³) → BT.709)'} → HEVC 8 bit, niente Dolby Vision${sceneQ ? ' · qualità per scena: prove a 8 bit sugli stessi frame della codifica' : ''}`, 'setup');
   // 1. Demux (in cache per la ripresa in memoria dopo un errore)
   const vt = await input.getPrimaryVideoTrack(); if (!vt) throw new Error('nessuna traccia video');
   let A = analysis?.file === file && (sdr || !analysis.noRpu) ? analysis : null; // un'analisi SDR non ha gli RPU: non vale per l'HDR
@@ -521,12 +522,15 @@ async function runWith(input, { forceFresh = false } = {}) {
     const caps = segmentCaps(frames, segStarts, bitrate), nCapSrc = caps.filter((c) => c < bitrate).length;
     if (nCapSrc) log(`tetto dalla sorgente: ${nCapSrc}/${nSeg} segmenti sotto il limite (${SCENE.srcCap} × bitrate sorgente del segmento, min ${(Math.min(...caps) / 1e6).toFixed(2)} Mbps)`);
     let segT = (k) => caps[k] ?? bitrate, sceneShare = 0;
+    // SDR: HEVC Main 8 bit (Chromium non codifica HEVC → H.264 solo per verificare la logica); scelto qui: serve anche alle prove
+    const vc = sdr ? await pickSdrCodec(outW, outH, framerate) : { kind: 'hevc' }, hevc = vc.kind === 'hevc';
     if (sceneQ) {
       const plan = planSceneSegments(frames, segStarts, bitrate); job.manifest.scene ||= {};
       const todo = plan.filter((p) => p.k >= doneSeg && !job.manifest.scene[p.k]).length;
       sceneShare = todo ? (1 - 1 / SCENE.timeFactor) * todo / Math.max(1, nSeg - doneSeg) : 0; // quota della barra «Video» dedicata alle prove (0.6/1.6, research/12 §12)
       if (todo) log(`[${clock()}] qualità per scena: prove su ${todo} segmenti (finestra ~${SCENE.trialSec} s al centro, 1–2 bitrate in parallelo con misura in diretta, VMAF stimato ≥ 88 + guardia p5), limite ${cfg.bitrateMbps} Mbps`);
-      const trialFrames = (a, b) => {
+      const trialFrames = sdr ? (a, b) => sdrSrc.frames(frames.slice(a, b).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), newStats(), vidRun.signal, { width: outW, height: outH })
+        : (a, b) => {
         const list = frames.slice(a, b).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), st = newStats();
         // v0.36.3: nelle prove un frame non verificabile (dopo i nuovi seek; senza ricreare il player) è consegnato SEGNATO ed escluso dalla metrica
         const tv = { onBad: 'mark', reopenBad: false, base: a };
@@ -536,17 +540,27 @@ async function runWith(input, { forceFresh = false } = {}) {
           onRejoin: (o) => log(`[${clock()}] estrazione (prove): di nuovo ${o.players} player dal frame ${o.at}`) })
           : seekFrames(video, list, (st.players = [st], st), vidRun.signal, { ...tv, reopen, onReopen });
       };
-      const makeTrialEnc = !dsOn ? createHevcEncoder : (o) => { // prove con downscale: errori prima del primo chunk = downscale non riuscito (fatale, mai assorbito come «prova fallita»)
+      // 8 bit: stesso codec dell'encoder finale (hvc1 Main 8 bit; H.264 in Chromium); frame già a outW×outH (scalati in WebGPU)
+      const mkEnc = sdr ? (o) => createHevcEncoder({ ...o, codec: vc.codec, extra: vc.extra }) : createHevcEncoder;
+      const makeTrialEnc = !dsOn || sdr ? mkEnc : (o) => { // prove con downscale: errori prima del primo chunk = downscale non riuscito (fatale, mai assorbito come «prova fallita»)
         let got = false; const e = createHevcEncoder({ ...o, onChunk: (c, m) => { got = true; o.onChunk(c, m); }, onError: (x) => o.onError(got ? x : dsWrap(x, 'prova: encoder')) });
         return { ...e, encode: (f, k) => { try { e.encode(f, k); } catch (x) { throw got ? x : dsWrap(x, 'prova: encode()'); } } };
       };
-      const deps = createTrialDeps({ W, H, frames, frameSource: trialFrames, skipFrame: isUnverified, makeEncoder: makeTrialEnc, encW: outW, encH: outH, framerate,
+      const deps = createTrialDeps({ W: sdr ? outW : W, H: sdr ? outH : H, frames, frameSource: trialFrames, skipFrame: isUnverified, makeEncoder: makeTrialEnc, encW: outW, encH: outH, framerate,
         players: () => (parTrialOff ? 1 : nP()),
         live: (() => { try { return localStorage.getItem('fcv.sceneLive') !== '0'; } catch { return true; } })(), // v0.35 misura in diretta; '0' = A/B di debug (misura dopo, come v0.34)
-        verifyOutput: dsOn ? (c) => { if (!c?.description) throw dsError('prova: decoderConfig senza description'); return dsCheck(c.description, 'prova'); } : undefined,
-        colorSpace: hlg ? { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false } : undefined }); // decoder di prova: stesso colore del file finale
+        verifyOutput: dsOn && !sdr ? (c) => { if (!c?.description) throw dsError('prova: decoderConfig senza description'); return dsCheck(c.description, 'prova'); } : undefined,
+        colorSpace: sdr ? { ...(hdr8 ? CSHLG : CS709) } : hlg ? { primaries: 'bt2020', transfer: 'hlg', matrix: 'bt2020-ncl', fullRange: false } : undefined }); // decoder di prova: stesso colore del file finale
       const t0 = performance.now(); if (todo) setProg('video', 0, 'prove per scena');
-      if (todo) { // v0.35: riscalda i player (seek + rVFC verificato su un frame che non è il primo richiesto) e la via canvas (primo drawImage HLG)
+      if (todo && sdr) { // 8 bit: niente player da riscaldare; autotest della luma su un frame della sorgente VideoDecoder (vicino alla prima finestra)
+        const w0 = plan.find((p) => p.k >= doneSeg && !job.manifest.scene[p.k]).trialWindow, i0 = w0.startIdx;
+        try {
+          let vf0 = null, lc = null;
+          for await (const vf of trialFrames(i0, i0 + 1)) { if (vf0) vf.close(); else vf0 = vf; }
+          if (vf0) { try { try { deps.warm(vf0); } catch {} lc = await deps.autotestLuma(vf0, [...new Set([bitrate, Math.min(bitrate, Math.max(SCENE.floor, bitrate / 3))])]); } finally { vf0.close(); } }
+          if (lc) log(`[${clock()}] ${lumaTestLine(lc)}`);
+        } catch (e) { if (['BackgroundInterrupt', 'Cancelled', 'DownscaleError'].includes(e?.name)) throw e; log(`[${clock()}] prove: autotest luma non riuscito (${e?.message || e}), proseguo`); }
+      } else if (todo) { // v0.35: riscalda i player (seek + rVFC verificato su un frame che non è il primo richiesto) e la via canvas (primo drawImage HLG)
         const w0 = plan.find((p) => p.k >= doneSeg && !job.manifest.scene[p.k]).trialWindow, vids = nP() > 1 ? vAll() : [video];
         const at = (p) => { const i = w0.startIdx - 6 - p >= 0 ? w0.startIdx - 6 - p : w0.endIdx + 6 + p < NF ? w0.endIdx + 6 + p : -1; return i < 0 ? null : { ts: Math.round(frames[i].ts * 1e6), dur: Math.round(frames[i].dur * 1e6) }; };
         try {
@@ -601,8 +615,6 @@ async function runWith(input, { forceFresh = false } = {}) {
     // coda di scrittura seriale: segmento → OPFS (worker). Mai più di ~8 pacchetti in RAM.
     const enqueue = (fn) => { wqN++; wq = wq.then(async () => { try { if (!encErr) await fn(); } catch (e) { encErr ||= e; } finally { wqN--; } }); };
     let enc;
-    // SDR: HEVC Main 8 bit (Chromium non codifica HEVC → H.264 solo per verificare la logica)
-    const vc = sdr ? await pickSdrCodec(outW, outH, framerate) : { kind: 'hevc' }, hevc = vc.kind === 'hevc';
     if (sdr) log(`encoder ${MODE}: ${vc.codec} ${outW}×${outH} 8 bit${hevc ? '' : ' ⚠️ HEVC non codificabile in questo browser: H.264 solo per prova (Safari usa HEVC)'}`, hevc ? 'setup' : 'warn');
     try { enc = createHevcEncoder({ width: outW, height: outH, bitrate: curBr, framerate, log: (t) => log(t), codec: vc.codec, extra: vc.extra,
       onError: (e) => { encErr ||= dsWrap(e, 'encoder'); },

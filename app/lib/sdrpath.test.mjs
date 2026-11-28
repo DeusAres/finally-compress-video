@@ -99,10 +99,13 @@ const conv = { depth: 4, submit: (f, fr) => new Promise((r) => setTimeout(() => 
   assert.equal(videoMode({}), 'hdr'); assert.equal(videoRes({ mode: 'sdr', downscale: true }), '1080');
   console.log('ok 7 manifest con mode/res');
 }
-// 8) stima del tempo SDR: 250 fps a 1080p (misurato), 4K ipotesi; qualità per scena ignorata
+// 8) stima del tempo SDR: 250 fps a 1080p (misurato), 4K ipotesi; v0.39 qualità per scena: + prove (×1.6 come in HDR)
 {
-  const t = estimateTimeS({ durS: 10, fps: 60, mode: 'sdr', width: 1920, height: 1080, sceneQ: true });
+  const t = estimateTimeS({ durS: 10, fps: 60, mode: 'sdr', width: 1920, height: 1080 });
   assert.equal(t.fps, 250); assert.equal(t.variable, false); assert.equal(t.guess, false); assert.ok(Math.abs(t.s - (1 + 600 / 250 * 1.03)) < 1e-9);
+  const q = estimateTimeS({ durS: 10, fps: 60, mode: 'sdr', width: 1920, height: 1080, sceneQ: true });
+  assert.equal(q.variable, true); assert.ok(Math.abs(q.s - (1 + 600 / 250 * 1.6 * 1.03)) < 1e-9, `${q.s}`);
+  assert.equal(estimateTimeS({ durS: 10, fps: 60, mode: 'hdr8', width: 1920, height: 1080, sceneQ: true }).variable, true);
   const u = estimateTimeS({ durS: 10, fps: 30, mode: 'sdr', width: 3840, height: 2160 }); assert.ok(u.guess); assert.equal(u.fps, 70);
   assert.equal(estimateTimeS({ durS: 10, fps: 30, mode: 'sdr', width: 3840, height: 2160, res: 720 }).fps, 160);
   assert.equal(speedKey({ mode: 'sdr', width: 1920, height: 1080 }), 'fcv.fps.sdr.hd');

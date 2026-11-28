@@ -413,3 +413,22 @@ test('v0.38.9 worthAfterTrials: con la qualità per scena si decide dopo le prov
   assert.equal(worthAfterTrials([{ b: 9e6 }, null, { b: 9e6 }], segs, 8e6).keep, false, 'record mancante: si comprime');
   assert.equal(worthAfterTrials(segs.map(() => ({ b: 9e6 })), segs, 0).keep, false, 'sorgente ignota: si comprime');
 });
+
+// v0.39: prove a 8 bit (SDR/HDR8). La frameSource è sdrSrc.frames(list µs, …, {width, height}) → frame già alla risoluzione di uscita;
+// l'encoder delle prove riceve lo stesso codec dell'export (wrapper in index.html) e le dimensioni di uscita.
+test('createTrialDeps: sorgente 8 bit simulata (frames già scalati, codec dell\'export) → prove e ricerca funzionano', async () => {
+  const A = fakeWorld(), seen = [], asked = [];
+  const sdrSrc = { async *frames(list, stats, signal, out) { asked.push({ n: list.length, t0: list[0].ts, ...out });
+    for (const f of list) yield { id: Math.round(f.ts * 60 / 1e6), noise: false, timestamp: f.ts, codedWidth: out.width, codedHeight: out.height, close() {} }; } };
+  const fr = A.common.frames, enc0 = A.common.makeEncoder;
+  const frameSource = (a, b) => sdrSrc.frames(fr.slice(a, b).map((f) => ({ ts: Math.round(f.ts * 1e6), dur: Math.round(f.dur * 1e6) })), {}, null, { width: 16, height: 16 });
+  const vc = { codec: 'hvc1.1.6.L123.B0', extra: undefined };
+  const makeEncoder = (o) => { const p = { ...o, codec: vc.codec, extra: vc.extra }; seen.push(p); return enc0(p); };
+  const d = createTrialDeps({ ...A.common, W: 16, H: 16, encW: 16, encH: 16, frameSource, makeEncoder });
+  const out = await d.encodeTrial({ startIdx: 60, endIdx: 120 }, [3e6, 8e6], { stream: [true, true] });
+  assert.equal(out.length, 2); assert.ok(out.every((o) => Array.isArray(o.dbs) && o.dbs.length === 30));
+  assert.deepEqual(asked[0], { n: 60, t0: 1e6, width: 16, height: 16 }, 'lista in µs dal frame 60, uscita alla risoluzione dell\'encoder');
+  assert.ok(seen.every((p) => p.codec === vc.codec && p.width === 16 && p.height === 16), 'codec e dimensioni dell\'export a 8 bit');
+  const res = await searchBitrate({ trialWindow: { startIdx: 0, endIdx: 60, srcBitrate: 8.59e6 }, prior: 4e6 }, d, { maxBitrate: 0.85 * 8.59e6 });
+  assert.ok(res.bitrate > 0 && res.bitrate <= 0.85 * 8.59e6, `bitrate ${res.bitrate}`);
+});

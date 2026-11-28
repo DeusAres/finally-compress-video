@@ -508,7 +508,7 @@ export function mountUI(root, handlers = {}, opts = {}) {
   function readSettings() {
     const v = (n) => root.querySelector(`input[name="${n}"]:checked`)?.value;
     const sdr = root.querySelector('input[name="fcv-mode"]')?.checked === false, mode = sdr ? 'sdr' : root.querySelector('input[name="fcv-bits"]')?.checked === false ? 'hdr8' : 'hdr', res = mode !== 'hdr' ? resSel() : 'orig'; // settings.mode = 'hdr' | 'hdr8' | 'sdr'; settings.res = 'orig' | 2160 | 1440 | 1080 | 720 | 540 | 480; downscale = alias di res 1080
-    return { mode, bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq') && mode === 'hdr', // in SDR / HDR veloce la qualità per scena è disattivata
+    return { mode, bitrateMbps: +v('fcv-br') || DEFAULTS.bitrateMbps, keyframeS: +v('fcv-kf') || DEFAULTS.keyframeS, audioMode: v('fcv-audio') || DEFAULTS.audioMode, bgAudio: !!v('fcv-bgaudio'), par2: !!v('fcv-par2'), par3: v('fcv-npar') === '3', sceneQ: !!v('fcv-sceneq'), // v0.39: anche in SDR / HDR veloce (prove a 8 bit)
       res, downscale: res === 1080, apac: !!v('fcv-apac'), container: v('fcv-container') === 'mp4' ? 'mp4' : 'mov' };
   }
   function writeSettings(s) {

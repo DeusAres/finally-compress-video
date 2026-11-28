@@ -53,11 +53,10 @@ export function saveSpeed(o, fps, totalS) {
 // rimisurare sul device con la riga «prove: tempi …» del log. Tenere uguale a scenesearch.SCENE.timeFactor.
 export const SCENE_TIME_FACTOR = 1.6;
 /** Tempo totale previsto in secondi + fonte della velocità. sceneQ: tempo del video × SCENE_TIME_FACTOR (variabile). */
-// mode 'sdr' / 'hdr8': velocità della propria classe, qualità per scena ignorata (disattivata in SDR); downscale = qualunque riduzione (settings.res).
+// mode 'sdr' / 'hdr8': velocità della propria classe; qualità per scena ×SCENE_TIME_FACTOR come in HDR (v0.39, prove a 8 bit); downscale = qualunque riduzione (settings.res).
 export function estimateTimeS({ durS, fps = 30, audioMode = 'copy', par2, width, height, sceneQ = false, downscale = false, mode = 'hdr', res = null }) {
   if (!(durS > 0)) return null;
   const sdr = fastMode(mode), ds = sdr ? !!downscale || (res != null && res !== 'orig' && +res > 0 && +res < Math.min(width || 0, height || 0)) : downscale;
-  if (sdr) sceneQ = false;
   const frames = durS * (fps > 0 ? fps : 30), sp = expectedFps({ par2, width, height, downscale: ds, mode });
   const tv = frames / sp.fps * (sceneQ ? SCENE_TIME_FACTOR : 1);
   return { s: 0.5 + tv * 1.03 + 0.5 + (audioMode === 'v4' ? 0.07 * durS : 0), measured: sp.measured, fps: sp.fps, variable: !!sceneQ, guess: !!sp.guess };
